@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Tests\Simulation;
+namespace Cbox\LaravelQueueAutoscale\Tests\Simulation;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingEngine;
-use PHPeek\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
+use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
 
 /**
  * Runs end-to-end scaling simulations

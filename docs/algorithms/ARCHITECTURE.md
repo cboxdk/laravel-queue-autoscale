@@ -765,6 +765,6 @@ The architecture supports these enhancements through:
 
 Laravel Queue Autoscale combines queueing theory, predictive analysis, and SLA-based optimization to provide intelligent, automatic worker scaling. The hybrid algorithm ensures SLA compliance while being resource-aware and extensible.
 
-For usage examples, see [Quick Start](../quickstart).
+For usage examples, see [Quick Start](../quickstart.md).
 
 For implementation details, review the source code with this architecture in mind.

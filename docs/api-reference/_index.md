@@ -54,6 +54,6 @@ interface ScalingPolicyContract
 
 ## See Also
 
-- [Basic Usage](../basic-usage) - Implementation guides
-- [Advanced Usage](../advanced-usage) - Custom strategies and policies
-- [Algorithms](../algorithms) - Mathematical foundations
+- [Basic Usage](../basic-usage/_index.md) - Implementation guides
+- [Advanced Usage](../advanced-usage/_index.md) - Custom strategies and policies
+- [Algorithms](../algorithms/_index.md) - Mathematical foundations

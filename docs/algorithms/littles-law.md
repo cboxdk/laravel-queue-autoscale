@@ -278,6 +278,6 @@ class HybridPredictiveStrategy
 
 ## See Also
 
-- [Trend Prediction](trend-prediction) - Predictive scaling
-- [Backlog Drain](backlog-drain) - SLA protection
-- [How It Works](../basic-usage/how-it-works) - Complete algorithm explanation
+- [Trend Prediction](trend-prediction.md) - Predictive scaling
+- [Backlog Drain](backlog-drain.md) - SLA protection
+- [How It Works](../basic-usage/how-it-works.md) - Complete algorithm explanation

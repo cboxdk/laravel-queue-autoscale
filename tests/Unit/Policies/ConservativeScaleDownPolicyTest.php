@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 beforeEach(function () {
     $this->policy = new ConservativeScaleDownPolicy;
@@ -51,7 +51,7 @@ test('returns null when scaling down by one worker', function () {
     expect($result)->toBeNull();
 });
 
-test('limits scale down to one worker when removing multiple', function () {
+test('limits scale down to percentage threshold when removing multiple', function () {
     $decision = new ScalingDecision(
         connection: 'redis',
         queue: 'default',
@@ -62,8 +62,14 @@ test('limits scale down to one worker when removing multiple', function () {
 
     $result = $this->policy->beforeScaling($decision);
 
+    // Current: 10
+    // Target: 5
+    // Removal: 5
+    // Limit: ceil(10 * 0.25) = 3
+    // Allowed Target: 10 - 3 = 7
+
     expect($result)->toBeInstanceOf(ScalingDecision::class)
-        ->and($result->targetWorkers)->toBe(9)
+        ->and($result->targetWorkers)->toBe(7)
         ->and($result->currentWorkers)->toBe(10)
         ->and($result->connection)->toBe('redis')
         ->and($result->queue)->toBe('default');

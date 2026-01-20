@@ -18,7 +18,7 @@ We release patches for security vulnerabilities for the following versions:
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-Instead, please report them via email to **security@phpeek.com**.
+Instead, please report them via email to **security@cbox.dk**.
 
 You should receive a response within 48 hours. If for some reason you do not, please follow up via email to ensure we received your original message.
 
@@ -102,7 +102,7 @@ None yet. This is the initial release.
 
 ## Contact
 
-- **Security Email**: security@phpeek.com
+- **Security Email**: security@cbox.dk
 - **GPG Key**: Available on request
 - **Response Time**: Within 48 hours
 

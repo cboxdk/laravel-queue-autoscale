@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 test('creates instance with all properties', function () {
     $decision = new ScalingDecision(

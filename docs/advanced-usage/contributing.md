@@ -10,7 +10,7 @@ First off, thank you for considering contributing to Laravel Queue Autoscale! It
 
 ## Code of Conduct
 
-This project adheres to a code of conduct. By participating, you are expected to uphold this code. Please report unacceptable behavior to security@phpeek.com.
+This project adheres to a code of conduct. By participating, you are expected to uphold this code. Please report unacceptable behavior to security@cbox.dk.
 
 ## How Can I Contribute?
 
@@ -165,8 +165,8 @@ composer format
 ### Documentation Standards
 
 - Update **README.md** for user-facing changes
-- Update **ARCHITECTURE.md** for algorithm changes
-- Add **TROUBLESHOOTING.md** entries for common issues
+- Update **[Architecture](../algorithms/architecture.md)** for algorithm changes
+- Add **[Troubleshooting](../basic-usage/troubleshooting.md)** entries for common issues
 - Include **PHPDoc blocks** for classes and public methods
 - Provide **code examples** in documentation
 
@@ -330,7 +330,7 @@ class MyPolicy implements ScalingPolicy
 Feel free to:
 - Open an issue for discussion
 - Ask in pull request comments
-- Email: info@phpeek.com
+- Email: info@cbox.dk
 
 ## Recognition
 

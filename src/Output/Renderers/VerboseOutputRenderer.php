@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Output\Renderers;
+namespace Cbox\LaravelQueueAutoscale\Output\Renderers;
 
-use PHPeek\LaravelQueueAutoscale\Output\Contracts\OutputRendererContract;
-use PHPeek\LaravelQueueAutoscale\Output\DataTransferObjects\OutputData;
-use PHPeek\LaravelQueueAutoscale\Output\DataTransferObjects\QueueStats;
+use Cbox\LaravelQueueAutoscale\Output\Contracts\OutputRendererContract;
+use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\OutputData;
+use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\QueueStats;
 use Symfony\Component\Console\Output\OutputInterface;
 
 final class VerboseOutputRenderer implements OutputRendererContract
@@ -121,13 +121,5 @@ final class VerboseOutputRenderer implements OutputRendererContract
     public function shutdown(): void
     {
         $this->output->writeln('<fg=yellow>Shutdown complete</>');
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    public function getActionQueue(): array
-    {
-        return [];
     }
 }

@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Scaling;
+namespace Cbox\LaravelQueueAutoscale\Scaling;
 
-use PHPeek\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
 
 final readonly class ScalingDecision
 {

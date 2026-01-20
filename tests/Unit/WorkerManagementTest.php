@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
+use Cbox\LaravelQueueAutoscale\Workers\WorkerPool;
+use Cbox\LaravelQueueAutoscale\Workers\WorkerProcess;
 use Illuminate\Support\Carbon;
-use PHPeek\LaravelQueueAutoscale\Workers\WorkerPool;
-use PHPeek\LaravelQueueAutoscale\Workers\WorkerProcess;
 use Symfony\Component\Process\Process;
 
 /**

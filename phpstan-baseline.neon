@@ -19,7 +19,7 @@ parameters:
 			path: src/Configuration/AutoscaleConfiguration.php
 
 		-
-			message: '#^Method PHPeek\\LaravelQueueAutoscale\\Configuration\\AutoscaleConfiguration\:\:policyClasses\(\) should return array\<int, class\-string\> but returns array\<mixed, mixed\>\.$#'
+			message: '#^Method Cbox\\LaravelQueueAutoscale\\Configuration\\AutoscaleConfiguration\:\:policyClasses\(\) should return array\<int, class\-string\> but returns array\<mixed, mixed\>\.$#'
 			identifier: return.type
 			count: 1
 			path: src/Configuration/AutoscaleConfiguration.php
@@ -49,25 +49,25 @@ parameters:
 			path: src/Configuration/QueueConfiguration.php
 
 		-
-			message: '#^Parameter \$maxPickupTimeSeconds of class PHPeek\\LaravelQueueAutoscale\\Configuration\\QueueConfiguration constructor expects int, mixed given\.$#'
+			message: '#^Parameter \$maxPickupTimeSeconds of class Cbox\\LaravelQueueAutoscale\\Configuration\\QueueConfiguration constructor expects int, mixed given\.$#'
 			identifier: argument.type
 			count: 1
 			path: src/Configuration/QueueConfiguration.php
 
 		-
-			message: '#^Parameter \$maxWorkers of class PHPeek\\LaravelQueueAutoscale\\Configuration\\QueueConfiguration constructor expects int, mixed given\.$#'
+			message: '#^Parameter \$maxWorkers of class Cbox\\LaravelQueueAutoscale\\Configuration\\QueueConfiguration constructor expects int, mixed given\.$#'
 			identifier: argument.type
 			count: 1
 			path: src/Configuration/QueueConfiguration.php
 
 		-
-			message: '#^Parameter \$minWorkers of class PHPeek\\LaravelQueueAutoscale\\Configuration\\QueueConfiguration constructor expects int, mixed given\.$#'
+			message: '#^Parameter \$minWorkers of class Cbox\\LaravelQueueAutoscale\\Configuration\\QueueConfiguration constructor expects int, mixed given\.$#'
 			identifier: argument.type
 			count: 1
 			path: src/Configuration/QueueConfiguration.php
 
 		-
-			message: '#^Parameter \$scaleCooldownSeconds of class PHPeek\\LaravelQueueAutoscale\\Configuration\\QueueConfiguration constructor expects int, mixed given\.$#'
+			message: '#^Parameter \$scaleCooldownSeconds of class Cbox\\LaravelQueueAutoscale\\Configuration\\QueueConfiguration constructor expects int, mixed given\.$#'
 			identifier: argument.type
 			count: 1
 			path: src/Configuration/QueueConfiguration.php

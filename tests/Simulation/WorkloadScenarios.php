@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Tests\Simulation;
+namespace Cbox\LaravelQueueAutoscale\Tests\Simulation;
 
 /**
  * Predefined workload scenarios for simulation testing

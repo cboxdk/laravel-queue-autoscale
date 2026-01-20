@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
 
 beforeEach(function () {
     $this->littles = new LittlesLawCalculator;

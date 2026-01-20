@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Commands;
+namespace Cbox\LaravelQueueAutoscale\Commands;
 
+use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
-use PHPeek\LaravelQueueMetrics\Facades\QueueMetrics;
 
 class DebugQueueCommand extends Command
 {

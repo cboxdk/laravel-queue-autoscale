@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\TrendPredictor;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\TrendPredictor;
 
 it('returns current rate when trend is null', function () {
     $predictor = new TrendPredictor;

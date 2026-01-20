@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Scaling\Calculators;
+namespace Cbox\LaravelQueueAutoscale\Scaling\Calculators;
 
 /**
  * Estimates job arrival rate from backlog changes over time

@@ -44,9 +44,9 @@ All strategies must implement `ScalingStrategyContract`:
 ```php
 <?php
 
-namespace PHPeek\LaravelQueueAutoscale\Contracts;
+namespace Cbox\LaravelQueueAutoscale\Contracts;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 
 interface ScalingStrategyContract
 {
@@ -120,8 +120,8 @@ Create a new class implementing the contract:
 
 namespace App\Autoscale\Strategies;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 
 class SimpleRateBasedStrategy implements ScalingStrategyContract
 {
@@ -181,7 +181,7 @@ Create tests to verify behavior:
 
 ```php
 use App\Autoscale\Strategies\SimpleRateBasedStrategy;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 
 it('calculates workers based on processing rate', function () {
     $strategy = new SimpleRateBasedStrategy();
@@ -219,8 +219,8 @@ Calculate workers based purely on processing rate:
 
 namespace App\Autoscale\Strategies;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 
 class SimpleRateBasedStrategy implements ScalingStrategyContract
 {
@@ -291,8 +291,8 @@ Scale based on time of day:
 
 namespace App\Autoscale\Strategies;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 
 class TimeBasedStrategy implements ScalingStrategyContract
 {
@@ -391,8 +391,8 @@ Minimize workers while meeting SLA:
 
 namespace App\Autoscale\Strategies;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 
 class CostOptimizedStrategy implements ScalingStrategyContract
 {
@@ -508,8 +508,8 @@ Use ML predictions for scaling:
 namespace App\Autoscale\Strategies;
 
 use App\Services\MachineLearning\LoadPredictor;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 
 class MachineLearningStrategy implements ScalingStrategyContract
 {
@@ -591,7 +591,7 @@ Test calculation logic in isolation:
 
 ```php
 use App\Autoscale\Strategies\SimpleRateBasedStrategy;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 
 describe('SimpleRateBasedStrategy', function () {
     beforeEach(function () {
@@ -664,11 +664,11 @@ Test with real scaling engine:
 
 ```php
 use App\Autoscale\Strategies\SimpleRateBasedStrategy;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingEngine;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 
 it('integrates with scaling engine', function () {
     $strategy = new SimpleRateBasedStrategy();
-    $capacity = app(\PHPeek\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator::class);
+    $capacity = app(\Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator::class);
     $engine = new ScalingEngine($strategy, $capacity);
 
     $metrics = (object) [
@@ -822,7 +822,7 @@ if ($targetWorkers > $currentWorkers) {
 
 ## See Also
 
-- [Scaling Policies](scaling-policies) - Implementing scaling policies
-- [How It Works](../basic-usage/how-it-works) - Understanding the default strategy
-- [Configuration](../basic-usage/configuration) - Configuring strategies
-- [API Reference](../api-reference) - Complete API documentation
+- [Scaling Policies](scaling-policies.md) - Implementing scaling policies
+- [How It Works](../basic-usage/how-it-works.md) - Understanding the default strategy
+- [Configuration](../basic-usage/configuration.md) - Configuring strategies
+- [API Reference](../api-reference/_index.md) - Complete API documentation

@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Configuration\ProfilePresets;
-use PHPeek\LaravelQueueAutoscale\Policies\BreachNotificationPolicy;
-use PHPeek\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy;
+use Cbox\LaravelQueueAutoscale\Configuration\ProfilePresets;
+use Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy;
+use Cbox\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy;
 
 return [
     'enabled' => env('QUEUE_AUTOSCALE_ENABLED', true),
@@ -226,7 +226,7 @@ return [
     | - Complex business rules for scaling decisions
     |
     */
-    'strategy' => \PHPeek\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
+    'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
 
     /*
     |--------------------------------------------------------------------------

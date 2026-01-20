@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Output\DataTransferObjects;
+namespace Cbox\LaravelQueueAutoscale\Output\DataTransferObjects;
 
 final readonly class QueueStats
 {

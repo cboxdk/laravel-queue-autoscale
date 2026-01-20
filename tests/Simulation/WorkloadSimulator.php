@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Tests\Simulation;
+namespace Cbox\LaravelQueueAutoscale\Tests\Simulation;
 
 use Carbon\Carbon;
-use PHPeek\LaravelQueueMetrics\DataTransferObjects\HealthStats;
-use PHPeek\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\HealthStats;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
 /**
  * Simulates queue workloads over time for E2E testing

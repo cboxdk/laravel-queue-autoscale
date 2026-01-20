@@ -459,6 +459,6 @@ if ($oldestAge / $slaTarget >= 0.9) {
 
 ## See Also
 
-- [Little's Law](littles-law) - Steady-state calculation
-- [Trend Prediction](trend-prediction) - Predictive scaling
-- [Resource Constraints](resource-constraints) - Resource management
+- [Little's Law](littles-law.md) - Steady-state calculation
+- [Trend Prediction](trend-prediction.md) - Predictive scaling
+- [Resource Constraints](resource-constraints.md) - Resource management

@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Scaling;
+namespace Cbox\LaravelQueueAutoscale\Scaling;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
-use PHPeek\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
-use PHPeek\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
 final readonly class ScalingEngine
 {

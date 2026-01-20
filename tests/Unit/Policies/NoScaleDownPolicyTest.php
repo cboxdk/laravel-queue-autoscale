@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Policies\NoScaleDownPolicy;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
-use PHPeek\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Policies\NoScaleDownPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 beforeEach(function () {
     $this->capacityCalculator = new CapacityCalculator;

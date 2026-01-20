@@ -480,7 +480,7 @@ $constraintFrequency = DB::table('constraint_events')
 
 ## See Also
 
-- [Little's Law](littles-law) - Base calculation
-- [Trend Prediction](trend-prediction) - Predictive scaling
-- [Backlog Drain](backlog-drain) - SLA protection
-- [Performance Tuning](../basic-usage/performance) - Performance tuning
+- [Little's Law](littles-law.md) - Base calculation
+- [Trend Prediction](trend-prediction.md) - Predictive scaling
+- [Backlog Drain](backlog-drain.md) - SLA protection
+- [Performance Tuning](../basic-usage/performance.md) - Performance tuning

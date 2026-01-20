@@ -12,9 +12,9 @@ This section provides deep dives into the mathematical foundations and algorithm
 
 Laravel Queue Autoscale uses a **hybrid predictive algorithm** that combines three complementary approaches:
 
-1. **[Little's Law](littles-law)** - Steady-state calculation for current workload
-2. **[Trend Prediction](trend-prediction)** - Proactive scaling based on traffic forecasts
-3. **[Backlog Drain](backlog-drain)** - Aggressive scaling to prevent SLA breaches
+1. **[Little's Law](littles-law.md)** - Steady-state calculation for current workload
+2. **[Trend Prediction](trend-prediction.md)** - Proactive scaling based on traffic forecasts
+3. **[Backlog Drain](backlog-drain.md)** - Aggressive scaling to prevent SLA breaches
 
 The autoscaler takes the **maximum** of these three calculations to ensure SLA compliance while being responsive to changing conditions.
 
@@ -40,12 +40,12 @@ SLA-focused algorithm that aggressively scales when jobs approach their pickup t
 ### Architecture
 Complete system architecture showing how components interact:
 
-- **[Architecture](architecture)** - System design and component interaction
+- **[Architecture](architecture.md)** - System design and component interaction
 
 ### Resource Management
 Ensuring autoscaling respects system limits:
 
-- **[Resource Constraints](resource-constraints)** - CPU and memory management
+- **[Resource Constraints](resource-constraints.md)** - CPU and memory management
 
 ## Mathematical Background
 
@@ -93,6 +93,6 @@ This ensures:
 
 For implementation details, see:
 
-- [How It Works](../basic-usage/how-it-works) - Practical application of algorithms
-- [Custom Strategies](../advanced-usage/custom-strategies) - Implementing your own algorithms
-- [Architecture](architecture) - System design and decision flow
+- [How It Works](../basic-usage/how-it-works.md) - Practical application of algorithms
+- [Custom Strategies](../advanced-usage/custom-strategies.md) - Implementing your own algorithms
+- [Architecture](architecture.md) - System design and decision flow

@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Illuminate\Support\Facades\Event;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Events\ScalingDecisionMade;
-use PHPeek\LaravelQueueAutoscale\Events\WorkersScaled;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingEngine;
 
 /**
  * Feature tests for end-to-end scaling integration
@@ -49,7 +49,7 @@ it('completes full scaling evaluation successfully', function () {
 });
 
 it('integrates with custom scaling strategies', function () {
-    $customStrategy = new class implements \PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract
+    $customStrategy = new class implements \Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract
     {
         private string $lastReason = 'custom strategy';
 
@@ -72,7 +72,7 @@ it('integrates with custom scaling strategies', function () {
     };
 
     // Create engine with custom strategy
-    $capacity = app(\PHPeek\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator::class);
+    $capacity = app(\Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator::class);
     $customEngine = new ScalingEngine($customStrategy, $capacity);
 
     $metrics = createMetrics([

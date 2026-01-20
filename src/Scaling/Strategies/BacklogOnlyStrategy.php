@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Scaling\Strategies;
+namespace Cbox\LaravelQueueAutoscale\Scaling\Strategies;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
-use PHPeek\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
 /**
  * Backlog-focused scaling strategy

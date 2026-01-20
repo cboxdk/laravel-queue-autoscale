@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingEngine;
-use PHPeek\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
+use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
 
 beforeEach(function () {
     $this->strategy = new PredictiveStrategy(
@@ -39,7 +39,7 @@ beforeEach(function () {
 it('evaluates scaling decision using strategy', function () {
     $decision = $this->engine->evaluate($this->metrics, $this->config, 5);
 
-    expect($decision)->toBeInstanceOf(\PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision::class)
+    expect($decision)->toBeInstanceOf(\Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision::class)
         ->and($decision->connection)->toBe('redis')
         ->and($decision->queue)->toBe('default')
         ->and($decision->currentWorkers)->toBe(5)

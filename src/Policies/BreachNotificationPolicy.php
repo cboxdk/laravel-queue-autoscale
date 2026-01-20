@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Policies;
+namespace Cbox\LaravelQueueAutoscale\Policies;
 
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Illuminate\Support\Facades\Log;
-use PHPeek\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicy;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 /**
  * Policy that logs and notifies when SLA breaches are detected or predicted

@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Scaling\Strategies\ConservativeStrategy;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Scaling\Strategies\ConservativeStrategy;
 use Tests\Helpers\MetricsHelper;
 
 beforeEach(function () {

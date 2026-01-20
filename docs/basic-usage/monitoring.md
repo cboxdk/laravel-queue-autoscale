@@ -202,7 +202,7 @@ Use Laravel events to push metrics:
 namespace App\Listeners;
 
 use App\Services\MetricsCollector;
-use PHPeek\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 
 class CollectScalingMetrics
 {
@@ -254,7 +254,7 @@ Route::get('/metrics', MetricsController::class);
 namespace App\Http\Controllers;
 
 use Illuminate\Support\Facades\Queue;
-use PHPeek\LaravelQueueAutoscale\AutoscaleManager;
+use Cbox\LaravelQueueAutoscale\AutoscaleManager;
 
 class MetricsController
 {
@@ -298,7 +298,7 @@ Store metrics in database for analysis:
 namespace App\Listeners;
 
 use Illuminate\Support\Facades\DB;
-use PHPeek\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 
 class LogScalingMetrics
 {
@@ -503,7 +503,7 @@ class PrometheusMetricsCollector
 namespace App\Listeners;
 
 use App\Services\AlertingService;
-use PHPeek\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 
 class AlertOnSlaRisk
 {
@@ -729,7 +729,7 @@ if ($processingRate < expected) {
 
 ## See Also
 
-- [Event Handling](event-handling) - Using events for monitoring
-- [Scaling Policies](../advanced-usage/scaling-policies) - Policies for metrics collection
-- [Deployment](../advanced-usage/deployment) - Production deployment
-- [Troubleshooting](troubleshooting) - Detailed troubleshooting guide
+- [Event Handling](event-handling.md) - Using events for monitoring
+- [Scaling Policies](../advanced-usage/scaling-policies.md) - Policies for metrics collection
+- [Deployment](../advanced-usage/deployment.md) - Production deployment
+- [Troubleshooting](troubleshooting.md) - Detailed troubleshooting guide

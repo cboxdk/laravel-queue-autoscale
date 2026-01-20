@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Workers;
+namespace Cbox\LaravelQueueAutoscale\Workers;
 
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Illuminate\Support\Facades\Log;
-use PHPeek\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 
 final readonly class WorkerTerminator
 {

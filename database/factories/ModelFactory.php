@@ -1,6 +1,6 @@
 <?php
 
-namespace PHPeek\LaravelQueueAutoscale\Database\Factories;
+namespace Cbox\LaravelQueueAutoscale\Database\Factories;
 
 use Illuminate\Database\Eloquent\Factories\Factory;
 

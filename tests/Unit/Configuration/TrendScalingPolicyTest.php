@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Configuration\TrendScalingPolicy;
+use Cbox\LaravelQueueAutoscale\Configuration\TrendScalingPolicy;
 
 test('disabled policy has zero trend weight', function () {
     $policy = TrendScalingPolicy::DISABLED;

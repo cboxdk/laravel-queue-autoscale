@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Events\SlaBreachPredicted;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Events\SlaBreachPredicted;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 test('creates instance with scaling decision', function () {
     $decision = new ScalingDecision(

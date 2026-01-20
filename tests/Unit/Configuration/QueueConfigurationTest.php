@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 
 test('creates instance with all properties', function () {
     $config = new QueueConfiguration(

@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Scaling\Calculators;
+namespace Cbox\LaravelQueueAutoscale\Scaling\Calculators;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
-use PHPeek\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
-use PHPeek\SystemMetrics\SystemMetrics;
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\SystemMetrics\SystemMetrics;
 
 final readonly class CapacityCalculator
 {

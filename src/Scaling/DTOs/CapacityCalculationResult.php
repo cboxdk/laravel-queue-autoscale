@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Scaling\DTOs;
+namespace Cbox\LaravelQueueAutoscale\Scaling\DTOs;
 
 /**
  * Detailed breakdown of capacity calculations

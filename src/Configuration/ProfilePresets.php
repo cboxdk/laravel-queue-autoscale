@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Configuration;
+namespace Cbox\LaravelQueueAutoscale\Configuration;
 
 /**
  * Standard workload profiles with optimized configurations
@@ -104,7 +104,7 @@ final class ProfilePresets
             'max_pickup_time_seconds' => 30,
             'min_workers' => 1,
             'max_workers' => 10,
-            'scale_cooldown_seconds' => 60,
+            'scale_cooldown_seconds' => 30,
             'breach_threshold' => 0.5,
             'evaluation_interval_seconds' => 5,
         ];

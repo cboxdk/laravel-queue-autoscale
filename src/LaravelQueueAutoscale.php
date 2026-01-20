@@ -1,5 +1,5 @@
 <?php
 
-namespace PHPeek\LaravelQueueAutoscale;
+namespace Cbox\LaravelQueueAutoscale;
 
 class LaravelQueueAutoscale {}

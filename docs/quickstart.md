@@ -10,7 +10,7 @@ This guide gets you from zero to a working autoscaled queue in 5 minutes.
 
 ## Prerequisites
 
-- Laravel Queue Autoscale [installed](installation)
+- Laravel Queue Autoscale [installed](installation.md)
 - Metrics package configured
 - A Laravel application with queue jobs
 
@@ -301,19 +301,19 @@ php artisan queue:autoscale:status
 Congratulations! You now have a working autoscaled queue. Here's what to explore next:
 
 ### Understand the Algorithm
-Learn how scaling decisions are made: [How It Works](basic-usage/how-it-works)
+Learn how scaling decisions are made: [How It Works](basic-usage/how-it-works.md)
 
 ### Optimize Configuration
-Fine-tune settings for your workload: [Configuration Guide](basic-usage/configuration)
+Fine-tune settings for your workload: [Configuration Guide](basic-usage/configuration.md)
 
 ### Add Monitoring
-Track performance and scaling events: [Monitoring](basic-usage/monitoring)
+Track performance and scaling events: [Monitoring](basic-usage/monitoring.md)
 
 ### Custom Logic
-Implement custom scaling strategies: [Custom Strategies](advanced-usage/custom-strategies)
+Implement custom scaling strategies: [Custom Strategies](advanced-usage/custom-strategies.md)
 
 ### Production Hardening
-Secure and optimize for production: [Deployment Guide](advanced-usage/deployment)
+Secure and optimize for production: [Deployment Guide](advanced-usage/deployment.md)
 
 ## Troubleshooting
 
@@ -375,6 +375,6 @@ If the autoscaler spawns too many workers:
 
 ## Getting Help
 
-- **Documentation**: See [Troubleshooting Guide](basic-usage/troubleshooting)
-- **Issues**: [GitHub Issues](https://github.com/gophpeek/laravel-queue-autoscale/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/gophpeek/laravel-queue-autoscale/discussions)
+- **Documentation**: See [Troubleshooting Guide](basic-usage/troubleshooting.md)
+- **Issues**: [GitHub Issues](https://github.com/cboxdk/laravel-queue-autoscale/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/cboxdk/laravel-queue-autoscale/discussions)

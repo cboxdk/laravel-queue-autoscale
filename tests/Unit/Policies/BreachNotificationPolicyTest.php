@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
+use Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Illuminate\Support\Facades\Log;
-use PHPeek\LaravelQueueAutoscale\Policies\BreachNotificationPolicy;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 beforeEach(function () {
     $this->policy = new BreachNotificationPolicy;

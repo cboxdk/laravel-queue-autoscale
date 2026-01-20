@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\QueueAutoscale\Policies;
 
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Illuminate\Support\Facades\Log;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicy;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 /**
  * Example: Metrics logging policy

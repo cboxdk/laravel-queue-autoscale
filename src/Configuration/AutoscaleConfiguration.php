@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Configuration;
+namespace Cbox\LaravelQueueAutoscale\Configuration;
 
 final readonly class AutoscaleConfiguration
 {

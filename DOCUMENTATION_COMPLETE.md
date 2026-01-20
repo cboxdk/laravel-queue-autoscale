@@ -14,37 +14,37 @@ Coverage: >80%
 ### 📚 Complete Documentation (18+ files, 8,792 lines)
 
 #### Guides (6 comprehensive guides)
-1. **CONFIGURATION.md** (550+ lines)
+1. **configuration.md** (550+ lines)
    - Complete configuration reference
    - Environment variables
    - Configuration patterns for different scenarios
    - Validation and testing
 
-2. **CUSTOM_STRATEGIES.md** (650+ lines)
+2. **custom-strategies.md** (650+ lines)
    - Strategy contract explanation
    - 4 complete implementation examples
    - Testing strategies
    - Best practices and common patterns
 
-3. **SCALING_POLICIES.md** (700+ lines)
+3. **scaling-policies.md** (700+ lines)
    - Policy contract explanation
    - 5 production-ready policy examples
    - Integration with external systems
    - Testing and best practices
 
-4. **EVENT_HANDLING.md** (550+ lines)
+4. **event-handling.md** (550+ lines)
    - All available events
    - Listening strategies
    - 6 common use cases with code
    - Advanced patterns
 
-5. **MONITORING.md** (600+ lines)
+5. **monitoring.md** (600+ lines)
    - Key metrics to track
    - Monitoring strategies
    - Integration examples (Datadog, CloudWatch, Prometheus)
    - Alerting and dashboards
 
-6. **PERFORMANCE.md** (550+ lines)
+6. **performance.md** (550+ lines)
    - Configuration tuning
    - Strategy optimization
    - Resource efficiency
@@ -52,25 +52,25 @@ Coverage: >80%
    - Troubleshooting performance issues
 
 #### Algorithms (4 detailed specifications)
-1. **LITTLES_LAW.md** (450+ lines)
+1. **littles-law.md** (450+ lines)
    - Mathematical foundation
    - Implementation details
    - Examples and use cases
    - Strengths and limitations
 
-2. **TREND_PREDICTION.md** (550+ lines)
+2. **trend-prediction.md** (550+ lines)
    - Predictive scaling algorithms
    - Trend detection and forecasting
    - Confidence calculation
    - Integration examples
 
-3. **BACKLOG_DRAIN.md** (600+ lines)
+3. **backlog-drain.md** (600+ lines)
    - SLA protection algorithm
    - Time-to-breach calculation
    - Urgency levels and responses
    - Advanced features
 
-4. **RESOURCE_CONSTRAINTS.md** (550+ lines)
+4. **resource-constraints.md** (550+ lines)
    - Constraint types
    - Implementation details
    - Examples with calculations
@@ -82,11 +82,11 @@ Coverage: >80%
 - Key class references
 
 #### Additional Documentation
-- **HOW_IT_WORKS.md**: Complete algorithm explanation (moved to docs/guides/)
-- **DEPLOYMENT.md**: Production deployment guide (moved to docs/guides/)
-- **CONTRIBUTING.md**: Development guidelines (moved to docs/guides/)
-- **SECURITY.md**: Security policies (moved to docs/guides/)
-- **TROUBLESHOOTING.md**: Complete troubleshooting guide (moved to docs/guides/)
+- **how-it-works.md**: Complete algorithm explanation (moved to docs/guides/)
+- **deployment.md**: Production deployment guide (moved to docs/guides/)
+- **contributing.md**: Development guidelines (moved to docs/guides/)
+- **security.md**: Security policies (moved to docs/guides/)
+- **troubleshooting.md**: Complete troubleshooting guide (moved to docs/guides/)
 
 ## Package Features
 
@@ -132,8 +132,8 @@ Coverage: >80%
 - PHP: ^8.3
 - Laravel: ^11.0 || ^12.0
 - Dependencies:
-  - gophpeek/laravel-queue-metrics: ^1.0.0
-  - gophpeek/system-metrics: ^1.2
+  - cboxdk/laravel-queue-metrics: ^1.0.0
+  - cboxdk/system-metrics: ^1.2
   - symfony/process: ^7.0
 
 ### Architecture

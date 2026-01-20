@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Contracts;
+namespace Cbox\LaravelQueueAutoscale\Contracts;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
 interface ScalingStrategyContract
 {

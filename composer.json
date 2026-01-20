@@ -1,8 +1,8 @@
 {
-    "name": "gophpeek/laravel-queue-autoscale",
+    "name": "cboxdk/laravel-queue-autoscale",
     "description": "Intelligent, predictive autoscaling for Laravel queues with SLA/SLO-based optimization",
     "keywords": [
-        "PHPeek",
+        "Cbox",
         "laravel",
         "queue",
         "autoscale",
@@ -13,7 +13,7 @@
         "predictive",
         "littles-law"
     ],
-    "homepage": "https://github.com/gophpeek/laravel-queue-autoscale",
+    "homepage": "https://github.com/cboxdk/laravel-queue-autoscale",
     "license": "MIT",
     "authors": [
         {
@@ -24,17 +24,12 @@
     ],
     "require": {
         "php": "^8.3|^8.4|^8.5",
-        "gophpeek/laravel-queue-metrics": "^1.5.0",
-        "gophpeek/system-metrics": "^1.2",
+        "cboxdk/laravel-queue-metrics": "^2.0",
         "illuminate/contracts": "^11.0||^12.0",
         "spatie/laravel-package-tools": "^1.16",
         "symfony/process": "^7.0"
     },
-    "suggest": {
-        "php-tui/php-tui": "Required for interactive TUI mode (--interactive or --tui flag)"
-    },
     "require-dev": {
-        "php-tui/php-tui": "^0.2",
         "laravel/pint": "^1.14",
         "nunomaduro/collision": "^8.8",
         "larastan/larastan": "^3.0",
@@ -48,13 +43,13 @@
     },
     "autoload": {
         "psr-4": {
-            "PHPeek\\LaravelQueueAutoscale\\": "src/",
-            "PHPeek\\LaravelQueueAutoscale\\Database\\Factories\\": "database/factories/"
+            "Cbox\\LaravelQueueAutoscale\\": "src/",
+            "Cbox\\LaravelQueueAutoscale\\Database\\Factories\\": "database/factories/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "PHPeek\\LaravelQueueAutoscale\\Tests\\": "tests/",
+            "Cbox\\LaravelQueueAutoscale\\Tests\\": "tests/",
             "Workbench\\App\\": "workbench/app/"
         }
     },
@@ -76,10 +71,10 @@
     "extra": {
         "laravel": {
             "providers": [
-                "PHPeek\\LaravelQueueAutoscale\\LaravelQueueAutoscaleServiceProvider"
+                "Cbox\\LaravelQueueAutoscale\\LaravelQueueAutoscaleServiceProvider"
             ],
             "aliases": {
-                "LaravelQueueAutoscale": "PHPeek\\LaravelQueueAutoscale\\Facades\\LaravelQueueAutoscale"
+                "LaravelQueueAutoscale": "Cbox\\LaravelQueueAutoscale\\Facades\\LaravelQueueAutoscale"
             }
         }
     },

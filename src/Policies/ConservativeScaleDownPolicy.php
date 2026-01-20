@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Policies;
+namespace Cbox\LaravelQueueAutoscale\Policies;
 
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicy;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 /**
  * Policy that limits scale-down to a maximum of 1 worker per evaluation cycle
@@ -38,10 +38,13 @@ final readonly class ConservativeScaleDownPolicy implements ScalingPolicy
         }
 
         $workersToRemove = $decision->workersToRemove();
+        
+        // Calculate max removable workers (25% of current, minimum 1)
+        $maxRemovable = max(1, (int) ceil($decision->currentWorkers * 0.25));
 
-        // If removing more than 1 worker, limit to 1
-        if ($workersToRemove > 1) {
-            $conservativeTarget = $decision->currentWorkers - 1;
+        // If removing more than the allowed limit, clamp it
+        if ($workersToRemove > $maxRemovable) {
+            $conservativeTarget = $decision->currentWorkers - $maxRemovable;
 
             return new ScalingDecision(
                 connection: $decision->connection,
@@ -49,8 +52,9 @@ final readonly class ConservativeScaleDownPolicy implements ScalingPolicy
                 currentWorkers: $decision->currentWorkers,
                 targetWorkers: $conservativeTarget,
                 reason: sprintf(
-                    'ConservativeScaleDownPolicy limited scale-down from %d to 1 worker (original: %s)',
+                    'ConservativeScaleDownPolicy limited scale-down from %d to %d worker(s) (25%% limit, original: %s)',
                     $workersToRemove,
+                    $maxRemovable,
                     $decision->reason
                 ),
                 predictedPickupTime: $decision->predictedPickupTime,
@@ -58,7 +62,7 @@ final readonly class ConservativeScaleDownPolicy implements ScalingPolicy
             );
         }
 
-        // Already removing 1 or 0 workers, allow it
+        // Within limits, allow it
         return null;
     }
 

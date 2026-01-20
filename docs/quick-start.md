@@ -11,7 +11,7 @@ Get your queue autoscaling up and running in minutes with sensible defaults.
 ## Installation
 
 ```bash
-composer require phpeek/laravel-queue-autoscale
+composer require cboxdk/laravel-queue-autoscale
 php artisan vendor:publish --tag="queue-autoscale-config"
 ```
 
@@ -49,7 +49,7 @@ Change the default for ALL queues:
 
 ```php
 // config/queue-autoscale.php
-use PHPeek\LaravelQueueAutoscale\Configuration\ProfilePresets;
+use Cbox\LaravelQueueAutoscale\Configuration\ProfilePresets;
 
 return [
     'sla_defaults' => ProfilePresets::highVolume(), // Changed from balanced()
@@ -62,7 +62,7 @@ Use different profiles for specific queues:
 
 ```php
 // config/queue-autoscale.php
-use PHPeek\LaravelQueueAutoscale\Configuration\ProfilePresets;
+use Cbox\LaravelQueueAutoscale\Configuration\ProfilePresets;
 
 return [
     'sla_defaults' => ProfilePresets::balanced(), // Default for all queues
@@ -131,7 +131,7 @@ That's it! Your queues are now autoscaling.
 Need to tweak a profile? Use `array_merge()`:
 
 ```php
-use PHPeek\LaravelQueueAutoscale\Configuration\ProfilePresets;
+use Cbox\LaravelQueueAutoscale\Configuration\ProfilePresets;
 
 'queues' => [
     'custom' => array_merge(ProfilePresets::balanced(), [
@@ -181,14 +181,14 @@ By default, the autoscaler uses two policies:
 1. **ConservativeScaleDownPolicy**: Prevents thrashing by limiting scale-down to 1 worker per cycle
 2. **BreachNotificationPolicy**: Logs SLA breach risks for monitoring
 
-These work great for most applications. Want to customize? See [Scaling Policies](basic-usage/scaling-policies).
+These work great for most applications. Want to customize? See [Scaling Policies](basic-usage/scaling-policies.md).
 
 ## Next Steps
 
 Now that you're up and running:
 
-- **Tune your configuration**: See [Workload Profiles](basic-usage/workload-profiles) for detailed profile documentation
-- **Understand policies**: See [Scaling Policies](basic-usage/scaling-policies) to customize scaling behavior
+- **Tune your configuration**: See [Workload Profiles](basic-usage/workload-profiles.md) for detailed profile documentation
+- **Understand policies**: See [Scaling Policies](basic-usage/scaling-policies.md) to customize scaling behavior
 - **Monitor performance**: Watch your logs for SLA breach warnings
 - **Optimize costs**: Consider more aggressive scale-down policies for non-critical queues
 
@@ -220,7 +220,7 @@ php artisan queue:autoscale -vvv
 Change to a more conservative policy:
 
 ```php
-use PHPeek\LaravelQueueAutoscale\Policies\NoScaleDownPolicy;
+use Cbox\LaravelQueueAutoscale\Policies\NoScaleDownPolicy;
 
 'policies' => [
     NoScaleDownPolicy::class,  // Never scale down
@@ -241,7 +241,7 @@ Lower your `min_workers`:
 
 ### Still stuck?
 
-Check the [detailed documentation](basic-usage/workload-profiles) or review your logs:
+Check the [detailed documentation](basic-usage/workload-profiles.md) or review your logs:
 
 ```bash
 # Check autoscaler logs
@@ -279,6 +279,6 @@ Quick reminder of what each profile is optimized for:
 
 ## Support
 
-- **Documentation**: [Full documentation](introduction)
-- **Issues**: [GitHub Issues](https://github.com/phpeek/laravel-queue-autoscale/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/phpeek/laravel-queue-autoscale/discussions)
+- **Documentation**: [Full documentation](introduction.md)
+- **Issues**: [GitHub Issues](https://github.com/cboxdk/laravel-queue-autoscale/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/cboxdk/laravel-queue-autoscale/discussions)

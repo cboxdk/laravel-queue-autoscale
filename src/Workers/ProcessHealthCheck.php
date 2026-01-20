@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Workers;
+namespace Cbox\LaravelQueueAutoscale\Workers;
 
 final readonly class ProcessHealthCheck
 {

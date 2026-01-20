@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Policies\AggressiveScaleDownPolicy;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Policies\AggressiveScaleDownPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 beforeEach(function () {
     $this->policy = new AggressiveScaleDownPolicy;

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
 
 test('creates instance with all properties', function () {
     $result = new CapacityCalculationResult(

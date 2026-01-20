@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\QueueAutoscale\Strategies;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 
 /**
  * Example: Cost-optimized scaling strategy

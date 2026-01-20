@@ -1,7 +1,7 @@
 <?php
 
-use PHPeek\LaravelQueueAutoscale\Tests\TestCase;
-use PHPeek\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
+use Cbox\LaravelQueueAutoscale\Tests\TestCase;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
 uses(TestCase::class)->in(__DIR__);
 

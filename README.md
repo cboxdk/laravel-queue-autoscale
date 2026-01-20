@@ -1,9 +1,9 @@
 # Laravel Queue Autoscale
 
-[![Latest Version on Packagist](https://img.shields.io/packagist/v/gophpeek/laravel-queue-autoscale.svg?style=flat-square)](https://packagist.org/packages/gophpeek/laravel-queue-autoscale)
-[![GitHub Tests Action Status](https://img.shields.io/github/actions/workflow/status/gophpeek/laravel-queue-autoscale/tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/gophpeek/laravel-queue-autoscale/actions?query=workflow%3Atests+branch%3Amain)
-[![GitHub Code Quality Action Status](https://img.shields.io/github/actions/workflow/status/gophpeek/laravel-queue-autoscale/code-quality.yml?branch=main&label=code%20quality&style=flat-square)](https://github.com/gophpeek/laravel-queue-autoscale/actions?query=workflow%3Acode-quality+branch%3Amain)
-[![Total Downloads](https://img.shields.io/packagist/dt/gophpeek/laravel-queue-autoscale.svg?style=flat-square)](https://packagist.org/packages/gophpeek/laravel-queue-autoscale)
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/cboxdk/laravel-queue-autoscale.svg?style=flat-square)](https://packagist.org/packages/cboxdk/laravel-queue-autoscale)
+[![GitHub Tests Action Status](https://img.shields.io/github/actions/workflow/status/cboxdk/laravel-queue-autoscale/tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/cboxdk/laravel-queue-autoscale/actions?query=workflow%3Atests+branch%3Amain)
+[![GitHub Code Quality Action Status](https://img.shields.io/github/actions/workflow/status/cboxdk/laravel-queue-autoscale/code-quality.yml?branch=main&label=code%20quality&style=flat-square)](https://github.com/cboxdk/laravel-queue-autoscale/actions?query=workflow%3Acode-quality+branch%3Amain)
+[![Total Downloads](https://img.shields.io/packagist/dt/cboxdk/laravel-queue-autoscale.svg?style=flat-square)](https://packagist.org/packages/cboxdk/laravel-queue-autoscale)
 
 **Intelligent, predictive autoscaling for Laravel queues with SLA/SLO-based optimization.**
 
@@ -16,25 +16,27 @@ Laravel Queue Autoscale is a smart queue worker manager that automatically scale
 - 🔬 **Queueing Theory Foundation** - Little's Law (L = λW) for steady-state calculations
 - ⚡ **SLA Breach Prevention** - Aggressive backlog drain when approaching SLA violations
 - 🖥️ **Resource-Aware** - Respects CPU and memory limits from system metrics
-- 🔄 **Metrics-Driven** - Uses [`laravel-queue-metrics`](https://github.com/gophpeek/laravel-queue-metrics) for queue discovery and all metrics
+- 🔄 **Metrics-Driven** - Uses [`laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics) for queue discovery and all metrics
 - 🎛️ **Extensible** - Custom scaling strategies and policies via interfaces
 - 📊 **Event Broadcasting** - React to scaling decisions, SLA predictions, worker changes
 - 🛡️ **Graceful Shutdown** - SIGTERM → SIGKILL worker termination
+- 🚀 **High Performance** - Drift-corrected evaluation loop and efficient process management
+- 🔒 **Secure by Design** - Safe process spawning and resource isolation
 - 💎 **DX First** - Clean API following Spatie package conventions
 
 ## Requirements
 
 - PHP 8.3+
 - Laravel 11.0+
-- [`gophpeek/laravel-queue-metrics`](https://github.com/gophpeek/laravel-queue-metrics) ^1.0.0
-- [`gophpeek/system-metrics`](https://github.com/gophpeek/system-metrics) ^1.2
+- [`cboxdk/laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics) ^1.0.0
+- [`cboxdk/system-metrics`](https://github.com/cboxdk/system-metrics) ^1.2
 
 ## Installation
 
 Install via Composer:
 
 ```bash
-composer require gophpeek/laravel-queue-autoscale
+composer require cboxdk/laravel-queue-autoscale
 ```
 
 Publish the configuration file:
@@ -45,11 +47,11 @@ php artisan vendor:publish --tag=queue-autoscale-config
 
 ### Setup Metrics Package
 
-The autoscaler requires [`laravel-queue-metrics`](https://github.com/gophpeek/laravel-queue-metrics) for queue discovery and metrics collection:
+The autoscaler requires [`laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics) for queue discovery and metrics collection:
 
 ```bash
 # Install metrics package (if not auto-installed via dependency)
-composer require gophpeek/laravel-queue-metrics
+composer require cboxdk/laravel-queue-metrics
 
 # Publish metrics configuration
 php artisan vendor:publish --tag=queue-metrics-config
@@ -73,31 +75,25 @@ php artisan vendor:publish --tag=laravel-queue-metrics-migrations
 php artisan migrate
 ```
 
-**📚 See [Metrics Package Documentation](https://github.com/gophpeek/laravel-queue-metrics) for advanced configuration.**
+**📚 See [Metrics Package Documentation](https://github.com/cboxdk/laravel-queue-metrics) for advanced configuration.**
 
 ## Quick Start
 
-### 1. Configure SLA Targets
+### 1. Configure SLA Targets (Optional)
 
-Edit `config/queue-autoscale.php`:
+**Zero Config:** By default, the package uses the "Balanced" profile (30s SLA). You can skip configuration if this suits you.
+
+To customize, edit `config/queue-autoscale.php`:
 
 ```php
 return [
     'enabled' => true,
+    
+    // Choose a preset profile: 'balanced', 'critical', 'high_volume', 'bursty', 'background'
+    'sla_defaults' => \Cbox\LaravelQueueAutoscale\Configuration\ProfilePresets::balanced(),
 
-    'sla_defaults' => [
-        'max_pickup_time_seconds' => 30,  // Jobs picked up within 30s
-        'min_workers' => 1,
-        'max_workers' => 10,
-        'scale_cooldown_seconds' => 60,
-    ],
-
-    // Per-queue overrides
+    // ... or customize manually
     'queues' => [
-        'emails' => [
-            'max_pickup_time_seconds' => 60,  // Less strict SLA
-            'max_workers' => 5,
-        ],
         'critical' => [
             'max_pickup_time_seconds' => 5,   // Strict SLA
             'max_workers' => 20,
@@ -113,17 +109,17 @@ php artisan queue:autoscale
 ```
 
 The autoscaler will:
-- Receive all queues and metrics from [`laravel-queue-metrics`](https://github.com/gophpeek/laravel-queue-metrics)
+- Receive all queues and metrics from [`laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics)
 - Apply scaling algorithms to meet SLA targets
 - Scale workers up/down based on calculations
-- Respect CPU/memory limits from [`system-metrics`](https://github.com/gophpeek/system-metrics)
+- Respect CPU/memory limits from [`system-metrics`](https://github.com/cboxdk/system-metrics)
 - Log all scaling decisions
 
 ### 3. Monitor with Events
 
 ```php
-use PHPeek\LaravelQueueAutoscale\Events\WorkersScaled;
-use PHPeek\LaravelQueueAutoscale\Events\SlaBreachPredicted;
+use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
+use Cbox\LaravelQueueAutoscale\Events\SlaBreachPredicted;
 
 Event::listen(WorkersScaled::class, function (WorkersScaled $event) {
     Log::info("Scaled {$event->queue}: {$event->from} → {$event->to} workers");
@@ -252,7 +248,7 @@ See [Architecture Documentation](docs/algorithms/architecture.md) for detailed a
 ```php
 'strategy' => [
     // Scaling strategy class (must implement ScalingStrategyContract)
-    'class' => \PHPeek\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
+    'class' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
 ],
 ```
 
@@ -261,8 +257,8 @@ See [Architecture Documentation](docs/algorithms/architecture.md) for detailed a
 Implement your own scaling logic:
 
 ```php
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 
 class CustomStrategy implements ScalingStrategyContract
 {
@@ -297,8 +293,8 @@ Register in config:
 Add before/after hooks to scaling operations:
 
 ```php
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicy;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 class NotifySlackPolicy implements ScalingPolicy
 {
@@ -333,7 +329,7 @@ Subscribe to scaling events:
 ### ScalingDecisionMade
 
 ```php
-use PHPeek\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 
 Event::listen(ScalingDecisionMade::class, function (ScalingDecisionMade $event) {
     $decision = $event->decision;
@@ -350,7 +346,7 @@ Event::listen(ScalingDecisionMade::class, function (ScalingDecisionMade $event) 
 ### WorkersScaled
 
 ```php
-use PHPeek\LaravelQueueAutoscale\Events\WorkersScaled;
+use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
 
 Event::listen(WorkersScaled::class, function (WorkersScaled $event) {
     Metrics::gauge('queue.workers', $event->to, [
@@ -363,7 +359,7 @@ Event::listen(WorkersScaled::class, function (WorkersScaled $event) {
 ### SlaBreachPredicted
 
 ```php
-use PHPeek\LaravelQueueAutoscale\Events\SlaBreachPredicted;
+use Cbox\LaravelQueueAutoscale\Events\SlaBreachPredicted;
 
 Event::listen(SlaBreachPredicted::class, function (SlaBreachPredicted $event) {
     $decision = $event->decision;
@@ -416,10 +412,10 @@ tail -f storage/logs/laravel.log | grep autoscale
 
 ## Metrics Integration
 
-**This package does NOT discover queues or collect metrics itself.** All queue discovery and metrics collection is delegated to [`laravel-queue-metrics`](https://github.com/gophpeek/laravel-queue-metrics):
+**This package does NOT discover queues or collect metrics itself.** All queue discovery and metrics collection is delegated to [`laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics):
 
 ```php
-use PHPeek\LaravelQueueMetrics\QueueMetrics;
+use Cbox\LaravelQueueMetrics\QueueMetrics;
 
 // The ONLY source of queue data for autoscaling
 $allQueues = QueueMetrics::getAllQueuesWithMetrics();
@@ -435,7 +431,7 @@ foreach ($allQueues as $queue) {
 
 **Package Responsibilities:**
 
-### [laravel-queue-metrics](https://github.com/gophpeek/laravel-queue-metrics) (dependency)
+### [laravel-queue-metrics](https://github.com/cboxdk/laravel-queue-metrics) (dependency)
 - ✅ Scans all configured queue connections
 - ✅ Discovers active queues
 - ✅ Collects queue depth and age metrics
@@ -486,7 +482,7 @@ Please see [Contributing Guide](docs/advanced-usage/contributing.md) for details
 
 ## Security
 
-If you discover any security related issues, please email security@phpeek.com instead of using the issue tracker.
+If you discover any security related issues, please email security@cbox.dk instead of using the issue tracker.
 
 ## Credits
 

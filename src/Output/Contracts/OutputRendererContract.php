@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Output\Contracts;
+namespace Cbox\LaravelQueueAutoscale\Output\Contracts;
 
-use PHPeek\LaravelQueueAutoscale\Output\DataTransferObjects\OutputData;
+use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\OutputData;
 
 interface OutputRendererContract
 {
@@ -27,11 +27,4 @@ interface OutputRendererContract
      * Cleanup on shutdown (e.g., restore terminal)
      */
     public function shutdown(): void;
-
-    /**
-     * Get queued actions for external processing (e.g., worker control)
-     *
-     * @return array<string, mixed>
-     */
-    public function getActionQueue(): array;
 }

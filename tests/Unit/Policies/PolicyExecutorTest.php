@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
+use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Illuminate\Support\Facades\Log;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicy;
-use PHPeek\LaravelQueueAutoscale\Policies\PolicyExecutor;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 beforeEach(function () {
     config()->set('queue-autoscale.policies', []);

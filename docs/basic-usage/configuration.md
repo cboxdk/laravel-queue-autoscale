@@ -27,7 +27,7 @@ Laravel Queue Autoscale depends on `laravel-queue-metrics` for all queue discove
 
 ```bash
 # Install metrics package (if not already installed)
-composer require gophpeek/laravel-queue-metrics
+composer require cboxdk/laravel-queue-metrics
 
 # Publish configuration
 php artisan vendor:publish --tag=queue-metrics-config
@@ -62,7 +62,7 @@ php artisan vendor:publish --tag=laravel-queue-metrics-migrations
 php artisan migrate
 ```
 
-**📚 Full metrics package documentation:** [laravel-queue-metrics](https://github.com/gophpeek/laravel-queue-metrics)
+**📚 Full metrics package documentation:** [laravel-queue-metrics](https://github.com/cboxdk/laravel-queue-metrics)
 
 ---
 
@@ -231,7 +231,7 @@ Strategies determine HOW workers are calculated. The package includes a hybrid s
 ### Using Default Strategy
 
 ```php
-'strategy' => \PHPeek\LaravelQueueAutoscale\Scaling\Strategies\HybridPredictiveStrategy::class,
+'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridPredictiveStrategy::class,
 ```
 
 The hybrid strategy combines:
@@ -245,7 +245,7 @@ The hybrid strategy combines:
 'strategy' => \App\Autoscale\Strategies\MyCustomStrategy::class,
 ```
 
-See [CUSTOM_STRATEGIES.md](CUSTOM_STRATEGIES.md) for implementation guide.
+See [Custom Strategies](../advanced-usage/custom-strategies.md) for implementation guide.
 
 ### Strategy Parameters
 
@@ -253,7 +253,7 @@ Some strategies accept additional configuration:
 
 ```php
 'strategy' => [
-    'class' => \PHPeek\LaravelQueueAutoscale\Scaling\Strategies\HybridPredictiveStrategy::class,
+    'class' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridPredictiveStrategy::class,
     'options' => [
         'trend_weight' => 0.7,        // How much to trust trend predictions
         'safety_margin' => 1.2,       // 20% buffer for uncertainty
@@ -270,8 +270,8 @@ Policies add cross-cutting concerns (notifications, logging, etc.) to scaling op
 
 ```php
 'policies' => [
-    \PHPeek\LaravelQueueAutoscale\Scaling\Policies\ResourceConstraintPolicy::class,
-    \PHPeek\LaravelQueueAutoscale\Scaling\Policies\CooldownEnforcementPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Scaling\Policies\ResourceConstraintPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Scaling\Policies\CooldownEnforcementPolicy::class,
 ],
 ```
 
@@ -280,8 +280,8 @@ Policies add cross-cutting concerns (notifications, logging, etc.) to scaling op
 ```php
 'policies' => [
     // Built-in policies
-    \PHPeek\LaravelQueueAutoscale\Scaling\Policies\ResourceConstraintPolicy::class,
-    \PHPeek\LaravelQueueAutoscale\Scaling\Policies\CooldownEnforcementPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Scaling\Policies\ResourceConstraintPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Scaling\Policies\CooldownEnforcementPolicy::class,
 
     // Custom policies
     \App\Autoscale\Policies\SlackNotificationPolicy::class,
@@ -297,10 +297,10 @@ Policies execute in the order defined. Common patterns:
 ```php
 'policies' => [
     // 1. Validate constraints first
-    \PHPeek\LaravelQueueAutoscale\Scaling\Policies\ResourceConstraintPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Scaling\Policies\ResourceConstraintPolicy::class,
 
     // 2. Check cooldown
-    \PHPeek\LaravelQueueAutoscale\Scaling\Policies\CooldownEnforcementPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Scaling\Policies\CooldownEnforcementPolicy::class,
 
     // 3. Notify stakeholders
     \App\Policies\SlackNotificationPolicy::class,
@@ -310,7 +310,7 @@ Policies execute in the order defined. Common patterns:
 ],
 ```
 
-See [SCALING_POLICIES.md](SCALING_POLICIES.md) for implementation guide.
+See [Scaling Policies](../advanced-usage/scaling-policies.md) for implementation guide.
 
 ## Manager Configuration
 
@@ -689,8 +689,8 @@ php artisan queue:autoscale:evaluate --queue=critical --dry-run
 
 ## See Also
 
-- [How It Works](how-it-works) - Understanding the scaling algorithm
-- [Custom Strategies](../advanced-usage/custom-strategies) - Writing custom scaling strategies
-- [Scaling Policies](../advanced-usage/scaling-policies) - Implementing scaling policies
-- [Deployment](../advanced-usage/deployment) - Production deployment guide
-- [Monitoring](monitoring) - Monitoring and observability
+- [How It Works](how-it-works.md) - Understanding the scaling algorithm
+- [Custom Strategies](../advanced-usage/custom-strategies.md) - Writing custom scaling strategies
+- [Scaling Policies](../advanced-usage/scaling-policies.md) - Implementing scaling policies
+- [Deployment](../advanced-usage/deployment.md) - Production deployment guide
+- [Monitoring](monitoring.md) - Monitoring and observability

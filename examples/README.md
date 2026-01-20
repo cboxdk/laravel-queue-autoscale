@@ -25,10 +25,10 @@ examples/
 mkdir -p app/QueueAutoscale/{Strategies,Policies}
 
 # Copy strategy examples
-cp vendor/gophpeek/laravel-queue-autoscale/examples/Strategies/*.php app/QueueAutoscale/Strategies/
+cp vendor/cboxdk/laravel-queue-autoscale/examples/Strategies/*.php app/QueueAutoscale/Strategies/
 
 # Copy policy examples
-cp vendor/gophpeek/laravel-queue-autoscale/examples/Policies/*.php app/QueueAutoscale/Policies/
+cp vendor/cboxdk/laravel-queue-autoscale/examples/Policies/*.php app/QueueAutoscale/Policies/
 ```
 
 ### 2. Update Namespaces
@@ -40,8 +40,8 @@ Ensure the namespace matches your application structure:
 
 namespace App\QueueAutoscale\Strategies;  // Your app namespace
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 
 class TimeBasedStrategy implements ScalingStrategyContract
 {
@@ -72,7 +72,7 @@ The autoscaler requires metrics from `laravel-queue-metrics`:
 
 ```bash
 # Install metrics package (if not already installed)
-composer require gophpeek/laravel-queue-metrics
+composer require cboxdk/laravel-queue-metrics
 
 # Publish configuration
 php artisan vendor:publish --tag=queue-metrics-config
@@ -81,7 +81,7 @@ php artisan vendor:publish --tag=queue-metrics-config
 QUEUE_METRICS_STORAGE=redis  # or 'database'
 ```
 
-**See:** [Metrics package setup guide](https://github.com/gophpeek/laravel-queue-metrics#installation)
+**See:** [Metrics package setup guide](https://github.com/cboxdk/laravel-queue-metrics#installation)
 
 ## Available Examples
 
@@ -182,8 +182,8 @@ See `config-examples.php` for complete configuration patterns:
 
 namespace App\QueueAutoscale\Strategies;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 
 class MyCustomStrategy implements ScalingStrategyContract
 {
@@ -223,8 +223,8 @@ class MyCustomStrategy implements ScalingStrategyContract
 
 namespace App\QueueAutoscale\Policies;
 
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicy;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 class MyCustomPolicy implements ScalingPolicy
 {
@@ -255,7 +255,7 @@ composer test
 # Test your strategy in isolation
 php artisan tinker
 > $strategy = new \App\QueueAutoscale\Strategies\MyCustomStrategy();
-> $config = new \PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration(...);
+> $config = new \Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration(...);
 > $metrics = (object)['processingRate' => 10.0, ...];
 > $workers = $strategy->calculateTargetWorkers($metrics, $config);
 > dump($workers, $strategy->getLastReason());

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 
 beforeEach(function () {
     $this->estimator = new ArrivalRateEstimator;

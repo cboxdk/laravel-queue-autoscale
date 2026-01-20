@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 
 it('returns zero for empty backlog', function () {
     $calculator = new BacklogDrainCalculator;

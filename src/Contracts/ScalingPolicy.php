@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Contracts;
+namespace Cbox\LaravelQueueAutoscale\Contracts;
 
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 interface ScalingPolicy
 {

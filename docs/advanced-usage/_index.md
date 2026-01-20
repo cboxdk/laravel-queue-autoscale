@@ -12,21 +12,21 @@ This section covers advanced topics for customizing Laravel Queue Autoscale to f
 
 Implement custom business logic and scaling strategies:
 
-- **[Custom Strategies](custom-strategies)** - Write your own scaling algorithms
-- **[Scaling Policies](scaling-policies)** - Add cross-cutting concerns and hooks
+- **[Custom Strategies](custom-strategies.md)** - Write your own scaling algorithms
+- **[Scaling Policies](scaling-policies.md)** - Add cross-cutting concerns and hooks
 
 ## Production
 
 Deploy and secure your autoscaler for production environments:
 
-- **[Deployment](deployment)** - Production deployment guide
-- **[Security](security)** - Security policy and best practices
+- **[Deployment](deployment.md)** - Production deployment guide
+- **[Security](security.md)** - Security policy and best practices
 
 ## Contributing
 
 Help make Laravel Queue Autoscale better:
 
-- **[Contributing](contributing)** - Development guidelines and workflow
+- **[Contributing](contributing.md)** - Development guidelines and workflow
 
 ## When to Use Custom Strategies
 
@@ -52,8 +52,8 @@ Policies are ideal for:
 
 Before exploring advanced topics:
 
-1. Understand the [How It Works](../basic-usage/how-it-works) guide
-2. Be familiar with [Configuration](../basic-usage/configuration) options
+1. Understand the [How It Works](../basic-usage/how-it-works.md) guide
+2. Be familiar with [Configuration](../basic-usage/configuration.md) options
 3. Have the autoscaler running successfully in your environment
 
 ## Example Use Cases

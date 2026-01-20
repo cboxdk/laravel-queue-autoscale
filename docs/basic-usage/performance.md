@@ -191,7 +191,7 @@ The `max_pickup_time_seconds` drives scaling behavior.
 
 ```php
 'strategy' => [
-    'class' => \PHPeek\LaravelQueueAutoscale\Scaling\Strategies\HybridPredictiveStrategy::class,
+    'class' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridPredictiveStrategy::class,
     'options' => [
         'trend_weight' => 0.7,        // How much to trust trend predictions (0-1)
         'safety_margin' => 1.2,       // Safety buffer (1.0 = no buffer, 1.5 = 50% buffer)
@@ -602,7 +602,7 @@ $this->comparePerformance();
 
 ## See Also
 
-- [CONFIGURATION.md](CONFIGURATION.md) - Detailed configuration options
-- [CUSTOM_STRATEGIES.md](CUSTOM_STRATEGIES.md) - Custom strategy development
-- [MONITORING.md](MONITORING.md) - Performance monitoring
-- [HOW_IT_WORKS.md](HOW_IT_WORKS.md) - Algorithm explanation
+- [Configuration](configuration.md) - Detailed configuration options
+- [Custom Strategies](../advanced-usage/custom-strategies.md) - Custom strategy development
+- [Monitoring](monitoring.md) - Performance monitoring
+- [How It Works](how-it-works.md) - Algorithm explanation

@@ -1,16 +1,16 @@
 <?php
 
-namespace PHPeek\LaravelQueueAutoscale\Facades;
+namespace Cbox\LaravelQueueAutoscale\Facades;
 
 use Illuminate\Support\Facades\Facade;
 
 /**
- * @see \PHPeek\LaravelQueueAutoscale\LaravelQueueAutoscale
+ * @see \Cbox\LaravelQueueAutoscale\LaravelQueueAutoscale
  */
 class LaravelQueueAutoscale extends Facade
 {
     protected static function getFacadeAccessor(): string
     {
-        return \PHPeek\LaravelQueueAutoscale\LaravelQueueAutoscale::class;
+        return \Cbox\LaravelQueueAutoscale\LaravelQueueAutoscale::class;
     }
 }

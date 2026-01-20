@@ -2,31 +2,31 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Manager;
+namespace Cbox\LaravelQueueAutoscale\Manager;
 
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Events\SlaBreached;
+use Cbox\LaravelQueueAutoscale\Events\SlaBreachPredicted;
+use Cbox\LaravelQueueAutoscale\Events\SlaRecovered;
+use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
+use Cbox\LaravelQueueAutoscale\Output\Contracts\OutputRendererContract;
+use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\OutputData;
+use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\QueueStats;
+use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\WorkerStatus;
+use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
+use Cbox\LaravelQueueAutoscale\Workers\WorkerOutputBuffer;
+use Cbox\LaravelQueueAutoscale\Workers\WorkerPool;
+use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
+use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
+use Cbox\LaravelQueueMetrics\Actions\CalculateQueueMetricsAction;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
+use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
-use PHPeek\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Events\ScalingDecisionMade;
-use PHPeek\LaravelQueueAutoscale\Events\SlaBreached;
-use PHPeek\LaravelQueueAutoscale\Events\SlaBreachPredicted;
-use PHPeek\LaravelQueueAutoscale\Events\SlaRecovered;
-use PHPeek\LaravelQueueAutoscale\Events\WorkersScaled;
-use PHPeek\LaravelQueueAutoscale\Output\Contracts\OutputRendererContract;
-use PHPeek\LaravelQueueAutoscale\Output\DataTransferObjects\OutputData;
-use PHPeek\LaravelQueueAutoscale\Output\DataTransferObjects\QueueStats;
-use PHPeek\LaravelQueueAutoscale\Output\DataTransferObjects\WorkerStatus;
-use PHPeek\LaravelQueueAutoscale\Policies\PolicyExecutor;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingEngine;
-use PHPeek\LaravelQueueAutoscale\Workers\WorkerOutputBuffer;
-use PHPeek\LaravelQueueAutoscale\Workers\WorkerPool;
-use PHPeek\LaravelQueueAutoscale\Workers\WorkerSpawner;
-use PHPeek\LaravelQueueAutoscale\Workers\WorkerTerminator;
-use PHPeek\LaravelQueueMetrics\Actions\CalculateQueueMetricsAction;
-use PHPeek\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
-use PHPeek\LaravelQueueMetrics\Facades\QueueMetrics;
 use Symfony\Component\Console\Output\OutputInterface;
 
 final class AutoscaleManager
@@ -140,225 +140,17 @@ final class AutoscaleManager
 
         $this->renderer?->initialize();
 
-        $isTuiMode = $this->renderer instanceof \PHPeek\LaravelQueueAutoscale\Output\Renderers\TuiOutputRenderer;
-
-        if ($isTuiMode) {
-            /** @var \PHPeek\LaravelQueueAutoscale\Output\Renderers\TuiOutputRenderer $tuiRenderer */
-            $tuiRenderer = $this->renderer;
-            $this->runTuiLoop($tuiRenderer);
-        } else {
-            $this->runStandardLoop();
-        }
+        $this->runLoop();
 
         $this->shutdown();
 
         return 0;
     }
 
-    /**
-     * Fast TUI loop - optimized for responsiveness
-     *
-     * Architecture:
-     * - UI rendering runs at 60 FPS (never blocked)
-     * - Data fetching happens in small chunks, interleaved with UI ticks
-     * - Scaling decisions use cached data
-     */
-    private function runTuiLoop(\PHPeek\LaravelQueueAutoscale\Output\Renderers\TuiOutputRenderer $tuiRenderer): void
-    {
-        $lastScalingTime = 0;
-        $lastWorkerOutputTime = 0;
-        $lastRenderTime = 0;
-        $workerOutputInterval = 1;
-        $renderInterval = 1; // Update TUI data every 1 second
-
-        // Initial data fetch (blocking, but only once at startup)
-        $this->refreshMetricsCache();
-        $this->renderOutput();
-
-        while (! $this->signals->shouldStop()) {
-            $this->signals->dispatch();
-
-            $now = time();
-
-            try {
-                // FAST PATH: UI events and rendering (~60 FPS)
-                // This should NEVER be blocked by data operations
-                $tuiRenderer->renderTick();
-
-                if ($tuiRenderer->shouldExit()) {
-                    $this->signals->requestStop();
-                    break;
-                }
-
-                // MEDIUM PATH: Worker output + TUI data refresh (every 1 second)
-                if ($now - $lastWorkerOutputTime >= $workerOutputInterval) {
-                    $this->processWorkerOutput();
-                    $this->processTuiActions();
-                    $lastWorkerOutputTime = $now;
-                }
-
-                // MEDIUM PATH: Render output update (every 1 second)
-                // Uses CACHED data, so it's fast
-                if ($now - $lastRenderTime >= $renderInterval) {
-                    $this->renderOutputFromCache();
-                    $lastRenderTime = $now;
-                }
-
-                // SLOW PATH: Metrics fetch + scaling (every interval seconds)
-                // Only if user is NOT actively interacting
-                if ($now - $lastScalingTime >= $this->interval) {
-                    if (! $tuiRenderer->isUserActive(1.0)) {
-                        $this->refreshMetricsAndScale($tuiRenderer);
-                    }
-                    $lastScalingTime = $now;
-                }
-            } catch (\Throwable $e) {
-                Log::channel(AutoscaleConfiguration::logChannel())->error(
-                    'Autoscale evaluation failed',
-                    [
-                        'error' => $e->getMessage(),
-                        'trace' => $e->getTraceAsString(),
-                    ]
-                );
-            }
-
-            // ~60 FPS tick
-            usleep(16666);
-        }
-    }
-
-    /**
-     * Refresh metrics cache from QueueMetrics
-     * This is the expensive operation - should be called sparingly
-     *
-     * First recalculates queue-level metrics to ensure throughput uses
-     * the current 60-second sliding window, then fetches all metrics.
-     */
-    private function refreshMetricsCache(): void
-    {
-        // Recalculate metrics first to ensure throughput uses current sliding window
-        // This is necessary because throughput is stored as a snapshot and won't
-        // automatically decay - it needs to be recalculated from job completion times
-        app(CalculateQueueMetricsAction::class)->executeForAllQueues();
-
-        $this->cachedMetrics = QueueMetrics::getAllQueuesWithMetrics();
-    }
-
-    /**
-     * Refresh metrics and run scaling evaluation
-     * Yields to UI between operations to stay responsive
-     */
-    private function refreshMetricsAndScale(\PHPeek\LaravelQueueAutoscale\Output\Renderers\TuiOutputRenderer $tuiRenderer): void
-    {
-        // Fetch new metrics (this is the slow part)
-        $this->refreshMetricsCache();
-
-        // Yield to UI immediately after fetch
-        $tuiRenderer->renderTick();
-        if ($tuiRenderer->shouldExit()) {
-            return;
-        }
-
-        // Process each queue using cached data
-        foreach ($this->cachedMetrics as $queueKey => $metricsArray) {
-            try {
-                $mappedData = $this->mapMetricsFields($metricsArray);
-                $metrics = QueueMetricsData::fromArray($mappedData);
-                $this->evaluateQueue($metrics->connection, $metrics->queue, $metrics);
-            } catch (\Throwable $e) {
-                $this->verbose("Failed to process queue {$queueKey}: {$e->getMessage()}", 'error');
-                // Continue with other queues
-            }
-
-            // Yield to UI between queues
-            $tuiRenderer->renderTick();
-            if ($tuiRenderer->shouldExit()) {
-                return;
-            }
-        }
-
-        // Cleanup and render
-        $this->cleanupDeadWorkers();
-        $this->renderOutputFromCache();
-    }
-
-    /**
-     * Render output using cached metrics data with fresh queue depth
-     *
-     * Queue depth (pending/reserved/scheduled) is fetched live because it's fast
-     * and provides accurate real-time feedback. Throughput and other metrics
-     * use cached data since they require more expensive calculations.
-     */
-    private function renderOutputFromCache(): void
-    {
-        if ($this->renderer === null) {
-            return;
-        }
-
-        // Update currentQueueStats from cached metrics with fresh queue depth
-        foreach ($this->cachedMetrics as $queueKey => $metricsArray) {
-            try {
-                $mappedData = $this->mapMetricsFields($metricsArray);
-                $metrics = QueueMetricsData::fromArray($mappedData);
-
-                // Fetch fresh queue depth (fast operation - direct Redis/DB read)
-                $freshDepth = QueueMetrics::getQueueDepth($metrics->connection, $metrics->queue);
-                $oldestJobAgeSeconds = $freshDepth->oldestPendingJobAge !== null
-                    ? (int) $freshDepth->oldestPendingJobAge->diffInSeconds(now())
-                    : 0;
-
-                $queueConfig = QueueConfiguration::fromConfig($metrics->connection, $metrics->queue);
-                $slaTarget = $queueConfig->maxPickupTimeSeconds;
-                $workerCount = $this->pool->count($metrics->connection, $metrics->queue);
-
-                $this->currentQueueStats[$queueKey] = new QueueStats(
-                    connection: $metrics->connection,
-                    queue: $metrics->queue,
-                    depth: $freshDepth->totalJobs(),
-                    pending: $freshDepth->pendingJobs,
-                    oldestJobAge: $oldestJobAgeSeconds,
-                    throughputPerMinute: $metrics->throughputPerMinute,
-                    activeWorkers: $workerCount,
-                    targetWorkers: $workerCount,
-                    slaTarget: $slaTarget,
-                    slaStatus: $this->calculateSlaStatus($oldestJobAgeSeconds, $slaTarget),
-                    reserved: $freshDepth->reservedJobs,
-                    scheduled: $freshDepth->delayedJobs,
-                );
-            } catch (\Throwable $e) {
-                $this->verbose("Failed to render queue {$queueKey}: {$e->getMessage()}", 'error');
-                // Continue with other queues
-            }
-        }
-
-        $outputData = $this->buildOutputData();
-        $this->renderer?->render($outputData);
-
-        $this->scalingLog = [];
-    }
-
-    /**
-     * Calculate SLA status based on oldest job age and SLA target
-     */
-    private function calculateSlaStatus(int $oldestJobAge, int $slaTarget): string
-    {
-        if ($oldestJobAge >= $slaTarget) {
-            return 'breached';
-        }
-
-        if ($oldestJobAge > $slaTarget * 0.8) {
-            return 'warning';
-        }
-
-        return 'ok';
-    }
-
-    /**
-     * Standard loop for non-TUI modes
-     */
-    private function runStandardLoop(): void
+    private function runLoop(): void
     {
         while (! $this->signals->shouldStop()) {
+            $startTime = microtime(true);
             $this->signals->dispatch();
 
             try {
@@ -366,7 +158,6 @@ final class AutoscaleManager
                 $this->evaluateAndScale();
                 $this->cleanupDeadWorkers();
                 $this->renderOutput();
-                $this->processTuiActions();
             } catch (\Throwable $e) {
                 Log::channel(AutoscaleConfiguration::logChannel())->error(
                     'Autoscale evaluation failed',
@@ -377,7 +168,13 @@ final class AutoscaleManager
                 );
             }
 
-            sleep($this->interval);
+            $executionTime = microtime(true) - $startTime;
+            $sleepTime = max(0, $this->interval - $executionTime);
+
+            // Sleep only the remaining time to maintain cadence
+            if ($sleepTime > 0) {
+                usleep((int) ($sleepTime * 1_000_000));
+            }
         }
     }
 
@@ -824,32 +621,6 @@ final class AutoscaleManager
         }
     }
 
-    /**
-     * Process actions from the TUI
-     */
-    private function processTuiActions(): void
-    {
-        if ($this->renderer === null) {
-            return;
-        }
-
-        $actions = $this->renderer->getActionQueue();
-
-        foreach ($actions as $name => $actionData) {
-            // Skip command palette actions for now (handled separately)
-            if (str_starts_with($name, 'command:')) {
-                continue;
-            }
-
-            // Handle worker actions (restart, pause, resume, kill)
-            if (is_array($actionData) && isset($actionData['action'], $actionData['pid'])) {
-                /** @var array{action: string, pid?: int, queue?: string, count?: int} $actionData */
-                $result = $this->handleAction($actionData);
-                $this->verbose("TUI Action: {$name} - {$result['message']}", $result['success'] ? 'info' : 'warn');
-            }
-        }
-    }
-
     private function renderOutput(): void
     {
         if ($this->renderer === null) {
@@ -931,157 +702,5 @@ final class AutoscaleManager
         $elapsed = $lastScale->diffInSeconds(now());
 
         return (int) max(0, $cooldownSeconds - $elapsed);
-    }
-
-    /**
-     * Handle an action from the TUI
-     *
-     * @param  array{action: string, pid?: int, queue?: string, count?: int}  $action
-     * @return array{success: bool, message: string}
-     */
-    public function handleAction(array $action): array
-    {
-        $actionType = $action['action'];
-
-        return match ($actionType) {
-            'restart' => $this->restartWorker($action['pid'] ?? 0),
-            'pause' => $this->pauseWorker($action['pid'] ?? 0),
-            'resume' => $this->resumeWorker($action['pid'] ?? 0),
-            'kill' => $this->killWorker($action['pid'] ?? 0),
-            default => ['success' => false, 'message' => "Unknown action: {$actionType}"],
-        };
-    }
-
-    /**
-     * Restart a worker by PID (graceful restart via SIGUSR2)
-     *
-     * @return array{success: bool, message: string}
-     */
-    public function restartWorker(int $pid): array
-    {
-        if ($pid <= 0) {
-            return ['success' => false, 'message' => 'Invalid PID'];
-        }
-
-        $worker = $this->pool->findByPid($pid);
-        if ($worker === null) {
-            return ['success' => false, 'message' => "Worker with PID {$pid} not found"];
-        }
-
-        if (! $worker->isRunning()) {
-            return ['success' => false, 'message' => "Worker with PID {$pid} is not running"];
-        }
-
-        // Send SIGUSR2 for graceful restart (Laravel Horizon convention)
-        $success = posix_kill($pid, SIGUSR2);
-
-        if ($success) {
-            $this->verbose("🔄 Restart signal sent to worker PID {$pid}", 'info');
-            Log::channel(AutoscaleConfiguration::logChannel())->info(
-                'Worker restart signal sent',
-                ['pid' => $pid, 'queue' => $worker->queue]
-            );
-
-            return ['success' => true, 'message' => "Restart signal sent to worker {$pid}"];
-        }
-
-        return ['success' => false, 'message' => "Failed to send restart signal to worker {$pid}"];
-    }
-
-    /**
-     * Pause a worker by PID (SIGSTOP)
-     *
-     * @return array{success: bool, message: string}
-     */
-    public function pauseWorker(int $pid): array
-    {
-        if ($pid <= 0) {
-            return ['success' => false, 'message' => 'Invalid PID'];
-        }
-
-        $worker = $this->pool->findByPid($pid);
-        if ($worker === null) {
-            return ['success' => false, 'message' => "Worker with PID {$pid} not found"];
-        }
-
-        if (! $worker->isRunning()) {
-            return ['success' => false, 'message' => "Worker with PID {$pid} is not running"];
-        }
-
-        // Send SIGSTOP to pause the process
-        $success = posix_kill($pid, SIGSTOP);
-
-        if ($success) {
-            $this->verbose("⏸️  Worker PID {$pid} paused", 'info');
-            Log::channel(AutoscaleConfiguration::logChannel())->info(
-                'Worker paused',
-                ['pid' => $pid, 'queue' => $worker->queue]
-            );
-
-            return ['success' => true, 'message' => "Worker {$pid} paused"];
-        }
-
-        return ['success' => false, 'message' => "Failed to pause worker {$pid}"];
-    }
-
-    /**
-     * Resume a paused worker by PID (SIGCONT)
-     *
-     * @return array{success: bool, message: string}
-     */
-    public function resumeWorker(int $pid): array
-    {
-        if ($pid <= 0) {
-            return ['success' => false, 'message' => 'Invalid PID'];
-        }
-
-        $worker = $this->pool->findByPid($pid);
-        if ($worker === null) {
-            return ['success' => false, 'message' => "Worker with PID {$pid} not found"];
-        }
-
-        // Send SIGCONT to resume the process
-        $success = posix_kill($pid, SIGCONT);
-
-        if ($success) {
-            $this->verbose("▶️  Worker PID {$pid} resumed", 'info');
-            Log::channel(AutoscaleConfiguration::logChannel())->info(
-                'Worker resumed',
-                ['pid' => $pid, 'queue' => $worker->queue]
-            );
-
-            return ['success' => true, 'message' => "Worker {$pid} resumed"];
-        }
-
-        return ['success' => false, 'message' => "Failed to resume worker {$pid}"];
-    }
-
-    /**
-     * Kill a worker by PID (immediate termination)
-     *
-     * @return array{success: bool, message: string}
-     */
-    public function killWorker(int $pid): array
-    {
-        if ($pid <= 0) {
-            return ['success' => false, 'message' => 'Invalid PID'];
-        }
-
-        $worker = $this->pool->findByPid($pid);
-        if ($worker === null) {
-            return ['success' => false, 'message' => "Worker with PID {$pid} not found"];
-        }
-
-        // Use the terminator to properly terminate the worker
-        $this->terminator->terminate($worker);
-        $this->pool->removeWorker($worker);
-
-        $this->verbose("💀 Worker PID {$pid} killed", 'warn');
-        Log::channel(AutoscaleConfiguration::logChannel())->warning(
-            'Worker killed via TUI',
-            ['pid' => $pid, 'queue' => $worker->queue]
-        );
-
-        return ['success' => true, 'message' => "Worker {$pid} killed"];
     }
 }

@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Scaling\Strategies;
+namespace Cbox\LaravelQueueAutoscale\Scaling\Strategies;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Configuration\TrendScalingPolicy;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
-use PHPeek\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\TrendScalingPolicy;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
 /**
  * Predictive scaling strategy using multiple algorithms
@@ -91,8 +91,21 @@ final class PredictiveStrategy implements ScalingStrategyContract
             }
         }
 
+        // Adjust arrival rate for retry noise
+        // High failure rates inflate arrival rate because retries look like new jobs
+        // We subtract the estimated retry volume to get the "true" arrival rate of new work
+        $failureRate = $metrics->failureRate ?? 0.0;
+        $rawArrivalRate = $arrivalRate;
+        $retryNoise = 0.0;
+
+        if ($failureRate > 0 && $processingRate > 0) {
+            // Estimate how many jobs/sec are actually retries
+            $retryNoise = $processingRate * ($failureRate / 100.0);
+            $arrivalRate = max(0.0, $arrivalRate - $retryNoise);
+        }
+
         // 1. RATE-BASED: Little's Law (L = λW)
-        // Workers needed to handle current arrival rate
+        // Workers needed to handle current (adjusted) arrival rate
         $steadyStateWorkers = $this->littles->calculate($arrivalRate, $avgJobTime);
 
         // 2. TREND-BASED: Predict future arrival rate using policy
@@ -122,12 +135,15 @@ final class PredictiveStrategy implements ScalingStrategyContract
             'predictive' => $predictiveWorkers,
             'backlog_drain' => $backlogDrainWorkers,
             'arrival_rate' => $arrivalRate,
+            'raw_arrival_rate' => $rawArrivalRate,
+            'retry_noise' => $retryNoise,
             'processing_rate' => $processingRate,
             'predicted_rate' => $predictedRate,
             'avg_job_time' => $avgJobTime,
             'avg_job_time_source' => $jobTimeSource,
             'arrival_rate_source' => $this->arrivalRateSource,
             'backlog' => $backlogSize,
+            'failure_rate' => $failureRate,
         ];
 
         return (int) ceil(max($targetWorkers, 0));
@@ -168,10 +184,20 @@ final class PredictiveStrategy implements ScalingStrategyContract
             );
         }
 
+        // Add info about retry adjustment if significant
+        if (($calc['retry_noise'] ?? 0) > 0.1) {
+            $parts[] = sprintf(
+                'adjusted for retries (%.1f%% failure rate removed %.2f/s noise)',
+                $calc['failure_rate'],
+                $calc['retry_noise']
+            );
+        }
+
         // Add arrival rate source if different from processing rate
         $arrivalRate = (float) $calc['arrival_rate'];
         $processingRate = (float) $calc['processing_rate'];
-        if ($arrivalRate !== $processingRate) {
+        // Only show this detail if we haven't already explained it via retry adjustment
+        if (abs($arrivalRate - $processingRate) > 0.1 && ($calc['retry_noise'] ?? 0) <= 0.1) {
             $diff = $arrivalRate - $processingRate;
             $direction = $diff > 0 ? 'growing' : 'shrinking';
             $parts[] = sprintf('backlog %s (arrival %.2f/s vs processing %.2f/s)', $direction, $arrivalRate, $processingRate);

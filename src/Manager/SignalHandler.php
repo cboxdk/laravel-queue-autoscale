@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Manager;
+namespace Cbox\LaravelQueueAutoscale\Manager;
 
 final class SignalHandler
 {

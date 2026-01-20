@@ -5,7 +5,7 @@ This is a Laravel package for queue monitoring with metrics, analytics, and insi
 
 - php - ^8.3|^8.4
 - laravel/framework - ^11.0
-- gophpeek/system-metrics - ^1.2
+- cboxdk/system-metrics - ^1.2
 - spatie/laravel-package-tools - ^1.16
 - spatie/laravel-prometheus - ^1.3
 - laravel/pint - ^1.14
@@ -117,27 +117,27 @@ protected function isAccessible(User $user, ?string $path = null): bool
 - Follow PHPStan level 5+ standards for type safety.
 
 
-# PHPeek Documentation Guide
+# Cbox Documentation Guide
 
-This guide explains how to structure documentation for PHPeek packages to ensure optimal display and navigation on phpeek.com.
+This guide explains how to structure documentation for Cbox packages to ensure optimal display and navigation on cbox.dk.
 
 ## Core Concepts
 
 ### Major Version Management
-- PHPeek displays ONE entry per major version (v1, v2, v3)
+- Cbox displays ONE entry per major version (v1, v2, v3)
 - System automatically tracks the latest release within each major version
 - URLs use major version: `/docs/{package}/v1`, `/docs/{package}/v2`
 - When you release v1.2.1 after v1.2.0, the website updates automatically
 
-### Files NOT Used on PHPeek.com
+### Files NOT Used on Cbox.com
 
 **README.md - GitHub Only**
-- ⚠️ README.md is **NEVER** displayed on PHPeek.com
+- ⚠️ README.md is **NEVER** displayed on cbox.dk
 - README.md is only for GitHub repository display
 - All documentation must be in the `/docs` folder
 - Do NOT reference README.md in your docs
 
-**Files Used on PHPeek.com**
+**Files Used on cbox.dk**
 - All `.md` files in the `/docs` folder
 - All image/asset files within `/docs`
 - `_index.md` files for directory landing pages (optional but recommended)
@@ -262,31 +262,31 @@ weight: 10
 
 ### Internal Documentation Links
 
-Use **relative paths** to link between documentation pages:
+Use **relative paths** with full filename to link between documentation pages:
 
 ```markdown
 # Link to sibling file in same directory
-[Installation Guide](installation)
+[Installation Guide](installation.md)
 
 # Link to file in parent directory
-[Back to Introduction](../introduction)
+[Back to Introduction](../introduction.md)
 
 # Link to file in subdirectory
-[CPU Metrics](basic-usage/cpu-metrics)
+[CPU Metrics](basic-usage/cpu-metrics.md)
 
 # Link to file in different subdirectory
-[Platform Comparison](../platform-support/comparison)
+[Platform Comparison](../platform-support/comparison.md)
 
 # Link with anchor to heading
-[Error Handling](advanced-usage/error-handling#result-pattern)
+[Error Handling](advanced-usage/error-handling#result-pattern.md)
 ```
 
 **Link Best Practices**
 - ✅ Use descriptive link text: `[View API Reference](api-reference)`
-- ✅ Remove `.md` extension: `[Guide](installation)` not `[Guide](installation.md)`
+- ✅ Keep `.md` extension: `[Guide](installation.md)` not `[Guide](installation)`
 - ✅ Use relative paths: `[Guide](../guide)`
-- ❌ Don't use generic text: `[Click here](guide)` or `[Read more](docs)`
-- ❌ Don't hardcode absolute URLs: `[Guide](/docs/package/v1/guide)`
+- ❌ Don't use generic text: `[Click here](guide.md)` or `[Read more](docs.md)`
+- ❌ Don't hardcode absolute URLs: `[Guide](/docs/package/v1/guide.md)`
 - ❌ Don't link to README.md (it's not displayed)
 
 ### External Links
@@ -353,7 +353,7 @@ Always specify the language after the opening fence:
 
 ````markdown
 ```php
-use PHPeek\SystemMetrics\SystemMetrics;
+use Cbox\SystemMetrics\SystemMetrics;
 
 $cpu = SystemMetrics::cpu()->get();
 echo "Cores: {$cpu->cores}\n";
@@ -433,7 +433,7 @@ Monitor CPU usage and performance with real-time metrics.
 ## Getting CPU Statistics
 
 ```php
-use PHPeek\SystemMetrics\SystemMetrics;
+use Cbox\SystemMetrics\SystemMetrics;
 
 $cpu = SystemMetrics::cpu()->get();
 
@@ -531,7 +531,7 @@ Before publishing, verify:
 Your documentation will be available at:
 
 ```
-https://phpeek.com/docs/{package}/{major_version}/{page_path}
+https://cbox.dk/docs/{package}/{major_version}/{page_path}
 
 Examples:
 /docs/system-metrics/v1/introduction

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Output\Renderers;
+namespace Cbox\LaravelQueueAutoscale\Output\Renderers;
 
-use PHPeek\LaravelQueueAutoscale\Output\Contracts\OutputRendererContract;
-use PHPeek\LaravelQueueAutoscale\Output\DataTransferObjects\OutputData;
+use Cbox\LaravelQueueAutoscale\Output\Contracts\OutputRendererContract;
+use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\OutputData;
 use Symfony\Component\Console\Output\OutputInterface;
 
 final class DefaultOutputRenderer implements OutputRendererContract
@@ -62,13 +62,5 @@ final class DefaultOutputRenderer implements OutputRendererContract
     public function removeWorker(int $pid): void
     {
         unset($this->workerIds[$pid]);
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    public function getActionQueue(): array
-    {
-        return [];
     }
 }

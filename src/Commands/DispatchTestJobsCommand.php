@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Commands;
+namespace Cbox\LaravelQueueAutoscale\Commands;
 
+use Cbox\LaravelQueueAutoscale\Jobs\TestJob;
 use Illuminate\Console\Command;
-use PHPeek\LaravelQueueAutoscale\Jobs\TestJob;
 
 class DispatchTestJobsCommand extends Command
 {

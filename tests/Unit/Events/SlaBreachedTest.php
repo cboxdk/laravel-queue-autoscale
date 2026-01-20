@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Events\SlaBreached;
+use Cbox\LaravelQueueAutoscale\Events\SlaBreached;
 
 test('creates instance with all properties', function () {
     $event = new SlaBreached(

@@ -62,10 +62,10 @@ All policies must implement `ScalingPolicyContract`:
 ```php
 <?php
 
-namespace PHPeek\LaravelQueueAutoscale\Contracts;
+namespace Cbox\LaravelQueueAutoscale\Contracts;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 interface ScalingPolicyContract
 {
@@ -120,9 +120,9 @@ Use for:
 
 namespace App\Autoscale\Policies;
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 class CustomPolicy implements ScalingPolicyContract
 {
@@ -144,8 +144,8 @@ Add to `config/queue-autoscale.php`:
 
 ```php
 'policies' => [
-    \PHPeek\LaravelQueueAutoscale\Scaling\Policies\ResourceConstraintPolicy::class,
-    \PHPeek\LaravelQueueAutoscale\Scaling\Policies\CooldownEnforcementPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Scaling\Policies\ResourceConstraintPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Scaling\Policies\CooldownEnforcementPolicy::class,
 
     // Your custom policies
     \App\Autoscale\Policies\CustomPolicy::class,
@@ -156,8 +156,8 @@ Add to `config/queue-autoscale.php`:
 
 ```php
 use App\Autoscale\Policies\CustomPolicy;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 it('executes policy hooks', function () {
     $policy = new CustomPolicy();
@@ -200,9 +200,9 @@ Send scaling notifications to Slack:
 namespace App\Autoscale\Policies;
 
 use Illuminate\Support\Facades\Http;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 class SlackNotificationPolicy implements ScalingPolicyContract
 {
@@ -294,9 +294,9 @@ Log detailed metrics for analysis:
 namespace App\Autoscale\Policies;
 
 use Illuminate\Support\Facades\DB;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 class MetricsLoggingPolicy implements ScalingPolicyContract
 {
@@ -384,9 +384,9 @@ Prevent cost overruns:
 namespace App\Autoscale\Policies;
 
 use Illuminate\Support\Facades\Cache;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 class BudgetEnforcementPolicy implements ScalingPolicyContract
 {
@@ -451,9 +451,9 @@ Alert on-call for critical scaling events:
 namespace App\Autoscale\Policies;
 
 use Illuminate\Support\Facades\Http;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 class PagerDutyAlertPolicy implements ScalingPolicyContract
 {
@@ -526,9 +526,9 @@ Track and enforce cooldown periods:
 namespace App\Autoscale\Policies;
 
 use Illuminate\Support\Facades\Cache;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 class CooldownTrackingPolicy implements ScalingPolicyContract
 {
@@ -573,8 +573,8 @@ Test policy behavior in isolation:
 ```php
 use App\Autoscale\Policies\SlackNotificationPolicy;
 use Illuminate\Support\Facades\Http;
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 describe('SlackNotificationPolicy', function () {
     beforeEach(function () {
@@ -638,7 +638,7 @@ Test policy interaction with scaling engine:
 ```php
 use App\Autoscale\Policies\MetricsLoggingPolicy;
 use Illuminate\Support\Facades\DB;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingEngine;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 
 it('logs metrics during scaling evaluation', function () {
     DB::shouldReceive('table->insert')->twice();  // before + after
@@ -828,7 +828,7 @@ class DatadogMetricsPolicy implements ScalingPolicyContract
 
 ## See Also
 
-- [Custom Strategies](custom-strategies) - Implementing custom strategies
-- [Event Handling](../basic-usage/event-handling) - Using Laravel events
-- [Monitoring](../basic-usage/monitoring) - Monitoring and observability
-- [API Reference](../api-reference) - Complete API documentation
+- [Custom Strategies](custom-strategies.md) - Implementing custom strategies
+- [Event Handling](../basic-usage/event-handling.md) - Using Laravel events
+- [Monitoring](../basic-usage/monitoring.md) - Monitoring and observability
+- [API Reference](../api-reference/_index.md) - Complete API documentation

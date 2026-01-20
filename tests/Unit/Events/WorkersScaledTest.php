@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Events\WorkersScaled;
+use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
 
 test('creates instance with all properties', function () {
     $event = new WorkersScaled(

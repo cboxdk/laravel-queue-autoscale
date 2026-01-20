@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
 
 it('calculates workers using Littles Law', function () {
     $calculator = new LittlesLawCalculator;

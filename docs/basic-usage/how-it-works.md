@@ -401,11 +401,11 @@ QUEUE_METRICS_STORAGE=database
 **Installation:**
 
 ```bash
-composer require gophpeek/laravel-queue-metrics
+composer require cboxdk/laravel-queue-metrics
 php artisan vendor:publish --tag=queue-metrics-config
 ```
 
-**Learn more:** [Metrics Package Documentation](https://github.com/gophpeek/laravel-queue-metrics)
+**Learn more:** [Metrics Package Documentation](https://github.com/cboxdk/laravel-queue-metrics)
 
 ## Common Questions
 
@@ -431,7 +431,7 @@ php artisan vendor:publish --tag=queue-metrics-config
 
 ## Next Steps
 
-- [Configuration Guide](configuration) - Configure SLA targets and limits
-- [Custom Strategies](../advanced-usage/custom-strategies) - Write your own scaling logic
-- [Monitoring Guide](monitoring) - Track autoscaler performance
-- [Algorithm Details](../algorithms/architecture) - Deep dive into math
+- [Configuration Guide](configuration.md) - Configure SLA targets and limits
+- [Custom Strategies](../advanced-usage/custom-strategies.md) - Write your own scaling logic
+- [Monitoring Guide](monitoring.md) - Track autoscaler performance
+- [Algorithm Details](../algorithms/architecture.md) - Deep dive into math

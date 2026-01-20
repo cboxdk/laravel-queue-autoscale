@@ -21,7 +21,7 @@ Before installing, ensure your environment meets these requirements:
 Install the package via Composer:
 
 ```bash
-composer require gophpeek/laravel-queue-autoscale
+composer require cboxdk/laravel-queue-autoscale
 ```
 
 The package will automatically register its service provider using Laravel's auto-discovery.
@@ -38,7 +38,7 @@ This creates `config/queue-autoscale.php` with sensible defaults.
 
 ## Step 3: Setup Metrics Package
 
-Laravel Queue Autoscale requires `gophpeek/laravel-queue-metrics` for queue discovery and metrics collection. This package is automatically installed as a dependency.
+Laravel Queue Autoscale requires `cboxdk/laravel-queue-metrics` for queue discovery and metrics collection. This package is automatically installed as a dependency.
 
 ### Publish Metrics Configuration
 
@@ -247,14 +247,14 @@ QUEUE_AUTOSCALE_EVALUATION_INTERVAL=30
 
 Now that the package is installed:
 
-1. Follow the [Quick Start](quickstart) guide for your first autoscaled queue
-2. Learn [How It Works](basic-usage/how-it-works) to understand the scaling algorithm
-3. Explore [Configuration Options](basic-usage/configuration) for advanced settings
-4. Set up [Monitoring](basic-usage/monitoring) to track autoscaler performance
+1. Follow the [Quick Start](quickstart.md) guide for your first autoscaled queue
+2. Learn [How It Works](basic-usage/how-it-works.md) to understand the scaling algorithm
+3. Explore [Configuration Options](basic-usage/configuration.md) for advanced settings
+4. Set up [Monitoring](basic-usage/monitoring.md) to track autoscaler performance
 
 ## Additional Resources
 
-- [Metrics Package Documentation](https://github.com/gophpeek/laravel-queue-metrics)
-- [System Metrics Package](https://github.com/gophpeek/system-metrics)
-- [Deployment Guide](advanced-usage/deployment)
-- [Troubleshooting Guide](basic-usage/troubleshooting)
+- [Metrics Package Documentation](https://github.com/cboxdk/laravel-queue-metrics)
+- [System Metrics Package](https://github.com/cboxdk/system-metrics)
+- [Deployment Guide](advanced-usage/deployment.md)
+- [Troubleshooting Guide](basic-usage/troubleshooting.md)

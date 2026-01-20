@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Configuration\ProfilePresets;
+use Cbox\LaravelQueueAutoscale\Configuration\ProfilePresets;
 
 test('critical profile returns correct values', function () {
     $profile = ProfilePresets::critical();
@@ -38,7 +38,7 @@ test('balanced profile returns correct values', function () {
     expect($profile['max_pickup_time_seconds'])->toBe(30)
         ->and($profile['min_workers'])->toBe(1)
         ->and($profile['max_workers'])->toBe(10)
-        ->and($profile['scale_cooldown_seconds'])->toBe(60)
+        ->and($profile['scale_cooldown_seconds'])->toBe(30)
         ->and($profile['breach_threshold'])->toBe(0.5)
         ->and($profile['evaluation_interval_seconds'])->toBe(5);
 });

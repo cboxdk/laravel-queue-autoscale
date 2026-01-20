@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Tests\Helpers;
 
 use Carbon\Carbon;
-use PHPeek\LaravelQueueMetrics\DataTransferObjects\HealthStats;
-use PHPeek\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\HealthStats;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
 class MetricsHelper
 {

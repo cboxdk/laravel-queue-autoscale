@@ -55,7 +55,7 @@ php artisan queue:autoscale:debug
 php artisan queue:autoscale:test --jobs=10 --queue=default
 
 ```
-**Full Changelog**: https://github.com/gophpeek/laravel-queue-autoscale/compare/v1.0.0...v1.1.0
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v1.0.0...v1.1.0
 
 ## v1.0.0 - Initial Stable Release - 2026-01-05
 
@@ -81,7 +81,7 @@ First stable release of Laravel Queue Autoscale with intelligent, predictive aut
 #### Installation
 
 ```bash
-composer require gophpeek/laravel-queue-autoscale
+composer require cboxdk/laravel-queue-autoscale
 
 
 ```
@@ -93,7 +93,7 @@ composer require gophpeek/laravel-queue-autoscale
 
 #### Full Changelog
 
-See [CHANGELOG.md](https://github.com/gophpeek/laravel-queue-autoscale/blob/main/CHANGELOG.md)
+See [CHANGELOG.md](https://github.com/cboxdk/laravel-queue-autoscale/blob/main/CHANGELOG.md)
 
 ## v1.0.0 - 2026-01-05
 
@@ -118,8 +118,8 @@ First stable release of Laravel Queue Autoscale with intelligent, predictive aut
 
 #### Dependencies
 
-- gophpeek/laravel-queue-metrics ^1.0
-- gophpeek/system-metrics ^1.2
+- cboxdk/laravel-queue-metrics ^1.0
+- cboxdk/system-metrics ^1.2
 
 #### Testing
 
@@ -184,8 +184,8 @@ First stable release of Laravel Queue Autoscale with intelligent, predictive aut
 
 - PHP 8.3+
 - Laravel 11.0+
-- gophpeek/laravel-queue-metrics ^1.0.0
-- gophpeek/system-metrics ^1.2
+- cboxdk/laravel-queue-metrics ^1.0.0
+- cboxdk/system-metrics ^1.2
 - Symfony Process component
 
 ### Security

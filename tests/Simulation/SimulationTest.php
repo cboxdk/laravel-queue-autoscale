@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use PHPeek\LaravelQueueAutoscale\Tests\Simulation\ScalingSimulation;
-use PHPeek\LaravelQueueAutoscale\Tests\Simulation\WorkloadScenarios;
-use PHPeek\LaravelQueueAutoscale\Tests\Simulation\WorkloadSimulator;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Tests\Simulation\ScalingSimulation;
+use Cbox\LaravelQueueAutoscale\Tests\Simulation\WorkloadScenarios;
+use Cbox\LaravelQueueAutoscale\Tests\Simulation\WorkloadSimulator;
 
 /**
  * E2E Simulation Tests

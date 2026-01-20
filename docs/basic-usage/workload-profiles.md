@@ -25,7 +25,7 @@ Workload profiles are pre-configured settings optimized for specific queue patte
 **Mission-critical workloads with zero tolerance for delays**
 
 ```php
-use PHPeek\LaravelQueueAutoscale\Configuration\ProfilePresets;
+use Cbox\LaravelQueueAutoscale\Configuration\ProfilePresets;
 
 'queues' => [
     'payments' => ProfilePresets::critical(),
@@ -691,6 +691,6 @@ If workers scale up/down rapidly:
 
 ## Next Steps
 
-- [Scaling Policies](scaling-policies) - Modify profile behavior with policies
-- [Monitoring](monitoring) - Track profile performance
-- [Performance Tuning](performance) - Optimize for your workload
+- [Scaling Policies](scaling-policies.md) - Modify profile behavior with policies
+- [Monitoring](monitoring.md) - Track profile performance
+- [Performance Tuning](performance.md) - Optimize for your workload

@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Events;
+namespace Cbox\LaravelQueueAutoscale\Events;
 
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 final class SlaBreachPredicted
 {

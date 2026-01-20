@@ -24,7 +24,7 @@ Before deploying, ensure you have:
 ### 1. Install Package
 
 ```bash
-composer require gophpeek/laravel-queue-autoscale
+composer require cboxdk/laravel-queue-autoscale
 ```
 
 ### 2. Publish Configuration
@@ -42,10 +42,10 @@ The autoscaler **requires** `laravel-queue-metrics` for queue discovery and metr
 #### Install Package
 
 ```bash
-composer require gophpeek/laravel-queue-metrics
+composer require cboxdk/laravel-queue-metrics
 ```
 
-> **Note:** This package may auto-install as a dependency. Verify with `composer show gophpeek/laravel-queue-metrics`.
+> **Note:** This package may auto-install as a dependency. Verify with `composer show cboxdk/laravel-queue-metrics`.
 
 #### Publish Configuration
 
@@ -117,13 +117,13 @@ php artisan tinker
 ```
 
 ```php
-> \PHPeek\LaravelQueueMetrics\Facades\QueueMetrics::getSystemOverview();
+> \Cbox\LaravelQueueMetrics\Facades\QueueMetrics::getSystemOverview();
 # Should return object with queue metrics data
 ```
 
 **📚 Resources:**
-- [Metrics Package Documentation](https://github.com/gophpeek/laravel-queue-metrics)
-- [Packagist: laravel-queue-metrics](https://packagist.org/packages/gophpeek/laravel-queue-metrics)
+- [Metrics Package Documentation](https://github.com/cboxdk/laravel-queue-metrics)
+- [Packagist: laravel-queue-metrics](https://packagist.org/packages/cboxdk/laravel-queue-metrics)
 
 ### 4. Configure SLA Targets
 
@@ -696,6 +696,6 @@ ps aux | grep "queue:work"
 
 ## Next Steps
 
-- [Monitoring Guide](../basic-usage/monitoring) - Set up comprehensive monitoring
-- [Performance Tuning](../basic-usage/performance) - Optimize for your workload
-- [Troubleshooting](../basic-usage/troubleshooting) - Common issues and solutions
+- [Monitoring Guide](../basic-usage/monitoring.md) - Set up comprehensive monitoring
+- [Performance Tuning](../basic-usage/performance.md) - Optimize for your workload
+- [Troubleshooting](../basic-usage/troubleshooting.md) - Common issues and solutions

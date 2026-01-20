@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use PHPeek\LaravelQueueAutoscale\Events\SlaRecovered;
+use Cbox\LaravelQueueAutoscale\Events\SlaRecovered;
 
 test('creates instance with all properties', function () {
     $event = new SlaRecovered(

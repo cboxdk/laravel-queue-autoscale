@@ -2,25 +2,25 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale;
+namespace Cbox\LaravelQueueAutoscale;
 
+use Cbox\LaravelQueueAutoscale\Commands\DebugQueueCommand;
+use Cbox\LaravelQueueAutoscale\Commands\DispatchTestJobsCommand;
+use Cbox\LaravelQueueAutoscale\Commands\LaravelQueueAutoscaleCommand;
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
+use Cbox\LaravelQueueAutoscale\Manager\SignalHandler;
+use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\TrendPredictor;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
+use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
+use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
 use Illuminate\Support\ServiceProvider;
-use PHPeek\LaravelQueueAutoscale\Commands\DebugQueueCommand;
-use PHPeek\LaravelQueueAutoscale\Commands\DispatchTestJobsCommand;
-use PHPeek\LaravelQueueAutoscale\Commands\LaravelQueueAutoscaleCommand;
-use PHPeek\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
-use PHPeek\LaravelQueueAutoscale\Manager\AutoscaleManager;
-use PHPeek\LaravelQueueAutoscale\Manager\SignalHandler;
-use PHPeek\LaravelQueueAutoscale\Policies\PolicyExecutor;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
-use PHPeek\LaravelQueueAutoscale\Scaling\Calculators\TrendPredictor;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingEngine;
-use PHPeek\LaravelQueueAutoscale\Workers\WorkerSpawner;
-use PHPeek\LaravelQueueAutoscale\Workers\WorkerTerminator;
 
 class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
 {

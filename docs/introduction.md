@@ -41,10 +41,10 @@ Built on Little's Law (L = λW) for mathematically sound steady-state calculatio
 Aggressive backlog drain algorithm activates when approaching SLA violations, preventing breaches before they occur.
 
 ### 🖥️ Resource-Aware
-Respects CPU and memory limits from `gophpeek/system-metrics` package. Won't spawn more workers than your system can handle.
+Respects CPU and memory limits from `cboxdk/system-metrics` package. Won't spawn more workers than your system can handle.
 
 ### 🔄 Metrics-Driven
-Uses `gophpeek/laravel-queue-metrics` for automatic queue discovery and comprehensive metrics collection.
+Uses `cboxdk/laravel-queue-metrics` for automatic queue discovery and comprehensive metrics collection.
 
 ### 🎛️ Extensible
 Custom scaling strategies and policies via clean interfaces. Implement your own business logic easily.
@@ -104,8 +104,8 @@ Systems requiring guaranteed processing times for critical operations.
 - **PHP**: 8.3 or 8.4
 - **Laravel**: 11.0+
 - **Dependencies**:
-  - `gophpeek/laravel-queue-metrics` ^1.0.0
-  - `gophpeek/system-metrics` ^1.2
+  - `cboxdk/laravel-queue-metrics` ^1.0.0
+  - `cboxdk/system-metrics` ^1.2
 
 ## Package Architecture
 
@@ -118,8 +118,8 @@ This separation of concerns keeps each package focused and maintainable.
 
 ## Next Steps
 
-Ready to get started? Follow the [Installation](installation) guide to set up the package in your Laravel application.
+Ready to get started? Follow the [Installation](installation.md) guide to set up the package in your Laravel application.
 
-Want to understand the scaling algorithm? See [How It Works](basic-usage/how-it-works).
+Want to understand the scaling algorithm? See [How It Works](basic-usage/how-it-works.md).
 
-Looking for configuration options? Check the [Configuration Guide](basic-usage/configuration).
+Looking for configuration options? Check the [Configuration Guide](basic-usage/configuration.md).

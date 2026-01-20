@@ -76,7 +76,7 @@ return [
         'scale_cooldown_seconds' => 60,
     ],
 
-    'strategy' => \PHPeek\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
+    'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
 
     'policies' => [
         \App\QueueAutoscale\Policies\MetricsLoggingPolicy::class,
@@ -121,7 +121,7 @@ return [
         'scale_cooldown_seconds' => 120,    // Let jobs finish before reassessing
     ],
 
-    'strategy' => \PHPeek\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
+    'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
 
     'queue_overrides' => [
         'video-encoding' => [
@@ -152,7 +152,7 @@ return [
         'scale_cooldown_seconds' => 15,     // Rapid response
     ],
 
-    'strategy' => \PHPeek\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
+    'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
 
     'policies' => [
         \App\QueueAutoscale\Policies\MetricsLoggingPolicy::class,
@@ -210,7 +210,7 @@ return [
     ],
 
     // Use custom strategy that switches based on time
-    'strategy' => new class implements \PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract
+    'strategy' => new class implements \Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract
     {
         private string $lastReason = '';
 
@@ -222,7 +222,7 @@ return [
 
             // Business hours: 9am-5pm use predictive
             if ($hour >= 9 && $hour < 17) {
-                $strategy = app(\PHPeek\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class);
+                $strategy = app(\Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class);
                 $workers = $strategy->calculateTargetWorkers($metrics, $config);
                 $this->lastReason = 'Business hours (predictive): '.$strategy->getLastReason();
                 $this->lastPrediction = $strategy->getLastPrediction();
@@ -265,7 +265,7 @@ return [
         'scale_cooldown_seconds' => 90,
     ],
 
-    'strategy' => \PHPeek\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
+    'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
 
     // Prefix-based configuration
     'queue_overrides' => [

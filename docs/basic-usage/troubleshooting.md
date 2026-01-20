@@ -12,12 +12,12 @@ Common issues and solutions for Laravel Queue Autoscale.
 
 ### Package Not Found
 
-**Problem**: `composer require gophpeek/laravel-queue-autoscale` fails with "Package not found"
+**Problem**: `composer require cboxdk/laravel-queue-autoscale` fails with "Package not found"
 
 **Solution**:
 ```bash
 # Ensure you're using the correct package name
-composer require gophpeek/laravel-queue-autoscale
+composer require cboxdk/laravel-queue-autoscale
 
 # If developing locally, add to composer.json:
 {
@@ -37,11 +37,11 @@ composer require gophpeek/laravel-queue-autoscale
 **Solution**:
 ```bash
 # Update to latest versions
-composer update gophpeek/laravel-queue-metrics gophpeek/system-metrics
+composer update cboxdk/laravel-queue-metrics cboxdk/system-metrics
 
 # Check minimum versions
-composer show gophpeek/laravel-queue-metrics  # Should be ^0.0.1
-composer show gophpeek/system-metrics          # Should be ^1.2
+composer show cboxdk/laravel-queue-metrics  # Should be ^0.0.1
+composer show cboxdk/system-metrics          # Should be ^1.2
 ```
 
 ## Configuration Issues
@@ -56,10 +56,10 @@ composer show gophpeek/system-metrics          # Should be ^1.2
 php artisan config:clear
 
 # Publish with provider flag
-php artisan vendor:publish --provider="PHPeek\LaravelQueueAutoscale\LaravelQueueAutoscaleServiceProvider"
+php artisan vendor:publish --provider="Cbox\LaravelQueueAutoscale\LaravelQueueAutoscaleServiceProvider"
 
 # Manual alternative: copy file
-cp vendor/gophpeek/laravel-queue-autoscale/config/queue-autoscale.php config/
+cp vendor/cboxdk/laravel-queue-autoscale/config/queue-autoscale.php config/
 ```
 
 ### Strategy Class Not Found
@@ -72,7 +72,7 @@ cp vendor/gophpeek/laravel-queue-autoscale/config/queue-autoscale.php config/
 'strategy' => \App\QueueAutoscale\Strategies\CustomStrategy::class,
 
 // Ensure class implements ScalingStrategyContract
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 
 class CustomStrategy implements ScalingStrategyContract
 {
@@ -114,7 +114,7 @@ php artisan queue:list
 ```bash
 # Test system metrics directly
 php artisan tinker
-> app(\PHPeek\SystemMetrics\SystemMetrics::class)->limits()
+> app(\Cbox\SystemMetrics\SystemMetrics::class)->limits()
 ```
 
 ### Workers Scaling Too Aggressively
@@ -321,7 +321,7 @@ tail -f storage/logs/laravel.log | grep "autoscale.*default"
 
 ```php
 // In EventServiceProvider.php
-use PHPeek\LaravelQueueAutoscale\Events\{
+use Cbox\LaravelQueueAutoscale\Events\{
     ScalingDecisionMade,
     WorkersScaled,
     SlaBreachPredicted
@@ -344,8 +344,8 @@ protected $listen = [
 
 ```php
 // In tinker
-$strategy = app(\PHPeek\LaravelQueueAutoscale\Contracts\ScalingStrategyContract::class);
-$config = new \PHPeek\LaravelQueueAutoscale\Configuration\QueueConfiguration(
+$strategy = app(\Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract::class);
+$config = new \Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration(
     connection: 'redis',
     queue: 'default',
     maxPickupTimeSeconds: 30,

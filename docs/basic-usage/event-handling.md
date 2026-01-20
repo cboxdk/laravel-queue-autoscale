@@ -47,7 +47,7 @@ Use **Policies** when:
 Dispatched after a scaling decision is calculated, before workers are actually scaled.
 
 ```php
-namespace PHPeek\LaravelQueueAutoscale\Events;
+namespace Cbox\LaravelQueueAutoscale\Events;
 
 class ScalingDecisionMade
 {
@@ -68,7 +68,7 @@ class ScalingDecisionMade
 Dispatched after workers have been successfully spawned or terminated.
 
 ```php
-namespace PHPeek\LaravelQueueAutoscale\Events;
+namespace Cbox\LaravelQueueAutoscale\Events;
 
 class WorkersScaled
 {
@@ -90,7 +90,7 @@ class WorkersScaled
 Dispatched when a scaling operation fails.
 
 ```php
-namespace PHPeek\LaravelQueueAutoscale\Events;
+namespace Cbox\LaravelQueueAutoscale\Events;
 
 class ScalingFailed
 {
@@ -111,7 +111,7 @@ class ScalingFailed
 Dispatched when a worker fails health checks.
 
 ```php
-namespace PHPeek\LaravelQueueAutoscale\Events;
+namespace Cbox\LaravelQueueAutoscale\Events;
 
 class WorkerHealthCheckFailed
 {
@@ -136,7 +136,7 @@ Create a dedicated listener class:
 
 namespace App\Listeners;
 
-use PHPeek\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 
 class LogScalingDecision
 {
@@ -158,14 +158,14 @@ Register in `EventServiceProvider`:
 
 ```php
 protected $listen = [
-    \PHPeek\LaravelQueueAutoscale\Events\ScalingDecisionMade::class => [
+    \Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade::class => [
         \App\Listeners\LogScalingDecision::class,
         \App\Listeners\SendSlackNotification::class,
     ],
-    \PHPeek\LaravelQueueAutoscale\Events\WorkersScaled::class => [
+    \Cbox\LaravelQueueAutoscale\Events\WorkersScaled::class => [
         \App\Listeners\RecordWorkerMetrics::class,
     ],
-    \PHPeek\LaravelQueueAutoscale\Events\ScalingFailed::class => [
+    \Cbox\LaravelQueueAutoscale\Events\ScalingFailed::class => [
         \App\Listeners\AlertOperations::class,
     ],
 ];
@@ -177,7 +177,7 @@ For simple cases, use closures in a service provider:
 
 ```php
 use Illuminate\Support\Facades\Event;
-use PHPeek\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 
 public function boot(): void
 {
@@ -200,7 +200,7 @@ For heavy processing, queue the listener:
 namespace App\Listeners;
 
 use Illuminate\Contracts\Queue\ShouldQueue;
-use PHPeek\LaravelQueueAutoscale\Events\WorkersScaled;
+use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
 
 class RecordWorkerMetrics implements ShouldQueue
 {
@@ -293,7 +293,7 @@ Send rich Slack messages on scaling events:
 namespace App\Listeners;
 
 use Illuminate\Support\Facades\Http;
-use PHPeek\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 
 class SendSlackNotification
 {
@@ -349,7 +349,7 @@ Send metrics to Datadog, CloudWatch, etc:
 namespace App\Listeners;
 
 use App\Services\DatadogClient;
-use PHPeek\LaravelQueueAutoscale\Events\WorkersScaled;
+use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
 
 class RecordWorkerMetrics
 {
@@ -388,7 +388,7 @@ Track autoscaling costs:
 namespace App\Listeners;
 
 use Illuminate\Support\Facades\DB;
-use PHPeek\LaravelQueueAutoscale\Events\WorkersScaled;
+use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
 
 class TrackScalingCosts
 {
@@ -440,7 +440,7 @@ Alert on-call for failures:
 namespace App\Listeners;
 
 use App\Services\PagerDutyClient;
-use PHPeek\LaravelQueueAutoscale\Events\ScalingFailed;
+use Cbox\LaravelQueueAutoscale\Events\ScalingFailed;
 
 class AlertOnScalingFailure
 {
@@ -477,7 +477,7 @@ Maintain detailed audit trail:
 namespace App\Listeners;
 
 use Illuminate\Support\Facades\DB;
-use PHPeek\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 
 class AuditScalingDecisions
 {
@@ -516,7 +516,7 @@ Trigger external systems:
 namespace App\Listeners;
 
 use App\Services\JenkinsClient;
-use PHPeek\LaravelQueueAutoscale\Events\WorkersScaled;
+use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
 
 class TriggerLoadTestOnScaling
 {
@@ -654,7 +654,7 @@ Event::listen(ScalingDecisionMade::class, Listener2::class);
 
 ```php
 use Illuminate\Support\Facades\Event;
-use PHPeek\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 
 it('dispatches scaling decision event', function () {
     Event::fake([ScalingDecisionMade::class]);
@@ -764,7 +764,7 @@ foreach ($events as $record) {
 
 ## See Also
 
-- [SCALING_POLICIES.md](SCALING_POLICIES.md) - Alternative to events for ordered execution
-- [MONITORING.md](MONITORING.md) - Monitoring and observability
-- [CUSTOM_STRATEGIES.md](CUSTOM_STRATEGIES.md) - Custom scaling strategies
-- [API Reference: Events](../api/EVENTS.md) - Complete event API documentation
+- [Scaling Policies](scaling-policies.md) - Alternative to events for ordered execution
+- [Monitoring](monitoring.md) - Monitoring and observability
+- [Custom Strategies](../advanced-usage/custom-strategies.md) - Custom scaling strategies
+- [API Reference: Events](../api-reference/_index.md) - Complete event API documentation

@@ -54,7 +54,7 @@ Multiple policies execute in order. Each policy receives the potentially modifie
 #### Configuration
 
 ```php
-use PHPeek\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy;
+use Cbox\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy;
 
 'policies' => [
     ConservativeScaleDownPolicy::class,
@@ -153,7 +153,7 @@ Result: Smooth operation, prevented oscillation
 #### Configuration
 
 ```php
-use PHPeek\LaravelQueueAutoscale\Policies\AggressiveScaleDownPolicy;
+use Cbox\LaravelQueueAutoscale\Policies\AggressiveScaleDownPolicy;
 
 'policies' => [
     AggressiveScaleDownPolicy::class,
@@ -244,7 +244,7 @@ These policies have opposite goals. Choose one:
 #### Configuration
 
 ```php
-use PHPeek\LaravelQueueAutoscale\Policies\NoScaleDownPolicy;
+use Cbox\LaravelQueueAutoscale\Policies\NoScaleDownPolicy;
 
 'policies' => [
     NoScaleDownPolicy::class,
@@ -345,7 +345,7 @@ ProfilePresets::critical() + NoScaleDownPolicy
 #### Configuration
 
 ```php
-use PHPeek\LaravelQueueAutoscale\Policies\BreachNotificationPolicy;
+use Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy;
 
 'policies' => [
     BreachNotificationPolicy::class,
@@ -444,8 +444,8 @@ You can extend this policy for custom alerting:
 ```php
 namespace App\Policies;
 
-use PHPeek\LaravelQueueAutoscale\Policies\BreachNotificationPolicy as BasePolicy;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy as BasePolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Illuminate\Support\Facades\Notification;
 use App\Notifications\SlaBreachAlert;
 
@@ -553,8 +553,8 @@ Implement the `ScalingPolicy` interface:
 ```php
 namespace App\Policies;
 
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicy;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 class MyCustomPolicy implements ScalingPolicy
 {
@@ -589,8 +589,8 @@ class MyCustomPolicy implements ScalingPolicy
 ```php
 namespace App\Policies;
 
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicy;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 class BusinessHoursScalingPolicy implements ScalingPolicy
 {
@@ -636,8 +636,8 @@ class BusinessHoursScalingPolicy implements ScalingPolicy
 ```php
 namespace App\Policies;
 
-use PHPeek\LaravelQueueAutoscale\Contracts\ScalingPolicy;
-use PHPeek\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 class CostLimitPolicy implements ScalingPolicy
 {
@@ -695,7 +695,7 @@ class CostLimitPolicy implements ScalingPolicy
 ```php
 // config/queue-autoscale.php
 'policies' => [
-    \PHPeek\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy::class,
     // Fully qualified class name required
 ],
 ```
@@ -748,6 +748,6 @@ Policies add minimal overhead:
 
 ## Next Steps
 
-- [Workload Profiles](workload-profiles) - Choose the right profile
-- [Monitoring](monitoring) - Track policy effectiveness
-- [Event Handling](event-handling) - React to scaling events
+- [Workload Profiles](workload-profiles.md) - Choose the right profile
+- [Monitoring](monitoring.md) - Track policy effectiveness
+- [Event Handling](event-handling.md) - React to scaling events

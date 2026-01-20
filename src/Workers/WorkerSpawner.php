@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace PHPeek\LaravelQueueAutoscale\Workers;
+namespace Cbox\LaravelQueueAutoscale\Workers;
 
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
-use PHPeek\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Symfony\Component\Process\Process;
 
 final readonly class WorkerSpawner
@@ -35,25 +35,59 @@ final readonly class WorkerSpawner
                 '--sleep='.AutoscaleConfiguration::workerSleepSeconds(),
             ]);
 
-            $process->start();
+            // Inject environment variables for monitoring
+            $process->setEnv([
+                'LARAVEL_AUTOSCALE_WORKER' => 'true',
+                'AUTOSCALE_MANAGER_ID' => AutoscaleConfiguration::managerId(),
+            ]);
 
-            $worker = new WorkerProcess(
-                process: $process,
-                connection: $connection,
-                queue: $queue,
-                spawnedAt: now(),
-            );
+            try {
+                $process->start();
 
-            $workers->push($worker);
+                // Brief pause to allow process to fail fast if command is invalid
+                usleep(50000); // 50ms
 
-            Log::channel(AutoscaleConfiguration::logChannel())->info(
-                'Worker spawned',
-                [
-                    'connection' => $connection,
-                    'queue' => $queue,
-                    'pid' => $process->getPid(),
-                ]
-            );
+                if (! $process->isRunning()) {
+                    Log::channel(AutoscaleConfiguration::logChannel())->error(
+                        'Failed to spawn worker',
+                        [
+                            'connection' => $connection,
+                            'queue' => $queue,
+                            'error' => $process->getErrorOutput(),
+                            'output' => $process->getOutput(),
+                        ]
+                    );
+
+                    continue;
+                }
+
+                $worker = new WorkerProcess(
+                    process: $process,
+                    connection: $connection,
+                    queue: $queue,
+                    spawnedAt: now(),
+                );
+
+                $workers->push($worker);
+
+                Log::channel(AutoscaleConfiguration::logChannel())->info(
+                    'Worker spawned',
+                    [
+                        'connection' => $connection,
+                        'queue' => $queue,
+                        'pid' => $process->getPid(),
+                    ]
+                );
+            } catch (\Throwable $e) {
+                Log::channel(AutoscaleConfiguration::logChannel())->error(
+                    'Exception during worker spawn',
+                    [
+                        'connection' => $connection,
+                        'queue' => $queue,
+                        'exception' => $e->getMessage(),
+                    ]
+                );
+            }
         }
 
         return $workers;

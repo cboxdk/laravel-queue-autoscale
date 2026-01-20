@@ -401,6 +401,6 @@ if ($error > 0.3) {  // 30% error
 
 ## See Also
 
-- [Little's Law](littles-law) - Steady-state calculation
-- [Backlog Drain](backlog-drain) - SLA protection
-- [Resource Constraints](resource-constraints) - Constraint handling
+- [Little's Law](littles-law.md) - Steady-state calculation
+- [Backlog Drain](backlog-drain.md) - SLA protection
+- [Resource Constraints](resource-constraints.md) - Constraint handling
