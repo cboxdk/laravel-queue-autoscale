@@ -38,7 +38,7 @@ final readonly class ConservativeScaleDownPolicy implements ScalingPolicy
         }
 
         $workersToRemove = $decision->workersToRemove();
-        
+
         // Calculate max removable workers (25% of current, minimum 1)
         $maxRemovable = max(1, (int) ceil($decision->currentWorkers * 0.25));
 
