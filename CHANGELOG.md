@@ -5,6 +5,29 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v2.0.0 - Rebranding & Performance - 2026-01-20
+
+### Breaking Changes ⚠️
+
+- **Rebranding**: Package renamed to `cboxdk/laravel-queue-autoscale`.
+- **Namespace Change**: Root namespace changed from `PHPeek\LaravelQueueAutoscale` to `Cbox\LaravelQueueAutoscale`.
+- **Config**: Default configuration published tag is now `queue-autoscale-config`.
+- **TUI Removed**: The TUI mode (`--interactive` / `--tui`) and all `php-tui` dependencies have been removed to streamline the package and fix memory leaks.
+
+### Improvements
+
+- **Performance**: Optimized evaluation loop with drift-correction for precise timing.
+- **Robustness**: Enhanced worker spawning with fail-fast checks to prevent zombie processes.
+- **Scaling Logic**: Implemented "Retry Noise Reduction" in predictive strategy to prevent runaway scaling during retry storms.
+- **Responsiveness**: `ConservativeScaleDownPolicy` now allows dynamic down-scaling (25% of pool) instead of just 1 worker, solving "stuck" worker counts.
+- **Defaults**: Updated `Balanced` profile cooldown to 30s (from 60s) for better responsiveness.
+- **Monitoring**: Injected `LARAVEL_AUTOSCALE_WORKER=true` env var into spawned workers for easier identification.
+
+### Documentation
+
+- Complete update of all documentation to reflect new branding and namespaces.
+- Standardized documentation structure and links.
+
 ## v1.1.0 - TUI Mode & Critical Bug Fix - 2026-01-14
 
 ### What's Changed
