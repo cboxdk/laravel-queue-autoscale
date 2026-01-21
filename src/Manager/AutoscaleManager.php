@@ -62,9 +62,6 @@ final class AutoscaleManager
     /** @var array<int, string> */
     private array $scalingLog = [];
 
-    /** @var array<string, array<string, mixed>> Cached raw metrics from QueueMetrics */
-    private array $cachedMetrics = [];
-
     public function __construct(
         private readonly ScalingEngine $engine,
         private readonly WorkerSpawner $spawner,
@@ -196,9 +193,6 @@ final class AutoscaleManager
                 $allQueues[$queueKey] = $this->getMetricsForQueue($queueInfo['connection'], $queueInfo['queue']);
             }
         }
-
-        // Cache the merged metrics for TUI/render
-        $this->cachedMetrics = $allQueues;
 
         foreach ($allQueues as $queueKey => $metricsArray) {
             // Map field names from API response to DTO format
