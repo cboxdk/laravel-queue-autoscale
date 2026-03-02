@@ -5,6 +5,14 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v2.0.2 - 2026-03-02
+
+### Fixes
+
+- Fix simulation tests failing on machines with high CPU usage by isolating from real system capacity
+- Fix integration test flaky assertion when system capacity is constrained
+- Update all dependencies (Laravel 12, Pest 4.4, PHPStan 2.1, etc.)
+
 ## v2.0.1 - 2026-03-02
 
 ### Fixes & Improvements
@@ -82,6 +90,7 @@ The TUI mode requires `php-tui/php-tui` which is included as a suggested depende
 composer require php-tui/php-tui --dev
 
 
+
 ```
 ### Usage
 
@@ -94,6 +103,7 @@ php artisan queue:autoscale:debug
 
 # Dispatch test jobs
 php artisan queue:autoscale:test --jobs=10 --queue=default
+
 
 
 ```
@@ -124,6 +134,7 @@ First stable release of Laravel Queue Autoscale with intelligent, predictive aut
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
+
 
 
 
