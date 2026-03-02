@@ -7,7 +7,6 @@ namespace Cbox\LaravelQueueAutoscale\Tests\Simulation;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
-use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
@@ -67,7 +66,7 @@ final class ScalingSimulation
             $this->arrivalEstimator,
         );
 
-        $this->engine = new ScalingEngine($strategy, new CapacityCalculator);
+        $this->engine = new ScalingEngine($strategy, new UnlimitedCapacityCalculator);
     }
 
     /**

@@ -8,7 +8,7 @@ use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
 use Cbox\SystemMetrics\SystemMetrics;
 
-final class CapacityCalculator
+class CapacityCalculator
 {
     /**
      * Cached system metrics to avoid repeated blocking measurements within
