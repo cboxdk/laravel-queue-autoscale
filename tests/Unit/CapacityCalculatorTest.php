@@ -119,3 +119,44 @@ it('provides formatted details for verbose output', function () {
         ->and($formatted)->toHaveKey('Config Limit')
         ->and($formatted)->toHaveKey('Final Capacity');
 });
+
+it('caches system metrics across consecutive calls within TTL', function () {
+    $calculator = new CapacityCalculator;
+
+    // First call - measures system metrics (expensive, ~1s for CPU)
+    $start = microtime(true);
+    $result1 = $calculator->calculateMaxWorkers(5);
+    $firstCallDuration = microtime(true) - $start;
+
+    // Second call - should use cached metrics (fast)
+    $start = microtime(true);
+    $result2 = $calculator->calculateMaxWorkers(5);
+    $secondCallDuration = microtime(true) - $start;
+
+    // Second call should be significantly faster (cached, no 1s CPU measurement)
+    expect($secondCallDuration)->toBeLessThan($firstCallDuration)
+        // Results should be consistent (same cached metrics)
+        ->and($result1->details['cpu_details']['current_cpu_percent'])
+        ->toBe($result2->details['cpu_details']['current_cpu_percent'])
+        ->and($result1->details['memory_details']['current_memory_percent'])
+        ->toBe($result2->details['memory_details']['current_memory_percent']);
+});
+
+it('invalidates cache when explicitly requested', function () {
+    $calculator = new CapacityCalculator;
+
+    // First call caches metrics
+    $calculator->calculateMaxWorkers();
+
+    // Invalidate the cache
+    $calculator->invalidateCache();
+
+    // Next call should refresh metrics (will take ~1s for CPU measurement)
+    $start = microtime(true);
+    $result = $calculator->calculateMaxWorkers();
+    $duration = microtime(true) - $start;
+
+    expect($result)->toBeInstanceOf(CapacityCalculationResult::class)
+        // Should have taken measurable time for fresh CPU measurement
+        ->and($duration)->toBeGreaterThan(0.5);
+});

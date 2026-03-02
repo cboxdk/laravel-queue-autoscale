@@ -16,7 +16,6 @@ use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
-use Cbox\LaravelQueueAutoscale\Scaling\Calculators\TrendPredictor;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
@@ -33,7 +32,6 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
 
         // Register calculators
         $this->app->singleton(LittlesLawCalculator::class);
-        $this->app->singleton(TrendPredictor::class);
         $this->app->singleton(BacklogDrainCalculator::class);
         $this->app->singleton(CapacityCalculator::class);
         $this->app->singleton(ArrivalRateEstimator::class);

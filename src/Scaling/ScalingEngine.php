@@ -15,7 +15,8 @@ final readonly class ScalingEngine
     public function __construct(
         private ScalingStrategyContract $strategy,
         private CapacityCalculator $capacity,
-    ) {}
+    ) {
+    }
 
     /**
      * Evaluate scaling decision for a queue
@@ -23,22 +24,32 @@ final readonly class ScalingEngine
      * @param  QueueMetricsData  $metrics  Queue metrics from laravel-queue-metrics
      * @param  QueueConfiguration  $config  Queue SLA configuration
      * @param  int  $currentWorkers  Current worker count for this queue
+     * @param  int  $totalPoolWorkers  Total workers across all queues (for accurate capacity sharing)
      * @return ScalingDecision Scaling decision with target workers
      */
     public function evaluate(
         QueueMetricsData $metrics,
         QueueConfiguration $config,
         int $currentWorkers,
+        int $totalPoolWorkers = 0,
     ): ScalingDecision {
         // 1. Calculate target workers based on strategy
         $strategyRecommendation = $this->strategy->calculateTargetWorkers($metrics, $config);
         $targetWorkers = $strategyRecommendation;
 
-        // 2. Get system capacity breakdown (including current workers in total capacity)
-        $capacityResult = $this->capacity->calculateMaxWorkers($currentWorkers);
+        // 2. Get system capacity using total pool workers for accurate measurement.
+        // This ensures capacity is calculated against ALL workers, not just this queue's,
+        // preventing each queue from assuming it has all remaining system capacity.
+        $effectiveTotalWorkers = max($totalPoolWorkers, $currentWorkers);
+        $capacityResult = $this->capacity->calculateMaxWorkers($effectiveTotalWorkers);
 
-        // 3. Apply resource constraints (system capacity)
-        $targetWorkers = min($targetWorkers, $capacityResult->finalMaxWorkers);
+        // 3. Apply resource constraints: this queue's share of system capacity
+        // System can support capacityResult->finalMaxWorkers total. Other queues
+        // already consume (totalPoolWorkers - currentWorkers), so this queue's
+        // ceiling is systemMax minus what other queues are using.
+        $otherQueuesWorkers = $effectiveTotalWorkers - $currentWorkers;
+        $availableForThisQueue = max($capacityResult->finalMaxWorkers - $otherQueuesWorkers, 0);
+        $targetWorkers = min($targetWorkers, $availableForThisQueue);
 
         // 4. Apply config bounds (min/max workers)
         $beforeConfigBounds = $targetWorkers;

@@ -37,7 +37,7 @@ final class WorkerOutputBuffer
             $lines = explode("\n", $buffer);
 
             if (! str_ends_with($stdout, "\n")) {
-                $this->buffers[$pid] = array_pop($lines);
+                $this->buffers[$pid] = (string) array_pop($lines);
             } else {
                 $this->buffers[$pid] = '';
                 if (end($lines) === '') {

@@ -259,7 +259,7 @@ $targetWorkers = max(
     ┌────▼──────────────┐     │
     │ Calculators:      │     │
     │ • LittlesLaw      │     │
-    │ • TrendPredictor  │     │
+    │ • ArrivalRate     │     │
     │ • BacklogDrain    │     │
     │ • Capacity        │     │
     └───────────────────┘     │
@@ -297,7 +297,7 @@ $targetWorkers = max(
 
 #### Calculators
 - **LittlesLawCalculator:** Pure L = λW implementation
-- **TrendPredictor:** Forecast future arrival rates
+- **ArrivalRateEstimator:** Sliding window arrival rate estimation from backlog changes
 - **BacklogDrainCalculator:** SLA breach prevention math
 - **CapacityCalculator:** System resource limits
 
@@ -392,7 +392,7 @@ PredictiveStrategy::calculateTargetWorkers(metrics, config)
 ┌──────────────────────────────┐
 │ Run 3 Calculators:           │
 │ 1. LittlesLaw(rate, time)    │
-│ 2. TrendPredictor(rate,trend)│
+│ 2. TrendPolicy(rate, policy) │
 │ 3. BacklogDrain(backlog,sla) │
 └──────────────────────────────┘
     ↓

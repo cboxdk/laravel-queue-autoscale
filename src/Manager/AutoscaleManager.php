@@ -336,12 +336,13 @@ final class AutoscaleManager
         // 1. Get configuration
         $config = QueueConfiguration::fromConfig($connection, $queue);
 
-        // 2. Count current workers
+        // 2. Count current workers (per-queue and total pool)
         $currentWorkers = $this->pool->count($connection, $queue);
-        $this->verbose("  Current workers: {$currentWorkers}", 'debug');
+        $totalPoolWorkers = $this->pool->totalCount();
+        $this->verbose("  Current workers: {$currentWorkers} (total pool: {$totalPoolWorkers})", 'debug');
 
-        // 3. Calculate scaling decision
-        $decision = $this->engine->evaluate($metrics, $config, $currentWorkers);
+        // 3. Calculate scaling decision (total pool count ensures capacity is shared across queues)
+        $decision = $this->engine->evaluate($metrics, $config, $currentWorkers, $totalPoolWorkers);
 
         // 4. Check for SLA breach
         $isBreaching = $metrics->oldestJobAge > 0 && $metrics->oldestJobAge >= $config->maxPickupTimeSeconds;
@@ -351,17 +352,33 @@ final class AutoscaleManager
         }
 
         // 5. Anti-flapping check: prevent direction reversals within cooldown
+        // Exception: scale-up during SLA breach is always allowed to protect SLA
         $key = "{$connection}:{$queue}";
         $currentDirection = $decision->shouldScaleUp() ? 'up' : ($decision->shouldScaleDown() ? 'down' : 'hold');
         $lastDirection = $this->lastScaleDirection[$key] ?? null;
 
+        // Clear stale direction: once cooldown has fully elapsed, the last direction
+        // is no longer relevant. This prevents HOLD→HOLD→...→DOWN from being blocked
+        // by an UP that happened minutes ago.
+        if ($lastDirection !== null && ! $this->inCooldown($key, $config->scaleCooldownSeconds)) {
+            unset($this->lastScaleDirection[$key]);
+            $lastDirection = null;
+        }
+
         // Only apply cooldown if direction is reversing (prevents flapping)
         if ($currentDirection !== 'hold' && $lastDirection !== null && $currentDirection !== $lastDirection) {
-            if ($this->inCooldown($key, $config->scaleCooldownSeconds)) {
+            // Always allow scale-up during SLA breach - protecting SLA takes priority over anti-flapping
+            $isBreachScaleUp = $currentDirection === 'up' && $isBreaching;
+
+            if (! $isBreachScaleUp && $this->inCooldown($key, $config->scaleCooldownSeconds)) {
                 $remaining = $this->getCooldownRemaining($key, $config->scaleCooldownSeconds);
                 $this->verbose("  ⏸️  Anti-flapping: cannot reverse direction during cooldown ({$remaining}s remaining)", 'debug');
 
                 return;
+            }
+
+            if ($isBreachScaleUp) {
+                $this->verbose('  🚨 SLA breach override: bypassing anti-flapping cooldown for scale-up', 'warn');
             }
         }
 

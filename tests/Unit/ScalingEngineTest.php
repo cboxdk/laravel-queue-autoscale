@@ -194,6 +194,36 @@ it('uses provided current workers count', function () {
     expect($decision->currentWorkers)->toBe(15);
 });
 
+it('shares system capacity across multiple queues', function () {
+    // When totalPoolWorkers is provided, capacity should account for workers
+    // from other queues. With 20 total workers, this queue (5 workers) should
+    // have less available capacity than if it were alone.
+    $highConfig = new QueueConfiguration(
+        connection: 'redis',
+        queue: 'default',
+        maxPickupTimeSeconds: 30,
+        minWorkers: 1,
+        maxWorkers: 100,
+        scaleCooldownSeconds: 60,
+    );
+
+    $highLoadMetrics = createMetrics([
+        'throughput_per_minute' => 6000.0,
+        'active_workers' => 200,
+        'pending' => 500,
+        'oldest_job_age' => 10,
+    ]);
+
+    // Single queue scenario (no other queues)
+    $decisionAlone = $this->engine->evaluate($highLoadMetrics, $highConfig, 5, 5);
+
+    // Multi-queue scenario: this queue has 5 workers, but 25 total across all queues
+    $decisionShared = $this->engine->evaluate($highLoadMetrics, $highConfig, 5, 25);
+
+    // With shared capacity, target should be less than or equal to alone scenario
+    expect($decisionShared->targetWorkers)->toBeLessThanOrEqual($decisionAlone->targetWorkers);
+});
+
 it('applies constraints in correct order', function () {
     // Test: strategy → capacity → config bounds
     // Create scenario where each constraint matters

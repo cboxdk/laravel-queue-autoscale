@@ -8,7 +8,9 @@ namespace Cbox\LaravelQueueAutoscale\Scaling\Calculators;
  * Estimates job arrival rate from backlog changes over time
  *
  * Solves the problem where throughput (processing rate) != arrival rate during spikes.
- * Uses the formula: arrivalRate = processingRate + backlogGrowthRate
+ * Uses a sliding window of snapshots and weighted average for noise reduction.
+ *
+ * Formula: arrivalRate = processingRate + weightedAverageBacklogGrowthRate
  *
  * This is crucial because Little's Law requires arrival rate, not processing rate.
  * During a spike, processing rate stays constant while arrival rate increases.
@@ -16,11 +18,16 @@ namespace Cbox\LaravelQueueAutoscale\Scaling\Calculators;
 final class ArrivalRateEstimator
 {
     /**
-     * Historical backlog snapshots per queue
+     * Historical backlog snapshots per queue (sliding window)
      *
-     * @var array<string, array{backlog: int, timestamp: float}>
+     * @var array<string, list<array{backlog: int, timestamp: float}>>
      */
     private array $history = [];
+
+    /**
+     * Maximum number of snapshots to retain per queue
+     */
+    private const MAX_SNAPSHOTS = 5;
 
     /**
      * Minimum interval between measurements (seconds) to avoid noise
@@ -35,6 +42,10 @@ final class ArrivalRateEstimator
     /**
      * Estimate arrival rate for a queue
      *
+     * Uses a sliding window of recent snapshots to calculate a weighted average
+     * growth rate, giving more weight to recent observations while smoothing
+     * single-point outliers.
+     *
      * @param  string  $queueKey  Unique identifier for the queue (connection:queue)
      * @param  int  $currentBacklog  Current number of pending jobs
      * @param  float  $processingRate  Current processing rate (jobs/second)
@@ -47,17 +58,30 @@ final class ArrivalRateEstimator
     ): array {
         $now = microtime(true);
 
-        // Get previous snapshot
-        $previous = $this->history[$queueKey] ?? null;
+        // Get previous snapshots
+        $snapshots = $this->history[$queueKey] ?? [];
 
-        // Store current snapshot for next calculation
-        $this->history[$queueKey] = [
+        // Store current snapshot
+        $snapshots[] = [
             'backlog' => $currentBacklog,
             'timestamp' => $now,
         ];
 
-        // First measurement - no history available
-        if ($previous === null) {
+        // Prune stale snapshots (older than MAX_HISTORY_AGE)
+        $snapshots = array_values(array_filter(
+            $snapshots,
+            fn (array $s): bool => ($now - $s['timestamp']) <= self::MAX_HISTORY_AGE,
+        ));
+
+        // Keep only the most recent MAX_SNAPSHOTS
+        if (count($snapshots) > self::MAX_SNAPSHOTS) {
+            $snapshots = array_slice($snapshots, -self::MAX_SNAPSHOTS);
+        }
+
+        $this->history[$queueKey] = $snapshots;
+
+        // Need at least 2 snapshots to calculate growth rate
+        if (count($snapshots) < 2) {
             return [
                 'rate' => $processingRate,
                 'confidence' => 0.3,
@@ -65,10 +89,11 @@ final class ArrivalRateEstimator
             ];
         }
 
-        $interval = $now - $previous['timestamp'];
+        // Check if the oldest usable snapshot is too recent (interval too short)
+        $oldest = $snapshots[0];
+        $totalInterval = $now - $oldest['timestamp'];
 
-        // Interval too short - use processing rate to avoid noise
-        if ($interval < self::MIN_INTERVAL) {
+        if ($totalInterval < self::MIN_INTERVAL) {
             return [
                 'rate' => $processingRate,
                 'confidence' => 0.3,
@@ -76,67 +101,107 @@ final class ArrivalRateEstimator
             ];
         }
 
-        // History too old - data is stale
-        if ($interval > self::MAX_HISTORY_AGE) {
-            return [
-                'rate' => $processingRate,
-                'confidence' => 0.4,
-                'source' => 'history_stale',
-            ];
-        }
-
-        // Calculate backlog change rate
-        $backlogDelta = $currentBacklog - $previous['backlog'];
-        $backlogGrowthRate = $backlogDelta / $interval;
+        // Calculate weighted average growth rate from consecutive pairs
+        // More recent pairs get higher weight
+        $weightedGrowthRate = $this->calculateWeightedGrowthRate($snapshots);
 
         // Arrival rate = processing rate + backlog growth rate
-        // If backlog is growing, arrival > processing
-        // If backlog is shrinking, arrival < processing
-        $arrivalRate = $processingRate + $backlogGrowthRate;
+        $arrivalRate = $processingRate + $weightedGrowthRate;
 
         // Sanity check: arrival rate can't be negative
         $arrivalRate = max($arrivalRate, 0.0);
 
-        // Calculate confidence based on interval quality
-        // Optimal interval is 5-30 seconds
-        $confidence = $this->calculateConfidence($interval, $backlogDelta);
+        // Calculate confidence based on window quality
+        $pairCount = count($snapshots) - 1;
+        $overallDelta = $currentBacklog - $oldest['backlog'];
+        $confidence = $this->calculateConfidence($totalInterval, $overallDelta, $pairCount);
 
         return [
             'rate' => $arrivalRate,
             'confidence' => $confidence,
             'source' => sprintf(
-                'estimated: processing=%.2f/s + growth=%.2f/s (delta=%d over %.1fs)',
+                'estimated: processing=%.2f/s + growth=%.2f/s (delta=%d over %.1fs, %d samples)',
                 $processingRate,
-                $backlogGrowthRate,
-                $backlogDelta,
-                $interval
+                $weightedGrowthRate,
+                $overallDelta,
+                $totalInterval,
+                $pairCount + 1,
             ),
         ];
+    }
+
+    /**
+     * Calculate weighted average growth rate from snapshot pairs
+     *
+     * Gives exponentially more weight to recent observations.
+     * This smooths noise from single outlier ticks while still
+     * reacting quickly to sustained changes.
+     *
+     * @param  list<array{backlog: int, timestamp: float}>  $snapshots
+     */
+    private function calculateWeightedGrowthRate(array $snapshots): float
+    {
+        $pairCount = count($snapshots) - 1;
+
+        if ($pairCount === 0) {
+            return 0.0;
+        }
+
+        $totalWeight = 0.0;
+        $weightedSum = 0.0;
+
+        for ($i = 1; $i < count($snapshots); $i++) {
+            $interval = $snapshots[$i]['timestamp'] - $snapshots[$i - 1]['timestamp'];
+
+            if ($interval < 0.001) {
+                continue;
+            }
+
+            $delta = $snapshots[$i]['backlog'] - $snapshots[$i - 1]['backlog'];
+            $growthRate = $delta / $interval;
+
+            // Exponential weight: most recent pair gets highest weight
+            // weight = 2^(pair_index) so last pair dominates
+            $weight = pow(2.0, $i);
+
+            $weightedSum += $growthRate * $weight;
+            $totalWeight += $weight;
+        }
+
+        if ($totalWeight === 0.0) {
+            return 0.0;
+        }
+
+        return $weightedSum / $totalWeight;
     }
 
     /**
      * Calculate confidence in the estimate
      *
      * Higher confidence when:
-     * - Interval is in optimal range (5-30 seconds)
+     * - Total interval is in optimal range (5-30 seconds)
      * - Backlog change is significant (not just noise)
+     * - Multiple sample pairs contribute to the average
      */
-    private function calculateConfidence(float $interval, int $backlogDelta): float
+    private function calculateConfidence(float $totalInterval, int $overallDelta, int $pairCount): float
     {
         // Base confidence from interval quality
         $intervalConfidence = match (true) {
-            $interval >= 5.0 && $interval <= 30.0 => 0.9,
-            $interval >= 2.0 && $interval <= 60.0 => 0.7,
+            $totalInterval >= 5.0 && $totalInterval <= 30.0 => 0.9,
+            $totalInterval >= 2.0 && $totalInterval <= 60.0 => 0.7,
             default => 0.5,
         };
 
-        // Adjust for significance of change
-        $changeSignificance = min(abs($backlogDelta) / 10.0, 1.0);
+        // Boost confidence for multiple samples (sliding window benefit)
+        $sampleBoost = min($pairCount / 3.0, 1.0); // 3+ pairs = full boost
+        $intervalConfidence = $intervalConfidence * (0.8 + 0.2 * $sampleBoost);
 
-        // Blend: more weight on interval if change is small (might be noise)
-        if (abs($backlogDelta) < 3) {
+        // Adjust for significance of change
+        if (abs($overallDelta) < 3) {
             return $intervalConfidence * 0.6;
         }
+
+        $changeSignificance = min(abs($overallDelta) / 10.0, 1.0);
 
         return $intervalConfidence * (0.7 + 0.3 * $changeSignificance);
     }
@@ -160,7 +225,7 @@ final class ArrivalRateEstimator
     /**
      * Get current history state (for testing/debugging)
      *
-     * @return array<string, array{backlog: int, timestamp: float}>
+     * @return array<string, list<array{backlog: int, timestamp: float}>>
      */
     public function getHistory(): array
     {

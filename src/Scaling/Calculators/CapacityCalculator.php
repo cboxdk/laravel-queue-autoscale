@@ -8,22 +8,50 @@ use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
 use Cbox\SystemMetrics\SystemMetrics;
 
-final readonly class CapacityCalculator
+final class CapacityCalculator
 {
+    /**
+     * Cached system metrics to avoid repeated blocking measurements within
+     * the same evaluation tick. CPU measurement blocks for 1 second, so
+     * calling it once per queue would waste 1s * N queues per tick.
+     */
+    private ?float $cachedCpuPercent = null;
+
+    private ?float $cachedMemoryPercent = null;
+
+    private ?float $cachedTotalMemoryMb = null;
+
+    private ?int $cachedAvailableCores = null;
+
+    private ?float $cacheTimestamp = null;
+
+    /**
+     * How long cached metrics remain valid (seconds).
+     * Should be shorter than the evaluation interval to ensure fresh data each tick.
+     */
+    private const CACHE_TTL_SECONDS = 4.0;
+
     /**
      * Calculate maximum workers with detailed capacity breakdown
      *
      * Analyzes CPU and memory constraints separately and returns
      * comprehensive breakdown showing which factor is limiting.
      *
-     * @param  int  $currentWorkers  Number of workers currently running (to add to available capacity)
-     * @return CapacityCalculationResult Detailed capacity analysis
+     * System metrics are cached per evaluation tick to avoid redundant
+     * blocking measurements when evaluating multiple queues.
+     *
+     * @param  int  $currentWorkers  Total workers currently running across all queues (for accurate capacity math)
+     * @return CapacityCalculationResult Detailed capacity analysis with system-wide max workers
      */
     public function calculateMaxWorkers(int $currentWorkers = 0): CapacityCalculationResult
     {
-        $limitsResult = SystemMetrics::limits();
-        if ($limitsResult->isFailure()) {
-            // Fallback: if can't get limits, allow conservative amount
+        // Refresh system metrics if cache is stale or empty
+        if (! $this->isCacheValid()) {
+            $this->refreshSystemMetrics();
+        }
+
+        // If metrics refresh failed, return fallback
+        if ($this->cachedAvailableCores === null) {
             return new CapacityCalculationResult(
                 maxWorkersByCpu: 5,
                 maxWorkersByMemory: 5,
@@ -38,20 +66,13 @@ final readonly class CapacityCalculator
             );
         }
 
-        $limits = $limitsResult->getValue();
-
         // CPU capacity calculation
         $maxCpuPercent = AutoscaleConfiguration::maxCpuPercent();
-        // Use 1s interval for accurate CPU measurement (0.1s includes measurement overhead)
-        $cpuUsageResult = SystemMetrics::cpuUsage(1.0);
-
-        $currentCpuPercent = $cpuUsageResult->isSuccess()
-            ? $cpuUsageResult->getValue()->usagePercentage()
-            : 50.0;
+        $currentCpuPercent = $this->cachedCpuPercent ?? 50.0;
 
         $availableCpuPercent = max($maxCpuPercent - $currentCpuPercent, 0);
         $reserveCores = AutoscaleConfiguration::reserveCpuCores();
-        $usableCores = max($limits->availableCpuCores() - $reserveCores, 1);
+        $usableCores = max($this->cachedAvailableCores - $reserveCores, 1);
 
         // Calculate additional workers we can add based on available CPU
         $additionalWorkersByCpu = (int) floor($usableCores * ($availableCpuPercent / 100));
@@ -60,15 +81,11 @@ final readonly class CapacityCalculator
 
         // Memory capacity calculation
         $maxMemoryPercent = AutoscaleConfiguration::maxMemoryPercent();
-        $memoryResult = SystemMetrics::memory();
-
-        $currentMemoryPercent = $memoryResult->isSuccess()
-            ? $memoryResult->getValue()->usedPercentage()
-            : 50.0;
+        $currentMemoryPercent = $this->cachedMemoryPercent ?? 50.0;
 
         $availableMemoryPercent = max($maxMemoryPercent - $currentMemoryPercent, 0);
         $workerMemoryMb = AutoscaleConfiguration::workerMemoryMbEstimate();
-        $totalMemoryMb = $limits->availableMemoryBytes() / (1024 * 1024);
+        $totalMemoryMb = $this->cachedTotalMemoryMb ?? 4096.0;
 
         // Calculate additional workers we can add based on available memory
         $additionalWorkersByMemory = (int) floor(
@@ -91,7 +108,7 @@ final readonly class CapacityCalculator
             'cpu_explanation' => sprintf(
                 '%d%% of %d cores, current usage: %.1f%%',
                 (int) $maxCpuPercent,
-                $limits->availableCpuCores(),
+                $this->cachedAvailableCores,
                 $currentCpuPercent
             ),
             'memory_explanation' => sprintf(
@@ -103,7 +120,7 @@ final readonly class CapacityCalculator
                 'max_cpu_percent' => $maxCpuPercent,
                 'current_cpu_percent' => $currentCpuPercent,
                 'available_cpu_percent' => $availableCpuPercent,
-                'total_cores' => $limits->availableCpuCores(),
+                'total_cores' => $this->cachedAvailableCores,
                 'reserve_cores' => $reserveCores,
                 'usable_cores' => $usableCores,
             ],
@@ -124,5 +141,55 @@ final readonly class CapacityCalculator
             limitingFactor: $limitingFactor,
             details: $details
         );
+    }
+
+    /**
+     * Invalidate the cached metrics, forcing a fresh measurement on next call.
+     * Useful when evaluation tick boundaries need explicit control.
+     */
+    public function invalidateCache(): void
+    {
+        $this->cacheTimestamp = null;
+    }
+
+    private function isCacheValid(): bool
+    {
+        if ($this->cacheTimestamp === null) {
+            return false;
+        }
+
+        return (microtime(true) - $this->cacheTimestamp) < self::CACHE_TTL_SECONDS;
+    }
+
+    private function refreshSystemMetrics(): void
+    {
+        $limitsResult = SystemMetrics::limits();
+        if ($limitsResult->isFailure()) {
+            $this->cachedAvailableCores = null;
+            $this->cachedTotalMemoryMb = null;
+            $this->cachedCpuPercent = null;
+            $this->cachedMemoryPercent = null;
+            $this->cacheTimestamp = null;
+
+            return;
+        }
+
+        $limits = $limitsResult->getValue();
+        $this->cachedAvailableCores = $limits->availableCpuCores();
+        $this->cachedTotalMemoryMb = $limits->availableMemoryBytes() / (1024 * 1024);
+
+        // CPU measurement - this is the expensive blocking call (1 second)
+        $cpuUsageResult = SystemMetrics::cpuUsage(1.0);
+        $this->cachedCpuPercent = $cpuUsageResult->isSuccess()
+            ? $cpuUsageResult->getValue()->usagePercentage()
+            : 50.0;
+
+        // Memory measurement
+        $memoryResult = SystemMetrics::memory();
+        $this->cachedMemoryPercent = $memoryResult->isSuccess()
+            ? $memoryResult->getValue()->usedPercentage()
+            : 50.0;
+
+        $this->cacheTimestamp = microtime(true);
     }
 }

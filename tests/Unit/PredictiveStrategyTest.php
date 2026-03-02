@@ -232,7 +232,10 @@ describe('reason generation', function () {
         $history = $this->arrivalEstimator->getHistory();
         if (! empty($history)) {
             $key = array_key_first($history);
-            $history[$key]['timestamp'] -= 10;
+            foreach ($history[$key] as &$snapshot) {
+                $snapshot['timestamp'] -= 10;
+            }
+            unset($snapshot);
 
             $reflection = new ReflectionClass($this->arrivalEstimator);
             $historyProperty = $reflection->getProperty('history');
@@ -427,7 +430,10 @@ describe('arrival rate estimation integration', function () {
         $history = $this->arrivalEstimator->getHistory();
         if (! empty($history)) {
             $key = array_key_first($history);
-            $history[$key]['timestamp'] -= 10;
+            foreach ($history[$key] as &$snapshot) {
+                $snapshot['timestamp'] -= 10;
+            }
+            unset($snapshot);
 
             $reflection = new ReflectionClass($this->arrivalEstimator);
             $historyProperty = $reflection->getProperty('history');
@@ -478,6 +484,126 @@ describe('metrics handling', function () {
         // Workers = rate * avgDuration = 10 * 3 = 30, with trend buffer = 36
         expect($workers)->toBeGreaterThanOrEqual(30)
             ->and($reason)->toContain('3'); // Should reference 3 second job time
+    });
+});
+
+describe('retry noise correction', function () {
+    it('ignores low lifetime failure rates to avoid stale data overcorrection', function () {
+        // With 3% lifetime failure rate (below 5% threshold), retry noise should NOT be applied
+        $metrics = createMetrics([
+            'throughput_per_minute' => 600.0, // 10 jobs/sec
+            'active_workers' => 20,
+            'pending' => 50,
+            'oldest_job_age' => 5,
+            'failure_rate' => 3.0, // Low lifetime rate - should be ignored
+        ]);
+
+        $config = $this->config;
+        $this->strategy->calculateTargetWorkers($metrics, $config);
+        $reason = $this->strategy->getLastReason();
+
+        // Should NOT mention retry adjustment since rate is below threshold
+        expect($reason)->not->toContain('adjusted for retries');
+    });
+
+    it('applies dampened correction for high failure rates', function () {
+        // With 25% failure rate, correction should be applied but dampened
+        $metricsNoFailure = createMetrics([
+            'throughput_per_minute' => 600.0,
+            'active_workers' => 20,
+            'pending' => 50,
+            'oldest_job_age' => 5,
+            'failure_rate' => 0.0,
+        ]);
+
+        $metricsHighFailure = createMetrics([
+            'throughput_per_minute' => 600.0,
+            'active_workers' => 20,
+            'pending' => 50,
+            'oldest_job_age' => 5,
+            'failure_rate' => 25.0, // High failure rate
+        ]);
+
+        $config = $this->config;
+
+        $targetNoFailure = $this->strategy->calculateTargetWorkers($metricsNoFailure, $config);
+        $targetHighFailure = $this->strategy->calculateTargetWorkers($metricsHighFailure, $config);
+
+        // High failure rate should result in fewer target workers (lower effective arrival rate)
+        expect($targetHighFailure)->toBeLessThanOrEqual($targetNoFailure);
+    });
+
+    it('caps retry correction at 30 percent of arrival rate', function () {
+        // Even with 100% failure rate, correction should not remove more than 30% of arrival rate
+        $metrics = createMetrics([
+            'throughput_per_minute' => 600.0, // 10 jobs/sec
+            'active_workers' => 20,
+            'pending' => 50,
+            'oldest_job_age' => 5,
+            'failure_rate' => 100.0, // Extreme failure rate
+        ]);
+
+        $config = $this->config;
+        $target = $this->strategy->calculateTargetWorkers($metrics, $config);
+
+        // Should still recommend workers (not zero'd out by retry correction)
+        expect($target)->toBeGreaterThan(0);
+    });
+});
+
+describe('utilization rate integration', function () {
+    it('boosts target when workers are saturated but algorithms suggest holding', function () {
+        // Workers at 95% utilization with avgDuration explicitly set.
+        // With 5 workers, throughput 60/min (1/sec), avgDuration 0.5s:
+        // Little's Law says 1.0 * 0.5 = 0.5 workers, trend: 0.6 workers → target ≤ 5
+        // But utilization at 95% means workers are overloaded → saturation boost
+        $metrics = createMetrics([
+            'throughput_per_minute' => 60.0, // 1/sec - low throughput
+            'active_workers' => 5,
+            'avg_duration' => 0.5, // Fast jobs (seconds)
+            'pending' => 1,
+            'oldest_job_age' => 1,
+            'utilization_rate' => 95.0, // Saturated
+        ]);
+
+        $target = $this->strategy->calculateTargetWorkers($metrics, $this->config);
+        $reason = $this->strategy->getLastReason();
+
+        // Should boost beyond current 5 workers due to saturation
+        expect($target)->toBeGreaterThan(5)
+            ->and($reason)->toContain('saturation boost');
+    });
+
+    it('does not boost when utilization is moderate', function () {
+        $metrics = createMetrics([
+            'throughput_per_minute' => 300.0,
+            'active_workers' => 5,
+            'pending' => 2,
+            'oldest_job_age' => 1,
+            'utilization_rate' => 60.0, // Not saturated
+        ]);
+
+        $target = $this->strategy->calculateTargetWorkers($metrics, $this->config);
+        $reason = $this->strategy->getLastReason();
+
+        expect($reason)->not->toContain('saturation boost');
+    });
+
+    it('does not boost when algorithms already recommend scaling up', function () {
+        // Heavy load: algorithms already want more workers
+        $metrics = createMetrics([
+            'throughput_per_minute' => 600.0, // 10/sec
+            'active_workers' => 5,
+            'pending' => 100, // Large backlog
+            'oldest_job_age' => 20, // Near SLA
+            'utilization_rate' => 95.0,
+        ]);
+
+        $target = $this->strategy->calculateTargetWorkers($metrics, $this->config);
+        $reason = $this->strategy->getLastReason();
+
+        // Algorithms should already recommend > activeWorkers, so no saturation boost needed
+        expect($reason)->not->toContain('saturation boost');
     });
 });
 

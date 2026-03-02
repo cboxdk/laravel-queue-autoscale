@@ -38,7 +38,8 @@ final class PredictiveStrategy implements ScalingStrategyContract
         private readonly LittlesLawCalculator $littles,
         private readonly BacklogDrainCalculator $backlog,
         private readonly ArrivalRateEstimator $arrivalEstimator,
-    ) {}
+    ) {
+    }
 
     public function calculateTargetWorkers(QueueMetricsData $metrics, QueueConfiguration $config): int
     {
@@ -92,15 +93,29 @@ final class PredictiveStrategy implements ScalingStrategyContract
         }
 
         // Adjust arrival rate for retry noise
-        // High failure rates inflate arrival rate because retries look like new jobs
-        // We subtract the estimated retry volume to get the "true" arrival rate of new work
+        // High failure rates inflate arrival rate because retries look like new jobs.
+        // We subtract the estimated retry volume to get the "true" arrival rate of new work.
+        //
+        // Important: failureRate from metrics is LIFETIME, not recent. To avoid permanently
+        // underestimating arrival rate from old failures, we:
+        // 1. Only apply correction when failure rate is significant (>5%)
+        // 2. Cap the correction at 30% of arrival rate to prevent over-correction
+        // 3. Use a dampened rate: sqrt(rate/100) makes low rates nearly invisible
+        //    while high rates (active incidents) still have strong correction
         $failureRate = $metrics->failureRate ?? 0.0;
         $rawArrivalRate = $arrivalRate;
         $retryNoise = 0.0;
 
-        if ($failureRate > 0 && $processingRate > 0) {
-            // Estimate how many jobs/sec are actually retries
-            $retryNoise = $processingRate * ($failureRate / 100.0);
+        if ($failureRate > 5.0 && $processingRate > 0) {
+            // Dampened correction: sqrt makes low lifetime rates negligible
+            // 5% → 0.22 factor, 25% → 0.50 factor, 100% → 1.0 factor
+            $dampenedFactor = sqrt($failureRate / 100.0);
+            $retryNoise = $processingRate * $dampenedFactor;
+
+            // Cap at 30% of arrival rate to prevent over-correction from stale data
+            $maxCorrection = $arrivalRate * 0.3;
+            $retryNoise = min($retryNoise, $maxCorrection);
+
             $arrivalRate = max(0.0, $arrivalRate - $retryNoise);
         }
 
@@ -129,6 +144,22 @@ final class PredictiveStrategy implements ScalingStrategyContract
             $backlogDrainWorkers,
         );
 
+        // 5. UTILIZATION ADJUSTMENT: Use worker utilization as a real-time signal
+        // Utilization rate from metrics tells us how busy current workers actually are,
+        // providing ground truth that complements the algorithmic calculations.
+        $utilizationRate = $metrics->utilizationRate ?? 0.0;
+        $utilizationAdjustment = '';
+
+        if ($activeWorkers > 0 && $utilizationRate > 0) {
+            if ($utilizationRate >= 90.0 && $targetWorkers <= $activeWorkers) {
+                // Workers are saturated but algorithms didn't recommend scaling up.
+                // This can happen when throughput data lags behind reality.
+                // Add a small boost to prevent being stuck at saturation.
+                $targetWorkers = $activeWorkers + 1;
+                $utilizationAdjustment = sprintf('saturation boost (%.0f%% utilized)', $utilizationRate);
+            }
+        }
+
         // Store for reason building
         $this->lastCalculation = [
             'steady_state' => $steadyStateWorkers,
@@ -144,6 +175,8 @@ final class PredictiveStrategy implements ScalingStrategyContract
             'arrival_rate_source' => $this->arrivalRateSource,
             'backlog' => $backlogSize,
             'failure_rate' => $failureRate,
+            'utilization_rate' => $utilizationRate,
+            'utilization_adjustment' => $utilizationAdjustment,
         ];
 
         return (int) ceil(max($targetWorkers, 0));
@@ -203,6 +236,12 @@ final class PredictiveStrategy implements ScalingStrategyContract
             $parts[] = sprintf('backlog %s (arrival %.2f/s vs processing %.2f/s)', $direction, $arrivalRate, $processingRate);
         }
 
+        // Add utilization adjustment if applied
+        $utilizationAdj = $calc['utilization_adjustment'] ?? '';
+        if ($utilizationAdj !== '') {
+            $parts[] = $utilizationAdj;
+        }
+
         return implode('; ', $parts);
     }
 
@@ -236,9 +275,13 @@ final class PredictiveStrategy implements ScalingStrategyContract
      * Determine job time using available metrics
      *
      * Priority order:
-     * 1. Average duration from metrics (when available)
+     * 1. Average duration from metrics (when available, always in seconds)
      * 2. Estimation from throughput and worker count
      * 3. Configurable fallback (default: 2.0 seconds)
+     *
+     * Note: The metrics package provides avgDuration in milliseconds, but
+     * AutoscaleManager::mapMetricsFields() converts to seconds before creating
+     * the QueueMetricsData DTO. The value here is always in seconds.
      *
      * @return array{float, string} [avgJobTime, source]
      */
@@ -247,15 +290,13 @@ final class PredictiveStrategy implements ScalingStrategyContract
         float $processingRate,
         int $activeWorkers
     ): array {
-        // Priority 1: Use average duration from metrics
+        // Priority 1: Use average duration from metrics (already in seconds)
         if ($metrics->avgDuration > 0) {
-            // Metrics stores avgDuration - could be ms or seconds depending on version
-            // If value is > 100, assume milliseconds and convert
-            $avgDuration = $metrics->avgDuration;
-            $avgDurationSeconds = $avgDuration > 100 ? $avgDuration / 1000.0 : $avgDuration;
+            $avgDurationSeconds = $metrics->avgDuration;
 
             // Sanity check: reject unreasonably low values (< 10ms)
-            if ($avgDurationSeconds >= 0.01) {
+            // and cap at reasonable maximum (10 minutes)
+            if ($avgDurationSeconds >= 0.01 && $avgDurationSeconds <= 600.0) {
                 return [$avgDurationSeconds, sprintf('metrics: %.2fs', $avgDurationSeconds)];
             }
         }
