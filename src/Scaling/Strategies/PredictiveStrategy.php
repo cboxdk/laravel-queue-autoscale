@@ -38,8 +38,7 @@ final class PredictiveStrategy implements ScalingStrategyContract
         private readonly LittlesLawCalculator $littles,
         private readonly BacklogDrainCalculator $backlog,
         private readonly ArrivalRateEstimator $arrivalEstimator,
-    ) {
-    }
+    ) {}
 
     public function calculateTargetWorkers(QueueMetricsData $metrics, QueueConfiguration $config): int
     {

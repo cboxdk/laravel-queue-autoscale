@@ -15,8 +15,7 @@ final readonly class ScalingEngine
     public function __construct(
         private ScalingStrategyContract $strategy,
         private CapacityCalculator $capacity,
-    ) {
-    }
+    ) {}
 
     /**
      * Evaluate scaling decision for a queue
