@@ -5,6 +5,20 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v2.0.1 - 2026-03-02
+
+### Fixes & Improvements
+
+- **Retry noise correction**: Dampened with sqrt factor, 5% threshold, and 30% cap to prevent stale lifetime failure rates from permanently underestimating arrival rate
+- **Utilization saturation boost**: +1 worker when ≥90% utilized but algorithms recommend holding
+- **Multi-queue capacity sharing**: Total pool workers now correctly shared across queues via CapacityCalculator
+- **Anti-flapping reset**: Direction clears after cooldown expires, preventing stale direction from blocking scaling
+- **Arrival rate estimation**: Rewritten with 5-snapshot sliding window and exponential weighting for better spike detection
+- **AggressiveScaleDownPolicy**: Now functional (was previously a no-op)
+- **CPU measurement caching**: 4-second TTL in CapacityCalculator to avoid blocking measurements
+- **Dead code removal**: Removed unused TrendPredictor class
+- **PHPStan fixes**: Configuration and type error corrections
+
 ## v2.0.0 - Rebranding & Performance - 2026-01-20
 
 ### Breaking Changes ⚠️
@@ -41,13 +55,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### New Features
 
 - **TUI Mode**: Add `--interactive` / `--tui` flags for k9s-style terminal UI
+  
   - Split pane layout with queue overview, workers, and logs
   - Real-time metrics updates at 60 FPS
   - Keyboard navigation and filtering
   - Tab-based navigation (Overview, Queues, Workers, Jobs, Metrics, Logs)
   
 - **Debug Command**: Add `queue:autoscale:debug` for queue state inspection
+  
 - **Test Command**: Add `queue:autoscale:test` for dispatching test jobs
+  
 
 #### Architecture Improvements
 
@@ -64,6 +81,7 @@ The TUI mode requires `php-tui/php-tui` which is included as a suggested depende
 ```bash
 composer require php-tui/php-tui --dev
 
+
 ```
 ### Usage
 
@@ -76,6 +94,7 @@ php artisan queue:autoscale:debug
 
 # Dispatch test jobs
 php artisan queue:autoscale:test --jobs=10 --queue=default
+
 
 ```
 **Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v1.0.0...v1.1.0
@@ -105,6 +124,7 @@ First stable release of Laravel Queue Autoscale with intelligent, predictive aut
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
+
 
 
 ```
