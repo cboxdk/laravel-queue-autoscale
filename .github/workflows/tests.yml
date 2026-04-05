@@ -13,12 +13,20 @@ jobs:
       fail-fast: false
       matrix:
         os: [ ubuntu-latest ]
-        php: [ 8.3 ]
-        laravel: [ 11.* ]
+        php: [ 8.4, 8.3 ]
+        laravel: [ 13.*, 12.*, 11.* ]
         stability: [ prefer-stable ]
         include:
+          - laravel: 13.*
+            testbench: 11.*
+          - laravel: 12.*
+            testbench: 10.*
           - laravel: 11.*
             testbench: 9.*
+        exclude:
+          # spatie/laravel-prometheus ^13.0 support requires PHP 8.4+
+          - php: 8.3
+            laravel: 13.*
 
     name: P${{ matrix.php }} - L${{ matrix.laravel }} - ${{ matrix.stability }} - ${{ matrix.os }}
 
@@ -62,7 +70,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
-        if: matrix.php == '8.3' && matrix.stability == 'prefer-stable'
+        if: matrix.php == '8.4' && matrix.laravel == '13.*' && matrix.stability == 'prefer-stable'
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
