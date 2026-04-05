@@ -69,7 +69,7 @@ jobs:
         run: vendor/bin/pest --coverage --min=50 --exclude-group=simulation
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         if: matrix.php == '8.4' && matrix.laravel == '13.*' && matrix.stability == 'prefer-stable'
         with:
           files: ./coverage.xml
