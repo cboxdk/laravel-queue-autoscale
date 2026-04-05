@@ -23,6 +23,10 @@ jobs:
             testbench: 10.*
           - laravel: 11.*
             testbench: 9.*
+        exclude:
+          # spatie/laravel-prometheus ^13.0 support requires PHP 8.4+
+          - php: 8.3
+            laravel: 13.*
 
     name: P${{ matrix.php }} - L${{ matrix.laravel }} - ${{ matrix.stability }} - ${{ matrix.os }}
 
