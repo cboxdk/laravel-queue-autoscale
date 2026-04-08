@@ -1,12 +1,12 @@
 ---
 title: "Troubleshooting"
-description: "Common issues and solutions for Laravel Queue Autoscale deployment and operation"
+description: "Queue Autoscale for Laravel troubleshooting — common issues and solutions for deployment and operation"
 weight: 13
 ---
 
 # Troubleshooting
 
-Common issues and solutions for Laravel Queue Autoscale.
+Common issues and solutions when using Queue Autoscale for Laravel.
 
 ## Installation Issues
 

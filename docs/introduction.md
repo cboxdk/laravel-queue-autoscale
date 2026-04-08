@@ -6,11 +6,11 @@ weight: 1
 
 # Introduction
 
-Laravel Queue Autoscale is a smart queue worker manager that automatically scales your queue workers based on workload, predicted demand, and service level objectives. Unlike traditional reactive solutions, it uses a **hybrid predictive algorithm** combining queueing theory (Little's Law), trend analysis, and backlog-based scaling to maintain your SLA targets.
+Queue Autoscale for Laravel is a smart queue worker manager that automatically scales your queue workers based on workload, predicted demand, and service level objectives. Unlike traditional reactive solutions, it uses a **hybrid predictive algorithm** combining queueing theory (Little's Law), trend analysis, and backlog-based scaling to maintain your SLA targets.
 
-## What is Laravel Queue Autoscale?
+## What is Queue Autoscale for Laravel?
 
-Instead of manually managing worker counts or using simple threshold-based scaling, Laravel Queue Autoscale lets you define **service level objectives** (SLOs) and automatically maintains the optimal number of workers to meet those targets.
+Instead of manually managing worker counts or using simple threshold-based scaling, Queue Autoscale for Laravel lets you define **service level objectives** (SLOs) and automatically maintains the optimal number of workers to meet those targets.
 
 **Traditional approach:**
 ```php
@@ -18,7 +18,7 @@ Instead of manually managing worker counts or using simple threshold-based scali
 supervisord config: numprocs=10
 ```
 
-**Laravel Queue Autoscale approach:**
+**Queue Autoscale for Laravel approach:**
 ```php
 // SLA-based: "Jobs should start processing within 30 seconds"
 'max_pickup_time_seconds' => 30
@@ -109,7 +109,7 @@ Systems requiring guaranteed processing times for critical operations.
 
 ## Package Architecture
 
-Laravel Queue Autoscale is designed as a **metrics consumer** rather than a metrics collector:
+Queue Autoscale for Laravel is designed as a **metrics consumer** rather than a metrics collector:
 
 - **laravel-queue-metrics**: Discovers queues, scans connections, collects all metrics
 - **laravel-queue-autoscale**: Consumes metrics, applies algorithms, manages workers

@@ -1,12 +1,12 @@
 ---
 title: "Architecture"
-description: "Deep dive into the Laravel Queue Autoscale architecture, scaling algorithm, and design decisions"
+description: "Deep dive into the Queue Autoscale for Laravel architecture, scaling algorithm, and design decisions"
 weight: 50
 ---
 
 # Architecture
 
-This document provides a deep dive into the Laravel Queue Autoscale architecture, scaling algorithm, and design decisions.
+This document provides a deep dive into the Queue Autoscale for Laravel architecture, scaling algorithm, and design decisions.
 
 ## Table of Contents
 
@@ -22,7 +22,7 @@ This document provides a deep dive into the Laravel Queue Autoscale architecture
 
 ## Overview
 
-Laravel Queue Autoscale uses a **hybrid predictive algorithm** that combines three complementary approaches:
+Queue Autoscale for Laravel uses a **hybrid predictive algorithm** that combines three complementary approaches:
 
 1. **Rate-Based Scaling** (Little's Law) - Steady-state calculation
 2. **Trend-Based Scaling** (Predictive) - Proactive forecasting
@@ -763,7 +763,7 @@ The architecture supports these enhancements through:
 
 ## Conclusion
 
-Laravel Queue Autoscale combines queueing theory, predictive analysis, and SLA-based optimization to provide intelligent, automatic worker scaling. The hybrid algorithm ensures SLA compliance while being resource-aware and extensible.
+Queue Autoscale for Laravel combines queueing theory, predictive analysis, and SLA-based optimization to provide intelligent, automatic worker scaling. The hybrid algorithm ensures SLA compliance while being resource-aware and extensible.
 
 For usage examples, see [Quick Start](../quickstart.md).
 

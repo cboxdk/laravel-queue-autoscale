@@ -6,11 +6,11 @@ weight: 10
 
 # How It Works
 
-Laravel Queue Autoscale uses a hybrid predictive algorithm to make intelligent scaling decisions.
+Queue Autoscale for Laravel uses a hybrid predictive algorithm to make intelligent scaling decisions.
 
 ## Overview
 
-Laravel Queue Autoscale uses a **hybrid predictive algorithm** that combines three different scaling approaches to make intelligent decisions about worker counts:
+Queue Autoscale for Laravel uses a **hybrid predictive algorithm** that combines three different scaling approaches to make intelligent decisions about worker counts:
 
 1. **Little's Law** - Steady-state calculation based on current workload
 2. **Trend Prediction** - Proactive scaling based on traffic forecasts

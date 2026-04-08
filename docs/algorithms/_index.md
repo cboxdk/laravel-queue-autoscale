@@ -1,16 +1,16 @@
 ---
 title: "Algorithms"
-description: "Mathematical foundations and algorithmic details of Laravel Queue Autoscale"
+description: "Mathematical foundations and algorithmic details of Queue Autoscale for Laravel"
 weight: 50
 ---
 
 # Algorithms
 
-This section provides deep dives into the mathematical foundations and algorithmic details behind Laravel Queue Autoscale.
+This section provides deep dives into the mathematical foundations and algorithmic details behind Queue Autoscale for Laravel.
 
 ## Overview
 
-Laravel Queue Autoscale uses a **hybrid predictive algorithm** that combines three complementary approaches:
+Queue Autoscale for Laravel uses a **hybrid predictive algorithm** that combines three complementary approaches:
 
 1. **[Little's Law](littles-law.md)** - Steady-state calculation for current workload
 2. **[Trend Prediction](trend-prediction.md)** - Proactive scaling based on traffic forecasts

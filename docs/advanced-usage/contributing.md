@@ -1,12 +1,12 @@
 ---
 title: "Contributing"
-description: "Guidelines for contributing to Laravel Queue Autoscale development"
+description: "Guidelines for contributing to Queue Autoscale for Laravel development"
 weight: 34
 ---
 
 # Contributing
 
-First off, thank you for considering contributing to Laravel Queue Autoscale! It's people like you that make this package better for everyone.
+First off, thank you for considering contributing to Queue Autoscale for Laravel! It's people like you that make this package better for everyone.
 
 ## Code of Conduct
 

@@ -1,12 +1,12 @@
 ---
 title: "Advanced Usage"
-description: "Advanced topics for customizing and extending Laravel Queue Autoscale"
+description: "Advanced topics for customizing and extending Queue Autoscale for Laravel"
 weight: 30
 ---
 
 # Advanced Usage
 
-This section covers advanced topics for customizing Laravel Queue Autoscale to fit your specific needs.
+This section covers advanced topics for customizing Queue Autoscale for Laravel to fit your specific needs.
 
 ## Extensibility
 
@@ -24,7 +24,7 @@ Deploy and secure your autoscaler for production environments:
 
 ## Contributing
 
-Help make Laravel Queue Autoscale better:
+Help make Queue Autoscale for Laravel better:
 
 - **[Contributing](contributing.md)** - Development guidelines and workflow
 

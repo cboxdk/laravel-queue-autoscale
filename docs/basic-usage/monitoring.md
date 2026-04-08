@@ -1,12 +1,12 @@
 ---
 title: "Monitoring"
-description: "Complete guide to monitoring Laravel Queue Autoscale in production with metrics and alerts"
+description: "Complete guide to monitoring Queue Autoscale for Laravel in production with metrics and alerts"
 weight: 12
 ---
 
 # Monitoring
 
-Complete guide to monitoring Laravel Queue Autoscale in production.
+Complete guide to monitoring Queue Autoscale for Laravel in production.
 
 ## Table of Contents
 - [Overview](#overview)

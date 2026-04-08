@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Advanced configuration examples for Laravel Queue Autoscale
+ * Queue Autoscale for Laravel — advanced configuration examples
  *
  * These examples show different configuration patterns for common use cases.
  * Copy relevant sections to your config/queue-autoscale.php file.

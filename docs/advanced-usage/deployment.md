@@ -1,12 +1,12 @@
 ---
 title: "Deployment"
-description: "Complete guide for deploying Laravel Queue Autoscale to production environments"
+description: "Complete guide for deploying Queue Autoscale for Laravel to production environments"
 weight: 32
 ---
 
 # Deployment
 
-Complete guide for deploying Laravel Queue Autoscale to production.
+Complete guide for deploying Queue Autoscale for Laravel to production.
 
 ## Prerequisites
 
@@ -228,7 +228,7 @@ Create `/etc/systemd/system/queue-autoscale.service`:
 
 ```ini
 [Unit]
-Description=Laravel Queue Autoscale
+Description=Queue Autoscale for Laravel
 After=network.target
 
 [Service]

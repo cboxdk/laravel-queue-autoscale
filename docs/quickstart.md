@@ -10,7 +10,7 @@ This guide gets you from zero to a working autoscaled queue in 5 minutes.
 
 ## Prerequisites
 
-- Laravel Queue Autoscale [installed](installation.md)
+- Queue Autoscale for Laravel [installed](installation.md)
 - Metrics package configured
 - A Laravel application with queue jobs
 

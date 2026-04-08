@@ -128,9 +128,9 @@ php artisan queue:autoscale:test --jobs=10 --queue=default
 
 ## v1.0.0 - Initial Stable Release - 2026-01-05
 
-### Laravel Queue Autoscale v1.0.0
+### Queue Autoscale for Laravel v1.0.0
 
-First stable release of Laravel Queue Autoscale with intelligent, predictive autoscaling for Laravel queues.
+First stable release of Queue Autoscale for Laravel with intelligent, predictive autoscaling for Laravel queues.
 
 #### Features
 
@@ -171,7 +171,7 @@ See [CHANGELOG.md](https://github.com/cboxdk/laravel-queue-autoscale/blob/main/C
 
 ### Initial Stable Release
 
-First stable release of Laravel Queue Autoscale with intelligent, predictive autoscaling for Laravel queues.
+First stable release of Queue Autoscale for Laravel with intelligent, predictive autoscaling for Laravel queues.
 
 #### Features
 
@@ -203,7 +203,7 @@ First stable release of Laravel Queue Autoscale with intelligent, predictive aut
 
 ### Added
 
-- Initial release of Laravel Queue Autoscale
+- Initial release of Queue Autoscale for Laravel
   
 - Hybrid predictive autoscaling algorithm combining:
   

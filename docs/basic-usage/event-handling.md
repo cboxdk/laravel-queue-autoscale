@@ -18,7 +18,7 @@ Complete guide to using Laravel events with Queue Autoscale.
 
 ## Overview
 
-Laravel Queue Autoscale dispatches Laravel events at key points during the autoscaling lifecycle. You can listen to these events to:
+Queue Autoscale for Laravel dispatches Laravel events at key points during the autoscaling lifecycle. You can listen to these events to:
 - Send custom notifications
 - Collect metrics
 - Trigger external workflows

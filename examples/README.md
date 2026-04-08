@@ -1,6 +1,6 @@
-# Laravel Queue Autoscale - Examples
+# Queue Autoscale for Laravel - Examples
 
-This directory contains practical examples for extending Laravel Queue Autoscale with custom strategies and policies.
+This directory contains practical examples for extending Queue Autoscale for Laravel with custom strategies and policies.
 
 ## Directory Structure
 

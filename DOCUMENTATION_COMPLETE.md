@@ -1,4 +1,4 @@
-# Laravel Queue Autoscale - Documentation Complete ✅
+# Queue Autoscale for Laravel - Documentation Complete ✅
 
 ## Package Status: PRODUCTION READY
 

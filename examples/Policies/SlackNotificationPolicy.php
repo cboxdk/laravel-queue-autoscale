@@ -97,7 +97,7 @@ class SlackNotificationPolicy implements ScalingPolicy
                             'short' => true,
                         ],
                     ],
-                    'footer' => 'Laravel Queue Autoscale',
+                    'footer' => 'Queue Autoscale for Laravel',
                     'ts' => time(),
                 ],
             ],

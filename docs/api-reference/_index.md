@@ -1,12 +1,12 @@
 ---
 title: "API Reference"
-description: "Complete API documentation for Laravel Queue Autoscale contracts and classes"
+description: "Queue Autoscale for Laravel API documentation for contracts and classes"
 weight: 70
 ---
 
 # API Reference
 
-Complete API documentation for Laravel Queue Autoscale.
+Complete Queue Autoscale for Laravel API documentation.
 
 ## Core Components
 

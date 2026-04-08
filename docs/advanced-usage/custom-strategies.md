@@ -1,12 +1,12 @@
 ---
 title: "Custom Strategies"
-description: "Guide to implementing custom scaling strategies for Laravel Queue Autoscale"
+description: "Implement custom scaling strategies in Queue Autoscale for Laravel"
 weight: 30
 ---
 
 # Custom Strategies
 
-Guide to implementing custom scaling strategies for Laravel Queue Autoscale.
+Guide to implementing custom scaling strategies in Queue Autoscale for Laravel.
 
 ## Table of Contents
 - [Overview](#overview)

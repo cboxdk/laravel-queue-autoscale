@@ -1,12 +1,12 @@
 ---
 title: "Installation"
-description: "Step-by-step guide to install and configure Laravel Queue Autoscale in your application"
+description: "Step-by-step guide to install and configure Queue Autoscale for Laravel in your application"
 weight: 2
 ---
 
 # Installation
 
-This guide walks you through installing and configuring Laravel Queue Autoscale in your Laravel application.
+This guide walks you through installing and configuring Queue Autoscale for Laravel in your application.
 
 ## Requirements
 
@@ -38,7 +38,7 @@ This creates `config/queue-autoscale.php` with sensible defaults.
 
 ## Step 3: Setup Metrics Package
 
-Laravel Queue Autoscale requires `cboxdk/laravel-queue-metrics` for queue discovery and metrics collection. This package is automatically installed as a dependency.
+Queue Autoscale for Laravel requires `cboxdk/laravel-queue-metrics` for queue discovery and metrics collection. This package is automatically installed as a dependency.
 
 ### Publish Metrics Configuration
 

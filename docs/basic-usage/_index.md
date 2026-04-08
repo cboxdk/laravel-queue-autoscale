@@ -1,12 +1,12 @@
 ---
 title: "Basic Usage"
-description: "Essential guides for getting started with Laravel Queue Autoscale"
+description: "Essential guides for getting started with Queue Autoscale for Laravel"
 weight: 10
 ---
 
 # Basic Usage
 
-This section covers the fundamental concepts and day-to-day usage of Laravel Queue Autoscale.
+This section covers the fundamental concepts and day-to-day usage of Queue Autoscale for Laravel.
 
 ## Core Concepts
 
@@ -26,7 +26,7 @@ Keep your autoscaler running smoothly in production:
 
 ## Getting Started
 
-New to Laravel Queue Autoscale? Start here:
+New to Queue Autoscale for Laravel? Start here:
 
 1. [Installation](../installation.md) - Set up the package
 2. [Quick Start](../quickstart.md) - Get your first queue autoscaled

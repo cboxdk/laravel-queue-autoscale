@@ -1,12 +1,12 @@
 ---
 title: "Scaling Policies"
-description: "Complete guide to implementing and using scaling policies in Laravel Queue Autoscale"
+description: "Complete guide to implementing and using scaling policies in Queue Autoscale for Laravel"
 weight: 31
 ---
 
 # Scaling Policies
 
-Complete guide to implementing and using scaling policies in Laravel Queue Autoscale.
+Complete guide to implementing and using scaling policies in Queue Autoscale for Laravel.
 
 ## Table of Contents
 - [Overview](#overview)
@@ -262,7 +262,7 @@ class SlackNotificationPolicy implements ScalingPolicyContract
                             'short' => true,
                         ],
                     ],
-                    'footer' => 'Laravel Queue Autoscale',
+                    'footer' => 'Queue Autoscale for Laravel',
                     'ts' => time(),
                 ],
             ],

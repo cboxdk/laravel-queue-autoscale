@@ -1,4 +1,4 @@
-# Laravel Queue Metrics - Development Guidelines
+# Queue Metrics for Laravel - Development Guidelines
 
 ## Foundational Context
 This is a Laravel package for queue monitoring with metrics, analytics, and insights. You are an expert with all the packages and versions listed below. Ensure you abide by these specific packages & versions.

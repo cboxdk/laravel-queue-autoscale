@@ -1,12 +1,12 @@
 ---
 title: "Configuration"
-description: "Complete reference for configuring Laravel Queue Autoscale with SLA targets and worker limits"
+description: "Queue Autoscale for Laravel configuration reference with SLA targets and worker limits"
 weight: 11
 ---
 
 # Configuration
 
-Complete reference for configuring Laravel Queue Autoscale.
+Complete Queue Autoscale for Laravel configuration reference.
 
 ## Table of Contents
 - [Prerequisites: Metrics Package Setup](#prerequisites-metrics-package-setup)
@@ -21,7 +21,7 @@ Complete reference for configuring Laravel Queue Autoscale.
 
 ## Prerequisites: Metrics Package Setup
 
-Laravel Queue Autoscale depends on `laravel-queue-metrics` for all queue discovery and metrics collection. **The autoscaler cannot function without proper metrics configuration.**
+Queue Autoscale for Laravel depends on `laravel-queue-metrics` for all queue discovery and metrics collection. **The autoscaler cannot function without proper metrics configuration.**
 
 ### Quick Setup
 

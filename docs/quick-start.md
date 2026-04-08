@@ -1,6 +1,6 @@
 ---
 title: "Quick Start Guide"
-description: "Get started with Laravel Queue Autoscale in 5 minutes"
+description: "Get started with Queue Autoscale for Laravel in 5 minutes"
 weight: 2
 ---
 

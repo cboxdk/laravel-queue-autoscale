@@ -1,6 +1,6 @@
 ---
 title: "Security"
-description: "Security policy and vulnerability reporting for Laravel Queue Autoscale"
+description: "Queue Autoscale for Laravel security policy and vulnerability reporting"
 weight: 33
 ---
 
@@ -66,7 +66,7 @@ This information will help us triage your report more quickly.
 
 ### Best Practices
 
-When deploying Laravel Queue Autoscale:
+When deploying Queue Autoscale for Laravel:
 
 1. **Run as Non-Root**: Never run autoscaler as root user
 2. **Limit Permissions**: Use dedicated user with minimal permissions
@@ -114,4 +114,4 @@ We appreciate security researchers who responsibly disclose vulnerabilities to u
 - CHANGELOG.md
 - GitHub security advisory page
 
-Thank you for helping keep Laravel Queue Autoscale secure!
+Thank you for helping keep Queue Autoscale for Laravel secure!
