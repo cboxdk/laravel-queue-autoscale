@@ -1,5 +1,12 @@
 <?php
 
+use App\QueueAutoscale\Policies\MetricsLoggingPolicy;
+use App\QueueAutoscale\Policies\SlackNotificationPolicy;
+use App\QueueAutoscale\Strategies\CostOptimizedStrategy;
+use App\QueueAutoscale\Strategies\TimeBasedStrategy;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
+
 /**
  * Queue Autoscale for Laravel — advanced configuration examples
  *
@@ -21,11 +28,11 @@ return [
         'scale_cooldown_seconds' => 30,     // Quick response to traffic changes
     ],
 
-    'strategy' => \App\QueueAutoscale\Strategies\TimeBasedStrategy::class,
+    'strategy' => TimeBasedStrategy::class,
 
     'policies' => [
-        \App\QueueAutoscale\Policies\SlackNotificationPolicy::class,
-        \App\QueueAutoscale\Policies\MetricsLoggingPolicy::class,
+        SlackNotificationPolicy::class,
+        MetricsLoggingPolicy::class,
     ],
 
     'queue_overrides' => [
@@ -55,7 +62,7 @@ return [
         'scale_cooldown_seconds' => 180,    // Avoid frequent scaling
     ],
 
-    'strategy' => \App\QueueAutoscale\Strategies\CostOptimizedStrategy::class,
+    'strategy' => CostOptimizedStrategy::class,
 
     'policies' => [],  // Minimal overhead
 
@@ -76,11 +83,11 @@ return [
         'scale_cooldown_seconds' => 60,
     ],
 
-    'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
+    'strategy' => PredictiveStrategy::class,
 
     'policies' => [
-        \App\QueueAutoscale\Policies\MetricsLoggingPolicy::class,
-        \App\QueueAutoscale\Policies\SlackNotificationPolicy::class,
+        MetricsLoggingPolicy::class,
+        SlackNotificationPolicy::class,
     ],
 
     'queue_overrides' => [
@@ -121,7 +128,7 @@ return [
         'scale_cooldown_seconds' => 120,    // Let jobs finish before reassessing
     ],
 
-    'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
+    'strategy' => PredictiveStrategy::class,
 
     'queue_overrides' => [
         'video-encoding' => [
@@ -152,10 +159,10 @@ return [
         'scale_cooldown_seconds' => 15,     // Rapid response
     ],
 
-    'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
+    'strategy' => PredictiveStrategy::class,
 
     'policies' => [
-        \App\QueueAutoscale\Policies\MetricsLoggingPolicy::class,
+        MetricsLoggingPolicy::class,
     ],
 
     'evaluation_interval_seconds' => 3,  // Frequent evaluation
@@ -186,10 +193,10 @@ return [
         'scale_cooldown_seconds' => 300,    // Infrequent scaling
     ],
 
-    'strategy' => \App\QueueAutoscale\Strategies\CostOptimizedStrategy::class,
+    'strategy' => CostOptimizedStrategy::class,
 
     'policies' => [
-        \App\QueueAutoscale\Policies\MetricsLoggingPolicy::class,  // For debugging
+        MetricsLoggingPolicy::class,  // For debugging
     ],
 
     'evaluation_interval_seconds' => 60,  // Infrequent checks
@@ -210,7 +217,7 @@ return [
     ],
 
     // Use custom strategy that switches based on time
-    'strategy' => new class implements \Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract
+    'strategy' => new class implements ScalingStrategyContract
     {
         private string $lastReason = '';
 
@@ -222,7 +229,7 @@ return [
 
             // Business hours: 9am-5pm use predictive
             if ($hour >= 9 && $hour < 17) {
-                $strategy = app(\Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class);
+                $strategy = app(PredictiveStrategy::class);
                 $workers = $strategy->calculateTargetWorkers($metrics, $config);
                 $this->lastReason = 'Business hours (predictive): '.$strategy->getLastReason();
                 $this->lastPrediction = $strategy->getLastPrediction();
@@ -231,7 +238,7 @@ return [
             }
 
             // Off hours: use cost-optimized
-            $strategy = new \App\QueueAutoscale\Strategies\CostOptimizedStrategy;
+            $strategy = new CostOptimizedStrategy;
             $workers = $strategy->calculateTargetWorkers($metrics, $config);
             $this->lastReason = 'Off hours (cost-optimized): '.$strategy->getLastReason();
             $this->lastPrediction = $strategy->getLastPrediction();
@@ -265,7 +272,7 @@ return [
         'scale_cooldown_seconds' => 90,
     ],
 
-    'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
+    'strategy' => PredictiveStrategy::class,
 
     // Prefix-based configuration
     'queue_overrides' => [

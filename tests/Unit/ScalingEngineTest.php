@@ -7,6 +7,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
 
@@ -39,7 +40,7 @@ beforeEach(function () {
 it('evaluates scaling decision using strategy', function () {
     $decision = $this->engine->evaluate($this->metrics, $this->config, 5);
 
-    expect($decision)->toBeInstanceOf(\Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision::class)
+    expect($decision)->toBeInstanceOf(ScalingDecision::class)
         ->and($decision->connection)->toBe('redis')
         ->and($decision->queue)->toBe('default')
         ->and($decision->currentWorkers)->toBe(5)

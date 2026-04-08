@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Cbox\LaravelQueueAutoscale\Configuration\ProfilePresets;
 use Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy;
 use Cbox\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
 
 return [
     'enabled' => env('QUEUE_AUTOSCALE_ENABLED', true),
@@ -226,7 +227,7 @@ return [
     | - Complex business rules for scaling decisions
     |
     */
-    'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
+    'strategy' => PredictiveStrategy::class,
 
     /*
     |--------------------------------------------------------------------------

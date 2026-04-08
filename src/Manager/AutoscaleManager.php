@@ -36,7 +36,7 @@ final class AutoscaleManager
     private int $interval = 5;
 
     /**
-     * @var array<string, \Illuminate\Support\Carbon>
+     * @var array<string, Carbon>
      */
     private array $lastScaleTime = [];
 
