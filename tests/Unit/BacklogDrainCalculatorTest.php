@@ -376,3 +376,24 @@ it('has multiplier of 3.0 exactly at 100% SLA progress', function () {
 
     expect($result)->toBe(150.0);
 });
+
+it('uses effective SLA to compute workers when provided', function (): void {
+    $calc = new BacklogDrainCalculator;
+
+    // With effective SLA of 28s and oldest job age of 15s
+    // SLA progress: 15 / 28 = 0.536 (>0.5 threshold)
+    // Time until breach: 28 - 15 = 13s
+    // Base workers: 100 / (13s / 1.5s) = ~11.54
+    // Multiplier at 0.536: 1 + 8*(0.536-0.5)² ≈ 1.01
+    // Result: ~11.65
+    $result = $calc->calculateRequiredWorkers(
+        backlog: 100,
+        oldestJobAge: 15,
+        slaTarget: 30,
+        avgJobTime: 1.5,
+        breachThreshold: 0.5,
+        effectiveSlaSeconds: 28.0,
+    );
+
+    expect($result)->toBeGreaterThan(0);
+});
