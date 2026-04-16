@@ -4,12 +4,22 @@ return [
     'enabled' => true,
     'manager_id' => 'test-host',
     'sla_defaults' => [
-        'max_pickup_time_seconds' => 30,
-        'min_workers' => 1,
-        'max_workers' => 10,
-        'scale_cooldown_seconds' => 60,
+        'max_pickup_time_seconds' => 60,
+        'min_workers' => 5,
+        'max_workers' => 30,
+        'scale_cooldown_seconds' => 90,
     ],
-    'queues' => [],
+    'queues' => [
+        'emails' => [
+            'max_pickup_time_seconds' => 45,
+            'min_workers' => 2,
+            'max_workers' => 15,
+        ],
+        'notifications' => [
+            'connection' => 'redis-high',
+            'min_workers' => 3,
+        ],
+    ],
     'scaling' => [
         'fallback_job_time_seconds' => 2.0,
         'min_arrival_rate_confidence' => 0.5,
