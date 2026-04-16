@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use Cbox\LaravelQueueAutoscale\Contracts\PercentileCalculatorContract;
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
@@ -49,7 +48,7 @@ beforeEach(function () {
         arrivalEstimator: $this->arrivalEstimator,
         spawnTracker: makeNoopSpawnTracker(),
         pickupStore: makeEmptyPickupStore(),
-        percentileCalc: new SortBasedPercentileCalculator(),
+        percentileCalc: new SortBasedPercentileCalculator,
     );
 
     $this->config = makeQueueConfig();
@@ -647,12 +646,12 @@ describe('utilization rate integration', function () {
 describe('constructor requirements', function () {
     it('requires all six dependencies in constructor', function () {
         $strategy = new HybridStrategy(
-            littles: new LittlesLawCalculator(),
-            backlog: new BacklogDrainCalculator(),
-            arrivalEstimator: new ArrivalRateEstimator(),
+            littles: new LittlesLawCalculator,
+            backlog: new BacklogDrainCalculator,
+            arrivalEstimator: new ArrivalRateEstimator,
             spawnTracker: makeNoopSpawnTracker(),
             pickupStore: makeEmptyPickupStore(),
-            percentileCalc: new SortBasedPercentileCalculator(),
+            percentileCalc: new SortBasedPercentileCalculator,
         );
 
         expect($strategy)->toBeInstanceOf(HybridStrategy::class);
