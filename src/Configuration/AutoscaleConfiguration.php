@@ -153,11 +153,4 @@ final readonly class AutoscaleConfiguration
 
         return $result;
     }
-
-    public static function trendScalingPolicy(): TrendScalingPolicy
-    {
-        $policy = (string) self::scalingConfig('trend_policy', 'moderate');
-
-        return TrendScalingPolicy::tryFrom($policy) ?? TrendScalingPolicy::MODERATE;
-    }
 }
