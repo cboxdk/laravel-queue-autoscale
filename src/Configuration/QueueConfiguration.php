@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Configuration;
 
+use Cbox\LaravelQueueAutoscale\Contracts\ForecasterContract;
+use Cbox\LaravelQueueAutoscale\Contracts\ForecastPolicyContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ProfileContract;
 
 final readonly class QueueConfiguration
@@ -23,6 +25,14 @@ final readonly class QueueConfiguration
         $override = config("queue-autoscale.queues.{$queue}", []);
 
         $overrideArray = self::resolveProfileOrArray($override);
+
+        /** @var array{
+         *     sla: array{target_seconds: int, percentile: int, window_seconds: int, min_samples: int},
+         *     forecast: array{forecaster: class-string<ForecasterContract>, policy: class-string<ForecastPolicyContract>, horizon_seconds: int, history_seconds: int},
+         *     spawn_compensation: array{enabled: bool, fallback_seconds: float, min_samples: int, ema_alpha: float},
+         *     workers: array{min: int, max: int, tries: int, timeout_seconds: int, sleep_seconds: int, shutdown_timeout_seconds: int},
+         * } $merged
+         */
         $merged = self::deepMerge($defaults, $overrideArray);
 
         return new self(
@@ -35,8 +45,8 @@ final readonly class QueueConfiguration
                 minSamples: (int) $merged['sla']['min_samples'],
             ),
             forecast: new ForecastConfiguration(
-                forecasterClass: (string) $merged['forecast']['forecaster'],
-                policyClass: (string) $merged['forecast']['policy'],
+                forecasterClass: $merged['forecast']['forecaster'],
+                policyClass: $merged['forecast']['policy'],
                 horizonSeconds: (int) $merged['forecast']['horizon_seconds'],
                 historySeconds: (int) $merged['forecast']['history_seconds'],
             ),
@@ -81,7 +91,10 @@ final readonly class QueueConfiguration
     {
         foreach ($override as $key => $value) {
             if (is_array($value) && isset($base[$key]) && is_array($base[$key])) {
-                $base[$key] = self::deepMerge($base[$key], $value);
+                /** @var array<string, mixed> $baseKey */
+                $baseKey = $base[$key];
+                /** @var array<string, mixed> $value */
+                $base[$key] = self::deepMerge($baseKey, $value);
             } else {
                 $base[$key] = $value;
             }
