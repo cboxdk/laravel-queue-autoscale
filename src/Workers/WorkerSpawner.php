@@ -5,12 +5,18 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Workers;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Symfony\Component\Process\Process;
 
 final readonly class WorkerSpawner
 {
+    public function __construct(
+        private SpawnLatencyTrackerContract $spawnLatencyTracker,
+    ) {}
+
     /**
      * Spawn N queue:work worker processes
      *
@@ -24,6 +30,8 @@ final readonly class WorkerSpawner
         $workers = collect();
 
         for ($i = 0; $i < $count; $i++) {
+            $workerId = (string) Str::uuid();
+
             $process = new Process([
                 PHP_BINARY,
                 base_path('artisan'),
@@ -40,6 +48,10 @@ final readonly class WorkerSpawner
                 'LARAVEL_AUTOSCALE_WORKER' => 'true',
                 'AUTOSCALE_MANAGER_ID' => AutoscaleConfiguration::managerId(),
             ]);
+
+            // Record the spawn timestamp before starting the process so latency
+            // measurement begins at the moment we initiate the worker.
+            $this->spawnLatencyTracker->recordSpawn($workerId, $connection, $queue);
 
             try {
                 $process->start();
