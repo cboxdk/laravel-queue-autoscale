@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Scaling\Calculators;
 
+use Cbox\LaravelQueueAutoscale\Contracts\ForecasterContract;
+use Cbox\LaravelQueueAutoscale\Contracts\ForecastPolicyContract;
+
 /**
  * Estimates job arrival rate from backlog changes over time
  *
@@ -24,10 +27,16 @@ final class ArrivalRateEstimator
      */
     private array $history = [];
 
+    private ?ForecasterContract $forecaster = null;
+
+    private ?ForecastPolicyContract $policy = null;
+
+    private int $forecastHorizonSeconds = 60;
+
     /**
      * Maximum number of snapshots to retain per queue
      */
-    private const MAX_SNAPSHOTS = 5;
+    private const MAX_SNAPSHOTS = 30;
 
     /**
      * Minimum interval between measurements (seconds) to avoid noise
@@ -37,7 +46,7 @@ final class ArrivalRateEstimator
     /**
      * Maximum age of historical data before it's considered stale (seconds)
      */
-    private const MAX_HISTORY_AGE = 60.0;
+    private const MAX_HISTORY_AGE = 300.0;
 
     /**
      * Estimate arrival rate for a queue
@@ -116,6 +125,24 @@ final class ArrivalRateEstimator
         $overallDelta = $currentBacklog - $oldest['backlog'];
         $confidence = $this->calculateConfidence($totalInterval, $overallDelta, $pairCount);
 
+        $observedRate = $arrivalRate;
+
+        if ($this->forecaster !== null && $this->policy !== null) {
+            $blended = $this->maybeBlendForecast($snapshots, $processingRate, $observedRate);
+            if ($blended !== null) {
+                return [
+                    'rate' => $blended['rate'],
+                    'confidence' => $confidence,
+                    'source' => sprintf(
+                        'forecast_blended: observed=%.2f/s forecast=%.2f/s R²=%.2f',
+                        $observedRate,
+                        $blended['forecast'],
+                        $blended['r_squared'],
+                    ),
+                ];
+            }
+        }
+
         return [
             'rate' => $arrivalRate,
             'confidence' => $confidence,
@@ -127,6 +154,64 @@ final class ArrivalRateEstimator
                 $totalInterval,
                 $pairCount + 1,
             ),
+        ];
+    }
+
+    public function setForecaster(
+        ForecasterContract $forecaster,
+        ForecastPolicyContract $policy,
+        int $horizonSeconds,
+    ): void {
+        $this->forecaster = $forecaster;
+        $this->policy = $policy;
+        $this->forecastHorizonSeconds = $horizonSeconds;
+    }
+
+    public function hasForecaster(): bool
+    {
+        return $this->forecaster !== null;
+    }
+
+    /**
+     * @param  list<array{backlog: int, timestamp: float}>  $snapshots
+     * @return array{rate: float, forecast: float, r_squared: float}|null
+     */
+    private function maybeBlendForecast(array $snapshots, float $processingRate, float $observedRate): ?array
+    {
+        if ($this->forecaster === null || $this->policy === null) {
+            return null;
+        }
+
+        if (count($snapshots) < 2) {
+            return null;
+        }
+
+        $history = [];
+        for ($i = 1; $i < count($snapshots); $i++) {
+            $interval = $snapshots[$i]['timestamp'] - $snapshots[$i - 1]['timestamp'];
+            if ($interval < 0.001) {
+                continue;
+            }
+            $growth = ($snapshots[$i]['backlog'] - $snapshots[$i - 1]['backlog']) / $interval;
+            $history[] = [
+                'timestamp' => $snapshots[$i]['timestamp'],
+                'rate' => max(0.0, $processingRate + $growth),
+            ];
+        }
+
+        $forecast = $this->forecaster->forecast($history, $this->forecastHorizonSeconds);
+
+        if (! $forecast->hasSufficientData || $forecast->rSquared < $this->policy->minRSquared()) {
+            return null;
+        }
+
+        $weight = $this->policy->forecastWeight();
+        $blended = ($weight * $forecast->projectedRate) + ((1 - $weight) * $observedRate);
+
+        return [
+            'rate' => max(0.0, $blended),
+            'forecast' => $forecast->projectedRate,
+            'r_squared' => $forecast->rSquared,
         ];
     }
 

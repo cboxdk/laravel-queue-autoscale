@@ -79,8 +79,8 @@ describe('interval validation', function () {
     it('treats old history as stale and prunes it', function () {
         $this->estimator->estimate('redis:default', 100, 5.0);
 
-        // Shift beyond MAX_HISTORY_AGE (60s)
-        shiftHistory($this->estimator, 'redis:default', -120);
+        // Shift beyond MAX_HISTORY_AGE (300s)
+        shiftHistory($this->estimator, 'redis:default', -400);
 
         // The stale snapshot will be pruned, leaving only the new one
         $result = $this->estimator->estimate('redis:default', 150, 5.0);
@@ -193,16 +193,16 @@ describe('sliding window smoothing', function () {
     });
 
     it('prunes snapshots beyond maximum window size', function () {
-        // Add more than MAX_SNAPSHOTS (5)
-        for ($i = 0; $i < 7; $i++) {
+        // Add more than MAX_SNAPSHOTS (30)
+        for ($i = 0; $i < 35; $i++) {
             $this->estimator->estimate('redis:default', 100 + ($i * 10), 5.0);
-            if ($i < 6) {
+            if ($i < 34) {
                 shiftHistory($this->estimator, 'redis:default', -5);
             }
         }
 
         $history = $this->estimator->getHistory();
-        expect(count($history['redis:default']))->toBeLessThanOrEqual(5);
+        expect(count($history['redis:default']))->toBeLessThanOrEqual(30);
     });
 });
 
