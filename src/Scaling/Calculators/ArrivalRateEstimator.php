@@ -316,4 +316,17 @@ final class ArrivalRateEstimator
     {
         return $this->history;
     }
+
+    /**
+     * Seed history for a queue with synthetic snapshots (for testing/simulation)
+     *
+     * Allows tests to inject a pre-built history so the forecaster has enough
+     * samples to engage from the start of a simulation run.
+     *
+     * @param  list<array{backlog: int, timestamp: float}>  $snapshots
+     */
+    public function seedHistory(string $queueKey, array $snapshots): void
+    {
+        $this->history[$queueKey] = $snapshots;
+    }
 }

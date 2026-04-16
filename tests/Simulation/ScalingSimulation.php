@@ -54,6 +54,7 @@ final class ScalingSimulation
     public function __construct(
         ?WorkloadSimulator $simulator = null,
         ?QueueConfiguration $config = null,
+        ?ArrivalRateEstimator $arrivalEstimator = null,
     ) {
         $this->simulator = $simulator ?? new WorkloadSimulator;
 
@@ -88,8 +89,8 @@ final class ScalingSimulation
             ),
         );
 
-        // Create fresh arrival rate estimator for each simulation
-        $this->arrivalEstimator = new ArrivalRateEstimator;
+        // Use provided estimator or create a fresh one for this simulation
+        $this->arrivalEstimator = $arrivalEstimator ?? new ArrivalRateEstimator;
 
         $spawnTracker = new class implements SpawnLatencyTrackerContract
         {
