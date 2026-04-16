@@ -28,7 +28,7 @@ final class SimulationResult
      */
     public function getSlaCompliance(): float
     {
-        return $this->simulator->calculateSlaCompliance($this->config->maxPickupTimeSeconds);
+        return $this->simulator->calculateSlaCompliance($this->config->sla->targetSeconds);
     }
 
     /**
@@ -36,7 +36,7 @@ final class SimulationResult
      */
     public function hadNoSlaBreaches(): bool
     {
-        return $this->simulator->getPeakJobAge() <= $this->config->maxPickupTimeSeconds;
+        return $this->simulator->getPeakJobAge() <= $this->config->sla->targetSeconds;
     }
 
     /**
@@ -246,7 +246,7 @@ final class SimulationResult
     {
         return [
             'duration_ticks' => $this->durationTicks,
-            'sla_target' => $this->config->maxPickupTimeSeconds,
+            'sla_target' => $this->config->sla->targetSeconds,
             'sla_compliance' => round($this->getSlaCompliance(), 1),
             'peak_job_age' => round($this->getPeakJobAge(), 1),
             'peak_backlog' => round($this->getPeakBacklog(), 0),

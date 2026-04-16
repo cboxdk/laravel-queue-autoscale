@@ -2,7 +2,11 @@
 
 declare(strict_types=1);
 
-use Cbox\LaravelQueueAutoscale\Configuration\ProfilePresets;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BackgroundProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BurstyProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\HighVolumeProfile;
 use Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy;
 use Cbox\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
@@ -20,42 +24,39 @@ return [
     | suitable for typical web applications with mixed workloads.
     |
     | Available Profiles:
-    | - ProfilePresets::critical()    - Mission-critical (10s SLA, 5-50 workers)
-    | - ProfilePresets::highVolume()  - High-throughput (20s SLA, 3-40 workers)
-    | - ProfilePresets::balanced()    - General-purpose (30s SLA, 1-10 workers) [DEFAULT]
-    | - ProfilePresets::bursty()      - Sporadic spikes (60s SLA, 0-100 workers)
-    | - ProfilePresets::background()  - Low-priority (300s SLA, 0-5 workers)
+    | - CriticalProfile::class    - Mission-critical (10s SLA, 5-50 workers)
+    | - HighVolumeProfile::class  - High-throughput (20s SLA, 3-40 workers)
+    | - BalancedProfile::class    - General-purpose (30s SLA, 1-10 workers) [DEFAULT]
+    | - BurstyProfile::class      - Sporadic spikes (60s SLA, 0-100 workers)
+    | - BackgroundProfile::class  - Low-priority (300s SLA, 0-5 workers)
     |
     */
-    'sla_defaults' => ProfilePresets::balanced(),
+    'sla_defaults' => BalancedProfile::class,
 
     /*
     |--------------------------------------------------------------------------
     | Queue-Specific Overrides
     |--------------------------------------------------------------------------
     |
-    | Override settings for specific queues. You can use ProfilePresets or
-    | customize individual settings.
+    | Override settings for specific queues. You can use Profile classes or
+    | customize individual settings with array overrides (deep-merged on top
+    | of the default profile).
     |
     | Examples:
     |
     | 'queues' => [
-    |     // Use a preset profile
-    |     'payments' => ProfilePresets::critical(),
-    |     'emails' => ProfilePresets::highVolume(),
-    |     'cleanup' => ProfilePresets::background(),
+    |     // Use a preset profile class
+    |     'payments' => CriticalProfile::class,
+    |     'emails' => HighVolumeProfile::class,
+    |     'cleanup' => BackgroundProfile::class,
     |
-    |     // Customize a profile
-    |     'custom' => array_merge(ProfilePresets::balanced(), [
-    |         'max_workers' => 20,
-    |     ]),
+    |     // Override specific keys on top of the default profile
+    |     'custom' => ['workers' => ['max' => 20]],
     |
-    |     // Full manual configuration
+    |     // Full manual configuration (nested array matching profile structure)
     |     'manual' => [
-    |         'max_pickup_time_seconds' => 45,
-    |         'min_workers' => 2,
-    |         'max_workers' => 15,
-    |         'scale_cooldown_seconds' => 90,
+    |         'sla' => ['target_seconds' => 45],
+    |         'workers' => ['min' => 2, 'max' => 15],
     |     ],
     | ],
     |
@@ -96,6 +97,7 @@ return [
         'forecast_horizon_seconds' => 60,       // 1 minute ahead prediction
         'breach_threshold' => 0.5,              // Act at 50% of SLA for proactive scaling
         'trend_policy' => env('QUEUE_AUTOSCALE_TREND_POLICY', 'moderate'),
+        'cooldown_seconds' => 60,               // Anti-flapping cooldown between direction reversals
     ],
 
     /*

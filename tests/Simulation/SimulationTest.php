@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Tests\Simulation\ScalingSimulation;
 use Cbox\LaravelQueueAutoscale\Tests\Simulation\WorkloadScenarios;
 use Cbox\LaravelQueueAutoscale\Tests\Simulation\WorkloadSimulator;
@@ -22,14 +21,7 @@ describe('Steady State', function () {
     it('maintains stable worker count under constant load', function () {
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 5.0, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: 1,
-                maxWorkers: 20,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['maxWorkers' => 20]),
         );
 
         $result = $simulation
@@ -65,14 +57,7 @@ describe('Traffic Spike', function () {
     it('scales up quickly during sudden spike', function () {
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 5.0, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: 1,
-                maxWorkers: 30,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['maxWorkers' => 30]),
         );
 
         $result = $simulation
@@ -94,14 +79,7 @@ describe('Traffic Spike', function () {
     it('scales back down after spike ends', function () {
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 5.0, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: 1,
-                maxWorkers: 30,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['maxWorkers' => 30]),
         );
 
         $result = $simulation
@@ -120,14 +98,7 @@ describe('Traffic Spike', function () {
     it('handles extreme spike without crashing', function () {
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 5.0, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: 1,
-                maxWorkers: 50,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['maxWorkers' => 50]),
         );
 
         $result = $simulation
@@ -148,14 +119,7 @@ describe('Gradual Growth', function () {
     it('scales up gradually following growth trend', function () {
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 3.0, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: 1,
-                maxWorkers: 30,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['maxWorkers' => 30]),
         );
 
         $result = $simulation
@@ -195,14 +159,7 @@ describe('Traffic Decline', function () {
     it('scales down as traffic decreases', function () {
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 5.0, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: 1,
-                maxWorkers: 30,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['maxWorkers' => 30]),
         );
 
         $result = $simulation
@@ -239,14 +196,7 @@ describe('Bursty Traffic', function () {
     it('avoids excessive thrashing with bursty load', function () {
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 5.0, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: 1,
-                maxWorkers: 20,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['maxWorkers' => 20]),
         );
 
         $result = $simulation
@@ -284,14 +234,7 @@ describe('Cold Start', function () {
     it('bootstraps correctly from zero load', function () {
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 5.0, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: 1,
-                maxWorkers: 20,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['maxWorkers' => 20]),
         );
 
         $result = $simulation
@@ -314,14 +257,7 @@ describe('Cold Start', function () {
     it('maintains minimum workers during zero load', function () {
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 0.0, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: 2,
-                maxWorkers: 20,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['minWorkers' => 2, 'maxWorkers' => 20]),
         );
 
         $result = $simulation
@@ -338,14 +274,7 @@ describe('SLA Pressure', function () {
     it('scales proactively under sustained pressure', function () {
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 5.0, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: 1,
-                maxWorkers: 20,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['maxWorkers' => 20]),
         );
 
         $result = $simulation
@@ -363,14 +292,7 @@ describe('SLA Pressure', function () {
     it('prevents SLA breach before it happens', function () {
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 5.0, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: 1,
-                maxWorkers: 20,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['maxWorkers' => 20]),
         );
 
         $result = $simulation
@@ -387,14 +309,7 @@ describe('Wave Pattern', function () {
     it('follows sinusoidal load smoothly', function () {
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 5.0, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: 1,
-                maxWorkers: 20,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['maxWorkers' => 20]),
         );
 
         $result = $simulation
@@ -415,14 +330,7 @@ describe('Morning Rush', function () {
     it('handles exponential ramp-up then plateau', function () {
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 3.0, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: 1,
-                maxWorkers: 30,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['maxWorkers' => 30]),
         );
 
         $result = $simulation
@@ -465,14 +373,7 @@ describe('Configuration Respect', function () {
         $maxWorkers = 10;
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 20.0, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: 1,
-                maxWorkers: $maxWorkers,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['maxWorkers' => $maxWorkers]),
         );
 
         $result = $simulation
@@ -487,14 +388,7 @@ describe('Configuration Respect', function () {
         $minWorkers = 3;
         $simulation = new ScalingSimulation(
             simulator: new WorkloadSimulator(baseArrivalRate: 0.1, avgJobTime: 1.0),
-            config: new QueueConfiguration(
-                connection: 'redis',
-                queue: 'default',
-                maxPickupTimeSeconds: 30,
-                minWorkers: $minWorkers,
-                maxWorkers: 20,
-                scaleCooldownSeconds: 0,
-            ),
+            config: makeQueueConfig(['minWorkers' => $minWorkers, 'maxWorkers' => 20]),
         );
 
         $result = $simulation

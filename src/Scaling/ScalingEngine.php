@@ -52,8 +52,8 @@ final readonly class ScalingEngine
 
         // 4. Apply config bounds (min/max workers)
         $beforeConfigBounds = $targetWorkers;
-        $targetWorkers = max($targetWorkers, $config->minWorkers);
-        $targetWorkers = min($targetWorkers, $config->maxWorkers);
+        $targetWorkers = max($targetWorkers, $config->workers->min);
+        $targetWorkers = min($targetWorkers, $config->workers->max);
 
         // 5. Determine final limiting factor after all constraints
         $finalLimitingFactor = $this->determineFinalLimitingFactor(
@@ -61,15 +61,15 @@ final readonly class ScalingEngine
             $strategyRecommendation,
             $beforeConfigBounds,
             $targetWorkers,
-            $config->minWorkers,
-            $config->maxWorkers
+            $config->workers->min,
+            $config->workers->max
         );
 
         // 6. Create final capacity result with config constraint applied
         $finalCapacityResult = new CapacityCalculationResult(
             maxWorkersByCpu: $capacityResult->maxWorkersByCpu,
             maxWorkersByMemory: $capacityResult->maxWorkersByMemory,
-            maxWorkersByConfig: $config->maxWorkers,
+            maxWorkersByConfig: $config->workers->max,
             finalMaxWorkers: $targetWorkers,
             limitingFactor: $finalLimitingFactor,
             details: $capacityResult->details
@@ -82,7 +82,7 @@ final readonly class ScalingEngine
             targetWorkers: $targetWorkers,
             reason: $this->strategy->getLastReason(),
             predictedPickupTime: $this->strategy->getLastPrediction(),
-            slaTarget: $config->maxPickupTimeSeconds,
+            slaTarget: $config->sla->targetSeconds,
             capacity: $finalCapacityResult,
         );
     }

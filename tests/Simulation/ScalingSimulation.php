@@ -4,10 +4,16 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Tests\Simulation;
 
+use Cbox\LaravelQueueAutoscale\Configuration\ForecastConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\SlaConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\ModerateForecastPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
@@ -51,10 +57,32 @@ final class ScalingSimulation
         $this->config = $config ?? new QueueConfiguration(
             connection: 'redis',
             queue: 'default',
-            maxPickupTimeSeconds: 30,
-            minWorkers: 1,
-            maxWorkers: 20,
-            scaleCooldownSeconds: 0, // No cooldown in simulation
+            sla: new SlaConfiguration(
+                targetSeconds: 30,
+                percentile: 95,
+                windowSeconds: 300,
+                minSamples: 20,
+            ),
+            forecast: new ForecastConfiguration(
+                forecasterClass: LinearRegressionForecaster::class,
+                policyClass: ModerateForecastPolicy::class,
+                horizonSeconds: 60,
+                historySeconds: 300,
+            ),
+            spawnCompensation: new SpawnCompensationConfiguration(
+                enabled: true,
+                fallbackSeconds: 2.0,
+                minSamples: 5,
+                emaAlpha: 0.2,
+            ),
+            workers: new WorkerConfiguration(
+                min: 1,
+                max: 20,
+                tries: 3,
+                timeoutSeconds: 3600,
+                sleepSeconds: 3,
+                shutdownTimeoutSeconds: 30,
+            ),
         );
 
         // Create fresh arrival rate estimator for each simulation
@@ -123,13 +151,13 @@ final class ScalingSimulation
         $this->arrivalEstimator->reset();
 
         // Set initial workers to minimum
-        $this->simulator->setWorkers($this->config->minWorkers);
+        $this->simulator->setWorkers($this->config->workers->min);
 
         for ($tick = 1; $tick <= $durationTicks; $tick++) {
             // Apply pending worker changes
             if ($this->pendingWorkerChange !== 0 && $tick >= $this->pendingChangeAtTick) {
                 $currentWorkers = $this->simulator->getActiveWorkers();
-                $newWorkers = max($this->config->minWorkers, min($this->config->maxWorkers, $currentWorkers + $this->pendingWorkerChange));
+                $newWorkers = max($this->config->workers->min, min($this->config->workers->max, $currentWorkers + $this->pendingWorkerChange));
                 $this->simulator->setWorkers($newWorkers);
                 $this->pendingWorkerChange = 0;
             }

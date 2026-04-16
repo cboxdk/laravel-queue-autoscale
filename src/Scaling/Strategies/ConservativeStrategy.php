@@ -65,7 +65,7 @@ final class ConservativeStrategy implements ScalingStrategyContract
         $backlogDrainWorkers = $this->backlog->calculateRequiredWorkers(
             backlog: $backlogSize,
             oldestJobAge: $oldestJobAge,
-            slaTarget: $config->maxPickupTimeSeconds,
+            slaTarget: $config->sla->targetSeconds,
             avgJobTime: $avgJobTime,
             breachThreshold: self::BREACH_THRESHOLD, // More proactive than default
         );

@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
@@ -14,14 +13,7 @@ beforeEach(function () {
     $this->arrivalEstimator = new ArrivalRateEstimator;
     $this->strategy = new PredictiveStrategy($this->littles, $this->backlog, $this->arrivalEstimator);
 
-    $this->config = new QueueConfiguration(
-        connection: 'redis',
-        queue: 'default',
-        maxPickupTimeSeconds: 30,
-        minWorkers: 1,
-        maxWorkers: 10,
-        scaleCooldownSeconds: 60,
-    );
+    $this->config = makeQueueConfig();
 });
 
 afterEach(function () {

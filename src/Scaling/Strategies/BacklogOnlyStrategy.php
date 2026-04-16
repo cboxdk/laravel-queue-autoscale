@@ -50,7 +50,7 @@ final class BacklogOnlyStrategy implements ScalingStrategyContract
         $targetWorkers = $this->backlog->calculateRequiredWorkers(
             backlog: $backlogSize,
             oldestJobAge: $oldestJobAge,
-            slaTarget: $config->maxPickupTimeSeconds,
+            slaTarget: $config->sla->targetSeconds,
             avgJobTime: $avgJobTime,
             breachThreshold: AutoscaleConfiguration::breachThreshold(),
         );
@@ -58,7 +58,7 @@ final class BacklogOnlyStrategy implements ScalingStrategyContract
         $this->lastCalculation = [
             'backlog' => $backlogSize,
             'oldest_job_age' => $oldestJobAge,
-            'sla_target' => $config->maxPickupTimeSeconds,
+            'sla_target' => $config->sla->targetSeconds,
             'avg_job_time' => $avgJobTime,
             'target_workers' => $targetWorkers,
         ];

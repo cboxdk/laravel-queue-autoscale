@@ -25,49 +25,145 @@ parameters:
 			path: src/Configuration/AutoscaleConfiguration.php
 
 		-
-			message: '#^Cannot access offset ''max_pickup_time_seconds'' on mixed\.$#'
+			message: '#^Cannot access offset ''ema_alpha'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''enabled'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''fallback_seconds'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''forecaster'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''history_seconds'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''horizon_seconds'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''max'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''min'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''min_samples'' on mixed\.$#'
 			identifier: offsetAccess.nonOffsetAccessible
 			count: 2
 			path: src/Configuration/QueueConfiguration.php
 
 		-
-			message: '#^Cannot access offset ''max_workers'' on mixed\.$#'
+			message: '#^Cannot access offset ''percentile'' on mixed\.$#'
 			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''policy'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''shutdown_timeout_seconds'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''sleep_seconds'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''target_seconds'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''timeout_seconds'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''tries'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot access offset ''window_seconds'' on mixed\.$#'
+			identifier: offsetAccess.nonOffsetAccessible
+			count: 1
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot cast mixed to float\.$#'
+			identifier: cast.double
 			count: 2
 			path: src/Configuration/QueueConfiguration.php
 
 		-
-			message: '#^Cannot access offset ''min_workers'' on mixed\.$#'
-			identifier: offsetAccess.nonOffsetAccessible
+			message: '#^Cannot cast mixed to int\.$#'
+			identifier: cast.int
+			count: 13
+			path: src/Configuration/QueueConfiguration.php
+
+		-
+			message: '#^Cannot cast mixed to string\.$#'
+			identifier: cast.string
 			count: 2
 			path: src/Configuration/QueueConfiguration.php
 
 		-
-			message: '#^Cannot access offset ''scale_cooldown_seconds'' on mixed\.$#'
-			identifier: offsetAccess.nonOffsetAccessible
-			count: 2
-			path: src/Configuration/QueueConfiguration.php
-
-		-
-			message: '#^Parameter \$maxPickupTimeSeconds of class Cbox\\LaravelQueueAutoscale\\Configuration\\QueueConfiguration constructor expects int, mixed given\.$#'
+			message: '#^Parameter \#1 \$base of static method Cbox\\LaravelQueueAutoscale\\Configuration\\QueueConfiguration\:\:deepMerge\(\) expects array\<string, mixed\>, array\<mixed, mixed\> given\.$#'
 			identifier: argument.type
 			count: 1
 			path: src/Configuration/QueueConfiguration.php
 
 		-
-			message: '#^Parameter \$maxWorkers of class Cbox\\LaravelQueueAutoscale\\Configuration\\QueueConfiguration constructor expects int, mixed given\.$#'
+			message: '#^Parameter \#2 \$override of static method Cbox\\LaravelQueueAutoscale\\Configuration\\QueueConfiguration\:\:deepMerge\(\) expects array\<string, mixed\>, array\<mixed, mixed\> given\.$#'
 			identifier: argument.type
 			count: 1
 			path: src/Configuration/QueueConfiguration.php
 
 		-
-			message: '#^Parameter \$minWorkers of class Cbox\\LaravelQueueAutoscale\\Configuration\\QueueConfiguration constructor expects int, mixed given\.$#'
+			message: '#^Parameter \$forecasterClass of class Cbox\\LaravelQueueAutoscale\\Configuration\\ForecastConfiguration constructor expects class\-string\<Cbox\\LaravelQueueAutoscale\\Contracts\\ForecasterContract\>, string given\.$#'
 			identifier: argument.type
 			count: 1
 			path: src/Configuration/QueueConfiguration.php
 
 		-
-			message: '#^Parameter \$scaleCooldownSeconds of class Cbox\\LaravelQueueAutoscale\\Configuration\\QueueConfiguration constructor expects int, mixed given\.$#'
+			message: '#^Parameter \$policyClass of class Cbox\\LaravelQueueAutoscale\\Configuration\\ForecastConfiguration constructor expects class\-string\<Cbox\\LaravelQueueAutoscale\\Contracts\\ForecastPolicyContract\>, string given\.$#'
 			identifier: argument.type
 			count: 1
 			path: src/Configuration/QueueConfiguration.php
@@ -81,7 +177,7 @@ parameters:
 		-
 			message: '#^Cannot cast mixed to int\.$#'
 			identifier: cast.int
-			count: 6
+			count: 7
 			path: src/Manager/AutoscaleManager.php
 
 		-
@@ -89,6 +185,18 @@ parameters:
 			identifier: cast.string
 			count: 1
 			path: src/Manager/AutoscaleManager.php
+
+		-
+			message: '#^Property Cbox\\LaravelQueueMetrics\\DataTransferObjects\\QueueMetricsData\:\:\$failureRate \(float\) on left side of \?\? is not nullable\.$#'
+			identifier: nullCoalesce.property
+			count: 1
+			path: src/Scaling/Strategies/PredictiveStrategy.php
+
+		-
+			message: '#^Property Cbox\\LaravelQueueMetrics\\DataTransferObjects\\QueueMetricsData\:\:\$utilizationRate \(float\) on left side of \?\? is not nullable\.$#'
+			identifier: nullCoalesce.property
+			count: 1
+			path: src/Scaling/Strategies/PredictiveStrategy.php
 
 		-
 			message: '#^If condition is always true\.$#'

@@ -345,10 +345,10 @@ final class AutoscaleManager
         $decision = $this->engine->evaluate($metrics, $config, $currentWorkers, $totalPoolWorkers);
 
         // 4. Check for SLA breach
-        $isBreaching = $metrics->oldestJobAge > 0 && $metrics->oldestJobAge >= $config->maxPickupTimeSeconds;
+        $isBreaching = $metrics->oldestJobAge > 0 && $metrics->oldestJobAge >= $config->sla->targetSeconds;
 
         if ($isBreaching) {
-            $this->verbose("  🚨 SLA BREACH: oldest_age={$metrics->oldestJobAge}s >= SLA={$config->maxPickupTimeSeconds}s", 'error');
+            $this->verbose("  🚨 SLA BREACH: oldest_age={$metrics->oldestJobAge}s >= SLA={$config->sla->targetSeconds}s", 'error');
         }
 
         // 5. Anti-flapping check: prevent direction reversals within cooldown
@@ -360,7 +360,8 @@ final class AutoscaleManager
         // Clear stale direction: once cooldown has fully elapsed, the last direction
         // is no longer relevant. This prevents HOLD→HOLD→...→DOWN from being blocked
         // by an UP that happened minutes ago.
-        if ($lastDirection !== null && ! $this->inCooldown($key, $config->scaleCooldownSeconds)) {
+        $scaleCooldownSeconds = (int) config('queue-autoscale.scaling.cooldown_seconds', 60);
+        if ($lastDirection !== null && ! $this->inCooldown($key, $scaleCooldownSeconds)) {
             unset($this->lastScaleDirection[$key]);
             $lastDirection = null;
         }
@@ -370,8 +371,8 @@ final class AutoscaleManager
             // Always allow scale-up during SLA breach - protecting SLA takes priority over anti-flapping
             $isBreachScaleUp = $currentDirection === 'up' && $isBreaching;
 
-            if (! $isBreachScaleUp && $this->inCooldown($key, $config->scaleCooldownSeconds)) {
-                $remaining = $this->getCooldownRemaining($key, $config->scaleCooldownSeconds);
+            if (! $isBreachScaleUp && $this->inCooldown($key, $scaleCooldownSeconds)) {
+                $remaining = $this->getCooldownRemaining($key, $scaleCooldownSeconds);
                 $this->verbose("  ⏸️  Anti-flapping: cannot reverse direction during cooldown ({$remaining}s remaining)", 'debug');
 
                 return;
@@ -414,7 +415,7 @@ final class AutoscaleManager
         }
 
         // 6b. Store queue stats for renderer
-        $slaStatus = $isBreaching ? 'breached' : ($metrics->oldestJobAge > $config->maxPickupTimeSeconds * 0.8 ? 'warning' : 'ok');
+        $slaStatus = $isBreaching ? 'breached' : ($metrics->oldestJobAge > $config->sla->targetSeconds * 0.8 ? 'warning' : 'ok');
         $this->currentQueueStats[$key] = new QueueStats(
             connection: $connection,
             queue: $queue,
@@ -422,7 +423,7 @@ final class AutoscaleManager
             pending: $metrics->pending,
             throughputPerMinute: $metrics->throughputPerMinute,
             oldestJobAge: $metrics->oldestJobAge,
-            slaTarget: $config->maxPickupTimeSeconds,
+            slaTarget: $config->sla->targetSeconds,
             slaStatus: $slaStatus,
             activeWorkers: $currentWorkers,
             targetWorkers: $decision->targetWorkers,
@@ -467,7 +468,7 @@ final class AutoscaleManager
                 connection: $config->connection,
                 queue: $config->queue,
                 oldestJobAge: $metrics->oldestJobAge,
-                slaTarget: $config->maxPickupTimeSeconds,
+                slaTarget: $config->sla->targetSeconds,
                 pending: $metrics->pending,
                 activeWorkers: $metrics->activeWorkers,
             ));
@@ -478,7 +479,7 @@ final class AutoscaleManager
                 connection: $config->connection,
                 queue: $config->queue,
                 currentJobAge: $metrics->oldestJobAge,
-                slaTarget: $config->maxPickupTimeSeconds,
+                slaTarget: $config->sla->targetSeconds,
                 pending: $metrics->pending,
                 activeWorkers: $metrics->activeWorkers,
             ));

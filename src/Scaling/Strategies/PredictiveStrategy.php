@@ -82,7 +82,7 @@ final class PredictiveStrategy implements ScalingStrategyContract
                 $activeWorkers,
                 $oldestJobAge,
                 $avgJobTime,
-                $config->maxPickupTimeSeconds
+                $config->sla->targetSeconds
             );
 
             if ($arrivalRate > 0.0) {
@@ -131,7 +131,7 @@ final class PredictiveStrategy implements ScalingStrategyContract
         $backlogDrainWorkers = $this->backlog->calculateRequiredWorkers(
             backlog: $backlogSize,
             oldestJobAge: $oldestJobAge,
-            slaTarget: $config->maxPickupTimeSeconds,
+            slaTarget: $config->sla->targetSeconds,
             avgJobTime: $avgJobTime,
             breachThreshold: AutoscaleConfiguration::breachThreshold(),
         );
