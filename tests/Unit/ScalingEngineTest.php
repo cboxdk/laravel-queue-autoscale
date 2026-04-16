@@ -2,19 +2,47 @@
 
 declare(strict_types=1);
 
+use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
+use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
+use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
-use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
+use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
 
 beforeEach(function () {
-    $this->strategy = new PredictiveStrategy(
-        new LittlesLawCalculator,
-        new BacklogDrainCalculator,
-        new ArrivalRateEstimator,
+    $spawnTracker = new class implements SpawnLatencyTrackerContract
+    {
+        public function recordSpawn(string $workerId, string $connection, string $queue): void {}
+
+        public function recordFirstPickup(string $workerId, float $pickupTimestamp): void {}
+
+        public function currentLatency(string $connection, string $queue): float
+        {
+            return 0.0;
+        }
+    };
+
+    $pickupStore = new class implements PickupTimeStoreContract
+    {
+        public function record(string $connection, string $queue, float $timestamp, float $pickupSeconds): void {}
+
+        public function recentSamples(string $connection, string $queue, int $windowSeconds): array
+        {
+            return [];
+        }
+    };
+
+    $this->strategy = new HybridStrategy(
+        littles: new LittlesLawCalculator,
+        backlog: new BacklogDrainCalculator,
+        arrivalEstimator: new ArrivalRateEstimator,
+        spawnTracker: $spawnTracker,
+        pickupStore: $pickupStore,
+        percentileCalc: new SortBasedPercentileCalculator,
     );
     $this->capacity = new CapacityCalculator;
     $this->engine = new ScalingEngine($this->strategy, $this->capacity);

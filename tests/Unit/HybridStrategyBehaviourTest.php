@@ -2,16 +2,55 @@
 
 declare(strict_types=1);
 
+use Cbox\LaravelQueueAutoscale\Contracts\PercentileCalculatorContract;
+use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
+use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
+use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
-use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
+use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
+
+function makeNoopSpawnTracker(): SpawnLatencyTrackerContract
+{
+    return new class implements SpawnLatencyTrackerContract
+    {
+        public function recordSpawn(string $workerId, string $connection, string $queue): void {}
+
+        public function recordFirstPickup(string $workerId, float $pickupTimestamp): void {}
+
+        public function currentLatency(string $connection, string $queue): float
+        {
+            return 0.0;
+        }
+    };
+}
+
+function makeEmptyPickupStore(): PickupTimeStoreContract
+{
+    return new class implements PickupTimeStoreContract
+    {
+        public function record(string $connection, string $queue, float $timestamp, float $pickupSeconds): void {}
+
+        public function recentSamples(string $connection, string $queue, int $windowSeconds): array
+        {
+            return [];
+        }
+    };
+}
 
 beforeEach(function () {
     $this->littles = new LittlesLawCalculator;
     $this->backlog = new BacklogDrainCalculator;
     $this->arrivalEstimator = new ArrivalRateEstimator;
-    $this->strategy = new PredictiveStrategy($this->littles, $this->backlog, $this->arrivalEstimator);
+    $this->strategy = new HybridStrategy(
+        littles: $this->littles,
+        backlog: $this->backlog,
+        arrivalEstimator: $this->arrivalEstimator,
+        spawnTracker: makeNoopSpawnTracker(),
+        pickupStore: makeEmptyPickupStore(),
+        percentileCalc: new SortBasedPercentileCalculator(),
+    );
 
     $this->config = makeQueueConfig();
 });
@@ -21,62 +60,59 @@ afterEach(function () {
 });
 
 describe('steady state calculations', function () {
-    it('calculates workers using Littles Law with trend buffer', function () {
+    it('calculates workers using Littles Law for steady state', function () {
         $metrics = createMetrics([
-            'throughput_per_minute' => 600.0, // 10.0 jobs/sec * 60
-            'active_workers' => 20,
+            'throughput_per_minute' => 120.0, // 2.0 jobs/sec * 60
+            'active_workers' => 4,
             'pending' => 0,
             'oldest_job_age' => 0,
         ]);
 
-        // Avg job time: 20 workers / 10 jobs/sec = 2 sec/job
-        // Little's Law: 10 jobs/sec × 2 sec = 20 workers
-        // With moderate trend policy (1.2x): 12 jobs/sec × 2 sec = 24 workers
+        // Avg job time: 4 workers / 2 jobs/sec = 2 sec/job
+        // Little's Law: 2 jobs/sec × 2 sec = 4 workers (within max=10)
         $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
 
-        // Due to trend policy buffer, expect higher than steady state
-        expect($workers)->toBeGreaterThanOrEqual(20);
+        // Should be at least steady-state (no trend buffer in HybridStrategy)
+        expect($workers)->toBeGreaterThanOrEqual(4);
     });
 
     it('estimates average job time from processing rate and active workers', function () {
         $metrics = createMetrics([
-            'throughput_per_minute' => 300.0, // 5.0 jobs/sec * 60
-            'active_workers' => 15,
+            'throughput_per_minute' => 120.0, // 2.0 jobs/sec * 60
+            'active_workers' => 6,
             'pending' => 0,
             'oldest_job_age' => 0,
         ]);
 
-        // Avg job time: 15 workers / 5 jobs/sec = 3 sec/job
-        // Steady state: 5 jobs/sec × 3 sec = 15 workers
-        // With moderate trend policy (1.2x): 6 jobs/sec × 3 sec = 18 workers
+        // Avg job time: 6 workers / 2 jobs/sec = 3 sec/job
+        // Steady state: 2 jobs/sec × 3 sec = 6 workers (within max=10)
         $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
 
-        expect($workers)->toBeGreaterThanOrEqual(15);
+        expect($workers)->toBeGreaterThanOrEqual(6);
     });
 
     it('uses configurable fallback average job time when no active workers', function () {
         // Default fallback is 2.0 seconds
         $metrics = createMetrics([
-            'throughput_per_minute' => 600.0, // 10.0 jobs/sec * 60
+            'throughput_per_minute' => 120.0, // 2.0 jobs/sec * 60
             'active_workers' => 0, // no workers yet
             'pending' => 0,
             'oldest_job_age' => 0,
         ]);
 
         // Fallback avg job time: 2.0 sec (configurable default)
-        // Steady state: 10 jobs/sec × 2 sec = 20 workers
-        // With moderate trend policy (1.2x): 12 jobs/sec × 2 sec = 24 workers
+        // Steady state: 2 jobs/sec × 2 sec = 4 workers (within max=10)
         $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
 
-        expect($workers)->toBeGreaterThanOrEqual(20);
+        expect($workers)->toBeGreaterThanOrEqual(4);
     });
 });
 
-describe('predictive calculations with trend policy', function () {
-    it('applies trend policy buffer to arrival rate', function () {
+describe('forecast-blended arrival rate', function () {
+    it('uses steady state arrival rate for stable workloads', function () {
         $metrics = createMetrics([
-            'throughput_per_minute' => 600.0, // 10.0 jobs/sec * 60
-            'active_workers' => 20,
+            'throughput_per_minute' => 120.0, // 2.0 jobs/sec * 60
+            'active_workers' => 4,
             'pending' => 0,
             'oldest_job_age' => 0,
         ]);
@@ -84,53 +120,56 @@ describe('predictive calculations with trend policy', function () {
         // First call establishes baseline
         $this->strategy->calculateTargetWorkers($metrics, $this->config);
 
-        // With moderate trend policy (default), predictive workers = rate * 1.2
-        // Base: 10 * 2 = 20, Predictive: 12 * 2 = 24
-        // Max of both = 24
+        // Second call: arrival rate should be estimated from backlog changes
+        // Steady state: 2 jobs/sec × 2 sec = 4 workers (within max=10)
         $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
 
-        // Due to trend buffer, should be slightly higher than steady state
-        expect($workers)->toBeGreaterThanOrEqual(20);
+        // Should scale to handle steady state arrival rate
+        expect($workers)->toBeGreaterThanOrEqual(4);
     });
 });
 
 describe('backlog drain calculations', function () {
     it('uses backlog drain workers when SLA breach is imminent', function () {
+        // Use a config with higher max to observe backlog drain effect
+        $config = makeQueueConfig(['maxWorkers' => 50]);
         $metrics = createMetrics([
-            'throughput_per_minute' => 600.0, // 10.0 jobs/sec * 60
-            'active_workers' => 20,
+            'throughput_per_minute' => 120.0, // 2.0 jobs/sec * 60
+            'active_workers' => 4,
             'pending' => 100,
             'oldest_job_age' => 25, // approaching SLA (30s)
         ]);
 
         // Avg job time: 2 sec
-        // Steady: 10 × 2 = 20 workers
+        // Steady: 2 × 2 = 4 workers
         // Backlog drain will be higher due to imminent breach
-        $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
+        $workers = $this->strategy->calculateTargetWorkers($metrics, $config);
 
-        expect($workers)->toBeGreaterThan(20);
+        expect($workers)->toBeGreaterThan(4);
     });
 
-    it('returns maximum of all three calculations', function () {
+    it('returns maximum of backlog drain and steady state', function () {
+        // Use a config with higher max to observe backlog drain effect
+        $config = makeQueueConfig(['maxWorkers' => 50]);
         $metrics = createMetrics([
-            'throughput_per_minute' => 300.0, // 5.0 jobs/sec * 60
-            'active_workers' => 10,
+            'throughput_per_minute' => 120.0, // 2.0 jobs/sec * 60
+            'active_workers' => 4,
             'pending' => 200,
             'oldest_job_age' => 28, // very close to SLA breach
         ]);
 
-        // Avg job time: 10 / 5 = 2 sec
-        // Steady state: 5 × 2 = 10 workers
+        // Avg job time: 4 / 2 = 2 sec
+        // Steady state: 2 × 2 = 4 workers
         // Backlog drain: will be much higher (approaching breach)
-        $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
+        $workers = $this->strategy->calculateTargetWorkers($metrics, $config);
 
         // Backlog drain should dominate
-        expect($workers)->toBeGreaterThan(10);
+        expect($workers)->toBeGreaterThan(4);
     });
 });
 
 describe('empty and idle states', function () {
-    it('returns zero workers for empty queue', function () {
+    it('returns workers.min for empty queue', function () {
         $metrics = createMetrics([
             'throughput_per_minute' => 0.0,
             'active_workers' => 0,
@@ -140,10 +179,12 @@ describe('empty and idle states', function () {
 
         $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
 
-        expect($workers)->toBe(0);
+        // HybridStrategy clamps to [workers.min, workers.max]. Config has min=1.
+        expect($workers)->toBe($this->config->workers->min);
     });
 
-    it('returns zero for idle state in fallback (no workers and no backlog)', function () {
+    it('returns workers.min for idle state with no backlog', function () {
+        $config = makeQueueConfig(['minWorkers' => 0]);
         $metrics = createMetrics([
             'throughput_per_minute' => 0.0,
             'active_workers' => 0,
@@ -151,8 +192,9 @@ describe('empty and idle states', function () {
             'oldest_job_age' => 0,
         ]);
 
-        $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
+        $workers = $this->strategy->calculateTargetWorkers($metrics, $config);
 
+        // With minWorkers=0 and no load, target should be 0
         expect($workers)->toBe(0);
     });
 });
@@ -393,6 +435,7 @@ describe('fallback arrival rate estimation', function () {
         // BUG FIX: Having 5 workers with 0.15s avg job time was causing:
         // workerCapacity = 5 / 0.15 = 33.3 jobs/s
         // arrivalRate = 33.3 * 0.7 = 23.3 jobs/s  <- WRONG!
+        $config = makeQueueConfig(['minWorkers' => 0]);
         $metrics = createMetrics([
             'throughput_per_minute' => 0.0, // No jobs being processed
             'active_workers' => 5, // 5 idle workers
@@ -400,9 +443,9 @@ describe('fallback arrival rate estimation', function () {
             'oldest_job_age' => 0,
         ]);
 
-        $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
+        $workers = $this->strategy->calculateTargetWorkers($metrics, $config);
 
-        // With empty queue and no throughput, should return 0 workers
+        // With empty queue and no throughput, should return 0 workers (minWorkers=0)
         expect($workers)->toBe(0);
     });
 });
@@ -461,19 +504,21 @@ describe('metrics handling', function () {
     });
 
     it('uses avgDuration from metrics when available', function () {
+        // Use a higher max to observe the avgDuration effect on Little's Law
+        $config = makeQueueConfig(['maxWorkers' => 50]);
         $metrics = createMetrics([
-            'throughput_per_minute' => 600.0,
+            'throughput_per_minute' => 600.0, // 10 jobs/sec
             'active_workers' => 20,
             'pending' => 0,
             'oldest_job_age' => 0,
             'avg_duration' => 3.0, // Explicit 3 second duration
         ]);
 
-        $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
+        $workers = $this->strategy->calculateTargetWorkers($metrics, $config);
         $reason = $this->strategy->getLastReason();
 
         // Should use the avgDuration from metrics
-        // Workers = rate * avgDuration = 10 * 3 = 30, with trend buffer = 36
+        // Workers = rate * avgDuration = 10 * 3 = 30 (within max=50)
         expect($workers)->toBeGreaterThanOrEqual(30)
             ->and($reason)->toContain('3'); // Should reference 3 second job time
     });
@@ -600,13 +645,16 @@ describe('utilization rate integration', function () {
 });
 
 describe('constructor requirements', function () {
-    it('requires ArrivalRateEstimator in constructor', function () {
-        $strategy = new PredictiveStrategy(
-            new LittlesLawCalculator,
-            new BacklogDrainCalculator,
-            new ArrivalRateEstimator,
+    it('requires all six dependencies in constructor', function () {
+        $strategy = new HybridStrategy(
+            littles: new LittlesLawCalculator(),
+            backlog: new BacklogDrainCalculator(),
+            arrivalEstimator: new ArrivalRateEstimator(),
+            spawnTracker: makeNoopSpawnTracker(),
+            pickupStore: makeEmptyPickupStore(),
+            percentileCalc: new SortBasedPercentileCalculator(),
         );
 
-        expect($strategy)->toBeInstanceOf(PredictiveStrategy::class);
+        expect($strategy)->toBeInstanceOf(HybridStrategy::class);
     });
 });

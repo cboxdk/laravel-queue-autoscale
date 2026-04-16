@@ -9,6 +9,9 @@ use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\SlaConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
+use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
+use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
@@ -16,7 +19,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\ModerateForecastPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
-use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
+use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
 
 /**
  * Runs end-to-end scaling simulations
@@ -88,10 +91,35 @@ final class ScalingSimulation
         // Create fresh arrival rate estimator for each simulation
         $this->arrivalEstimator = new ArrivalRateEstimator;
 
-        $strategy = new PredictiveStrategy(
-            new LittlesLawCalculator,
-            new BacklogDrainCalculator,
-            $this->arrivalEstimator,
+        $spawnTracker = new class implements SpawnLatencyTrackerContract
+        {
+            public function recordSpawn(string $workerId, string $connection, string $queue): void {}
+
+            public function recordFirstPickup(string $workerId, float $pickupTimestamp): void {}
+
+            public function currentLatency(string $connection, string $queue): float
+            {
+                return 0.0;
+            }
+        };
+
+        $pickupStore = new class implements PickupTimeStoreContract
+        {
+            public function record(string $connection, string $queue, float $timestamp, float $pickupSeconds): void {}
+
+            public function recentSamples(string $connection, string $queue, int $windowSeconds): array
+            {
+                return [];
+            }
+        };
+
+        $strategy = new HybridStrategy(
+            littles: new LittlesLawCalculator,
+            backlog: new BacklogDrainCalculator,
+            arrivalEstimator: $this->arrivalEstimator,
+            spawnTracker: $spawnTracker,
+            pickupStore: $pickupStore,
+            percentileCalc: new SortBasedPercentileCalculator,
         );
 
         $this->engine = new ScalingEngine($strategy, new UnlimitedCapacityCalculator);

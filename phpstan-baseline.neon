@@ -187,18 +187,6 @@ parameters:
 			path: src/Manager/AutoscaleManager.php
 
 		-
-			message: '#^Property Cbox\\LaravelQueueMetrics\\DataTransferObjects\\QueueMetricsData\:\:\$failureRate \(float\) on left side of \?\? is not nullable\.$#'
-			identifier: nullCoalesce.property
-			count: 1
-			path: src/Scaling/Strategies/PredictiveStrategy.php
-
-		-
-			message: '#^Property Cbox\\LaravelQueueMetrics\\DataTransferObjects\\QueueMetricsData\:\:\$utilizationRate \(float\) on left side of \?\? is not nullable\.$#'
-			identifier: nullCoalesce.property
-			count: 1
-			path: src/Scaling/Strategies/PredictiveStrategy.php
-
-		-
 			message: '#^If condition is always true\.$#'
 			identifier: if.alwaysTrue
 			count: 1

@@ -9,7 +9,7 @@ use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
 use Cbox\LaravelQueueAutoscale\Configuration\Profiles\HighVolumeProfile;
 use Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy;
 use Cbox\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy;
-use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
+use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
 
 return [
     'enabled' => env('QUEUE_AUTOSCALE_ENABLED', true),
@@ -165,21 +165,22 @@ return [
     | on queue metrics and SLA configuration.
     |
     | Available Strategies:
-    | - PredictiveStrategy    - Multi-algorithm (rate + trend + backlog) [DEFAULT]
-    | - SimpleRateStrategy    - Little's Law only, for stable workloads
-    | - BacklogOnlyStrategy   - Backlog drain focus, for batch processing
-    | - ConservativeStrategy  - PredictiveStrategy + 25% safety buffer
+    | - HybridStrategy       - Full v2 algorithm (rate + p95 + spawn-compensated SLA) [DEFAULT]
+    | - SimpleRateStrategy   - Little's Law only, for stable workloads
+    | - BacklogOnlyStrategy  - Backlog drain focus, for batch processing
+    | - ConservativeStrategy - Safety-buffered backlog drain
     |
-    | PredictiveStrategy Algorithm (DEFAULT):
-    | 1. Rate-Based: Little's Law (L = λW) for steady-state worker count
-    | 2. Trend-Based: Predict future arrival rate using configured trend policy
-    | 3. Backlog-Based: Calculate workers needed to prevent SLA breach
-    | 4. Combine: Take maximum (most conservative) of all three calculations
+    | HybridStrategy Algorithm (DEFAULT):
+    | 1. Rate-Based: Little's Law (L = λW) using forecast-blended arrival rate
+    | 2. Backlog-Based: Calculate workers needed to prevent SLA breach
+    | 3. p95 Pickup Signal: Uses sliding-window p95 over actual pickup times
+    | 4. Spawn-Compensated SLA: Subtracts EMA spawn latency from SLA budget
+    | 5. Combine: Take maximum (most conservative) of all calculations
     |
     | The strategy takes the maximum to ensure:
     | - Current workload is handled (rate-based)
-    | - Future spikes are anticipated (trend-based)
-    | - SLA breaches are prevented (backlog-based)
+    | - Future spikes are anticipated (forecast-blended arrival rate)
+    | - SLA breaches are prevented (backlog-based with effective SLA)
     |
     | Custom Strategies:
     | Create your own by implementing ScalingStrategyContract with methods:
@@ -197,30 +198,31 @@ return [
     |
     | Strategy Selection Guide:
     |
-    | PredictiveStrategy (DEFAULT):
+    | HybridStrategy (DEFAULT):
     | ✓ General-purpose workloads
     | ✓ Bursty traffic patterns
-    | ✓ Need proactive scaling
+    | ✓ Need proactive scaling with SLA-awareness
+    | ✓ Spawn latency compensation required
     | ✗ Minimal resource usage (use SimpleRateStrategy)
     |
     | SimpleRateStrategy:
     | ✓ Stable, predictable workloads
     | ✓ Minimal overhead desired
     | ✓ Simple scaling logic
-    | ✗ Bursty traffic (use PredictiveStrategy)
+    | ✗ Bursty traffic (use HybridStrategy)
     | ✗ Strict SLA requirements (use ConservativeStrategy)
     |
     | BacklogOnlyStrategy:
     | ✓ Batch processing
     | ✓ Irregular arrival patterns
     | ✓ Processing accumulated work
-    | ✗ Real-time requirements (use PredictiveStrategy)
+    | ✗ Real-time requirements (use HybridStrategy)
     |
     | ConservativeStrategy:
     | ✓ Mission-critical queues
     | ✓ Strict SLA requirements
     | ✓ Over-provisioning acceptable
-    | ✗ Cost-sensitive environments (use PredictiveStrategy)
+    | ✗ Cost-sensitive environments (use HybridStrategy)
     |
     | When to Create Custom Strategies:
     | - Domain-specific scaling logic (e.g., time-of-day patterns)
@@ -229,7 +231,7 @@ return [
     | - Complex business rules for scaling decisions
     |
     */
-    'strategy' => PredictiveStrategy::class,
+    'strategy' => HybridStrategy::class,
 
     /*
     |--------------------------------------------------------------------------

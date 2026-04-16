@@ -8,15 +8,21 @@ use Cbox\LaravelQueueAutoscale\Commands\DebugQueueCommand;
 use Cbox\LaravelQueueAutoscale\Commands\DispatchTestJobsCommand;
 use Cbox\LaravelQueueAutoscale\Commands\LaravelQueueAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\PercentileCalculatorContract;
+use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Manager\SignalHandler;
+use Cbox\LaravelQueueAutoscale\Pickup\RedisPickupTimeStore;
+use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
 use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
+use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\EmaSpawnLatencyTracker;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
 use Illuminate\Support\ServiceProvider;
@@ -35,6 +41,11 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
         $this->app->singleton(BacklogDrainCalculator::class);
         $this->app->singleton(CapacityCalculator::class);
         $this->app->singleton(ArrivalRateEstimator::class);
+
+        // Register v2 contracts with their default implementations
+        $this->app->singleton(SpawnLatencyTrackerContract::class, EmaSpawnLatencyTracker::class);
+        $this->app->singleton(PickupTimeStoreContract::class, RedisPickupTimeStore::class);
+        $this->app->singleton(PercentileCalculatorContract::class, SortBasedPercentileCalculator::class);
 
         // Register scaling strategy from config
         $this->app->singleton(ScalingStrategyContract::class, function ($app) {

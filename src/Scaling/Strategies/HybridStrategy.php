@@ -6,27 +6,31 @@ namespace Cbox\LaravelQueueAutoscale\Scaling\Strategies;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use Cbox\LaravelQueueAutoscale\Configuration\TrendScalingPolicy;
+use Cbox\LaravelQueueAutoscale\Contracts\PercentileCalculatorContract;
+use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
 /**
- * Predictive scaling strategy using multiple algorithms
+ * Hybrid scaling strategy integrating multiple v2 components
  *
- * Combines three approaches to determine optimal worker count:
+ * Combines five approaches to determine optimal worker count:
  * 1. Rate-Based (Little's Law): Workers needed for steady-state throughput
- * 2. Arrival-Based: Estimates true arrival rate from backlog changes (handles spikes)
- * 3. Backlog-Based: Workers needed to drain queue before SLA breach
+ * 2. Backlog-Based: Workers needed to drain queue before SLA breach
+ * 3. Forecast-Blended Arrival Rate: Estimated true arrival rate with forecasting
+ * 4. p95 Pickup Time Signal: Uses sliding-window percentile over actual pickup times
+ * 5. Spawn-Compensated Effective SLA: Subtracts EMA spawn latency from SLA budget
  *
- * Takes the maximum of all three to ensure SLA compliance.
+ * Takes the maximum of all algorithms to ensure SLA compliance.
  */
-final class PredictiveStrategy implements ScalingStrategyContract
+final class HybridStrategy implements ScalingStrategyContract
 {
     /**
-     * @var array<string, float|int|string>
+     * @var array<string, float|int|string|null>
      */
     private array $lastCalculation = [];
 
@@ -38,6 +42,9 @@ final class PredictiveStrategy implements ScalingStrategyContract
         private readonly LittlesLawCalculator $littles,
         private readonly BacklogDrainCalculator $backlog,
         private readonly ArrivalRateEstimator $arrivalEstimator,
+        private readonly SpawnLatencyTrackerContract $spawnTracker,
+        private readonly PickupTimeStoreContract $pickupStore,
+        private readonly PercentileCalculatorContract $percentileCalc,
     ) {}
 
     public function calculateTargetWorkers(QueueMetricsData $metrics, QueueConfiguration $config): int
@@ -55,6 +62,15 @@ final class PredictiveStrategy implements ScalingStrategyContract
 
         // Determine average job time
         [$avgJobTime, $jobTimeSource] = $this->determineJobTime($metrics, $processingRate, $activeWorkers);
+
+        // Lazily configure the forecaster from queue config if not already set
+        if (! $this->arrivalEstimator->hasForecaster()) {
+            $this->arrivalEstimator->setForecaster(
+                forecaster: app($config->forecast->forecasterClass),
+                policy: app($config->forecast->policyClass),
+                horizonSeconds: $config->forecast->horizonSeconds,
+            );
+        }
 
         // Estimate arrival rate from backlog changes (more accurate during spikes)
         $queueKey = "{$config->connection}:{$config->queue}";
@@ -101,7 +117,7 @@ final class PredictiveStrategy implements ScalingStrategyContract
         // 2. Cap the correction at 30% of arrival rate to prevent over-correction
         // 3. Use a dampened rate: sqrt(rate/100) makes low rates nearly invisible
         //    while high rates (active incidents) still have strong correction
-        $failureRate = $metrics->failureRate ?? 0.0;
+        $failureRate = $metrics->failureRate;
         $rawArrivalRate = $arrivalRate;
         $retryNoise = 0.0;
 
@@ -118,35 +134,45 @@ final class PredictiveStrategy implements ScalingStrategyContract
             $arrivalRate = max(0.0, $arrivalRate - $retryNoise);
         }
 
+        // Compute effective SLA after subtracting spawn latency
+        $spawnLatency = $config->spawnCompensation->enabled
+            ? $this->spawnTracker->currentLatency($config->connection, $config->queue)
+            : 0.0;
+        $effectiveSla = max(1.0, (float) $config->sla->targetSeconds - $spawnLatency);
+
+        // Compute p95 pickup time signal from sliding window
+        $pickupSamples = $this->pickupStore->recentSamples(
+            $config->connection,
+            $config->queue,
+            $config->sla->windowSeconds,
+        );
+        $pickupTimes = array_map(static fn (array $s): float => $s['pickup_seconds'], $pickupSamples);
+        $p95 = $this->percentileCalc->compute($pickupTimes, $config->sla->percentile);
+        $slaSignal = $p95 ?? (float) $oldestJobAge;
+        $slaSignalSource = $p95 !== null ? 'p95' : 'oldest_age_fallback';
+
         // 1. RATE-BASED: Little's Law (L = λW)
         // Workers needed to handle current (adjusted) arrival rate
         $steadyStateWorkers = $this->littles->calculate($arrivalRate, $avgJobTime);
 
-        // 2. TREND-BASED: Predict future arrival rate using policy
-        $trendPolicy = AutoscaleConfiguration::trendScalingPolicy();
-        $predictedRate = $this->applyTrendPolicy($arrivalRate, $trendPolicy);
-        $predictiveWorkers = $this->littles->calculate($predictedRate, $avgJobTime);
-
-        // 3. BACKLOG-BASED: Prevent SLA breach
+        // 2. BACKLOG-BASED: Prevent SLA breach using p95/oldest-age signal and effective SLA
+        $breachThreshold = AutoscaleConfiguration::breachThreshold();
         $backlogDrainWorkers = $this->backlog->calculateRequiredWorkers(
             backlog: $backlogSize,
-            oldestJobAge: $oldestJobAge,
+            oldestJobAge: (int) $slaSignal,
             slaTarget: $config->sla->targetSeconds,
             avgJobTime: $avgJobTime,
-            breachThreshold: AutoscaleConfiguration::breachThreshold(),
+            breachThreshold: $breachThreshold,
+            effectiveSlaSeconds: $effectiveSla,
         );
 
-        // 4. COMBINE: Take maximum (most conservative)
-        $targetWorkers = max(
-            $steadyStateWorkers,
-            $predictiveWorkers,
-            $backlogDrainWorkers,
-        );
+        // 3. COMBINE: Take maximum (most conservative)
+        $targetWorkers = max($steadyStateWorkers, $backlogDrainWorkers);
 
-        // 5. UTILIZATION ADJUSTMENT: Use worker utilization as a real-time signal
+        // 4. UTILIZATION ADJUSTMENT: Use worker utilization as a real-time signal
         // Utilization rate from metrics tells us how busy current workers actually are,
         // providing ground truth that complements the algorithmic calculations.
-        $utilizationRate = $metrics->utilizationRate ?? 0.0;
+        $utilizationRate = $metrics->utilizationRate;
         $utilizationAdjustment = '';
 
         if ($activeWorkers > 0 && $utilizationRate > 0) {
@@ -162,13 +188,11 @@ final class PredictiveStrategy implements ScalingStrategyContract
         // Store for reason building
         $this->lastCalculation = [
             'steady_state' => $steadyStateWorkers,
-            'predictive' => $predictiveWorkers,
             'backlog_drain' => $backlogDrainWorkers,
             'arrival_rate' => $arrivalRate,
             'raw_arrival_rate' => $rawArrivalRate,
             'retry_noise' => $retryNoise,
             'processing_rate' => $processingRate,
-            'predicted_rate' => $predictedRate,
             'avg_job_time' => $avgJobTime,
             'avg_job_time_source' => $jobTimeSource,
             'arrival_rate_source' => $this->arrivalRateSource,
@@ -176,9 +200,20 @@ final class PredictiveStrategy implements ScalingStrategyContract
             'failure_rate' => $failureRate,
             'utilization_rate' => $utilizationRate,
             'utilization_adjustment' => $utilizationAdjustment,
+            'spawn_latency' => $spawnLatency,
+            'effective_sla' => $effectiveSla,
+            'p95' => $p95,
+            'sla_signal' => $slaSignal,
+            'sla_signal_source' => $slaSignalSource,
         ];
 
-        return (int) ceil(max($targetWorkers, 0));
+        // Clamp to [workers.min, workers.max]
+        $targetWorkers = max(
+            $config->workers->min,
+            min($config->workers->max, (int) ceil(max($targetWorkers, 0))),
+        );
+
+        return $targetWorkers;
     }
 
     public function getLastReason(): string
@@ -191,19 +226,18 @@ final class PredictiveStrategy implements ScalingStrategyContract
         $calc = $this->lastCalculation;
 
         // Explain which algorithm drove the decision
-        $maxWorkers = max($calc['steady_state'], $calc['predictive'], $calc['backlog_drain']);
+        $maxWorkers = max((float) $calc['steady_state'], (float) $calc['backlog_drain']);
 
-        if ($calc['backlog_drain'] >= $maxWorkers && $calc['backlog_drain'] > 0) {
+        if ((float) $calc['backlog_drain'] >= $maxWorkers && (float) $calc['backlog_drain'] > 0) {
+            $slaSignalSource = (string) $calc['sla_signal_source'];
+            $signalLabel = $slaSignalSource === 'p95' ? 'p95' : 'oldest_age';
             $parts[] = sprintf(
-                'backlog=%d requires %.1f workers to prevent SLA breach',
+                'backlog=%d requires %.1f workers to prevent SLA breach (%s=%.1fs, effective_sla=%.1fs)',
                 $calc['backlog'],
-                $calc['backlog_drain']
-            );
-        } elseif ($calc['predictive'] >= $maxWorkers && $calc['predictive'] > $calc['steady_state']) {
-            $parts[] = sprintf(
-                'trend predicts rate increase to %.2f/s requiring %.1f workers',
-                $calc['predicted_rate'],
-                $calc['predictive']
+                $calc['backlog_drain'],
+                $signalLabel,
+                $calc['sla_signal'],
+                $calc['effective_sla'],
             );
         } else {
             $fallbackIndicator = $this->usedFallback ? ' (estimated)' : '';
@@ -235,8 +269,14 @@ final class PredictiveStrategy implements ScalingStrategyContract
             $parts[] = sprintf('backlog %s (arrival %.2f/s vs processing %.2f/s)', $direction, $arrivalRate, $processingRate);
         }
 
+        // Add spawn latency note when it meaningfully reduced the effective SLA
+        $spawnLatency = (float) $calc['spawn_latency'];
+        if ($spawnLatency > 0.5) {
+            $parts[] = sprintf('spawn_latency=%.1fs subtracted from SLA (effective=%.1fs)', $spawnLatency, $calc['effective_sla']);
+        }
+
         // Add utilization adjustment if applied
-        $utilizationAdj = $calc['utilization_adjustment'] ?? '';
+        $utilizationAdj = (string) ($calc['utilization_adjustment'] ?? '');
         if ($utilizationAdj !== '') {
             $parts[] = $utilizationAdj;
         }
@@ -254,9 +294,8 @@ final class PredictiveStrategy implements ScalingStrategyContract
 
         // Estimate pickup time based on backlog and workers
         $targetWorkers = max(
-            $calc['steady_state'],
-            $calc['predictive'],
-            $calc['backlog_drain'],
+            (float) $calc['steady_state'],
+            (float) $calc['backlog_drain'],
         );
 
         if ($targetWorkers <= 0 || $calc['backlog'] === 0) {
@@ -264,7 +303,7 @@ final class PredictiveStrategy implements ScalingStrategyContract
         }
 
         // Time to process backlog with target workers
-        $jobsPerWorker = (float) $calc['backlog'] / (float) $targetWorkers;
+        $jobsPerWorker = (float) $calc['backlog'] / $targetWorkers;
         $timeToProcess = $jobsPerWorker * (float) $calc['avg_job_time'];
 
         return $timeToProcess;
@@ -314,30 +353,6 @@ final class PredictiveStrategy implements ScalingStrategyContract
         $fallback = AutoscaleConfiguration::fallbackJobTimeSeconds();
 
         return [$fallback, sprintf('fallback: %.1fs (configurable)', $fallback)];
-    }
-
-    /**
-     * Apply trend policy to predict future arrival rate
-     *
-     * Since we now estimate arrival rate from backlog changes,
-     * the trend policy provides additional forward-looking adjustment.
-     */
-    private function applyTrendPolicy(float $currentRate, TrendScalingPolicy $policy): float
-    {
-        if (! $policy->isEnabled()) {
-            return $currentRate;
-        }
-
-        // Apply a small growth factor based on policy aggressiveness
-        // This helps anticipate continued growth during spikes
-        $growthFactor = match ($policy) {
-            TrendScalingPolicy::HINT => 1.1,       // 10% buffer
-            TrendScalingPolicy::MODERATE => 1.2,   // 20% buffer
-            TrendScalingPolicy::AGGRESSIVE => 1.3, // 30% buffer
-            default => 1.0,
-        };
-
-        return $currentRate * $growthFactor;
     }
 
     /**

@@ -70,10 +70,12 @@ describe('Traffic Spike', function () {
         expect($result->countScaleUpEvents())->toBeGreaterThan(0)
             ->and($result->getMaxWorkersReached())->toBeGreaterThan(5);
 
-        // Response time should be reasonable (within 15 seconds of spike start)
+        // Response time should be reasonable (within 30 seconds of spike start)
+        // HybridStrategy uses arrival rate estimation (no trend buffer), so
+        // it detects spikes reactively from backlog growth rather than proactively.
         $responseTime = $result->getResponseTimeToSpike(60);
         expect($responseTime)->not->toBeNull()
-            ->and($responseTime)->toBeLessThanOrEqual(15);
+            ->and($responseTime)->toBeLessThanOrEqual(30);
     });
 
     it('scales back down after spike ends', function () {
