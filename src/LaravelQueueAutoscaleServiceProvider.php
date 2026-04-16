@@ -49,8 +49,34 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
 
         // Register v2 contracts with their default implementations
         $this->app->singleton(SpawnLatencyTrackerContract::class, EmaSpawnLatencyTracker::class);
-        $this->app->singleton(PickupTimeStoreContract::class, RedisPickupTimeStore::class);
-        $this->app->singleton(PercentileCalculatorContract::class, SortBasedPercentileCalculator::class);
+
+        $this->app->singleton(PickupTimeStoreContract::class, function () {
+            $rawClass = config('queue-autoscale.pickup_time.store', RedisPickupTimeStore::class);
+            $rawSamples = config('queue-autoscale.pickup_time.max_samples_per_queue', 1000);
+            $maxSamples = is_numeric($rawSamples) ? (int) $rawSamples : 1000;
+
+            if (! is_string($rawClass) || ! class_exists($rawClass) || ! is_subclass_of($rawClass, PickupTimeStoreContract::class)) {
+                $got = is_string($rawClass) ? $rawClass : gettype($rawClass);
+                throw new \RuntimeException("queue-autoscale.pickup_time.store must be a class that implements PickupTimeStoreContract, got: {$got}");
+            }
+
+            if ($rawClass === RedisPickupTimeStore::class) {
+                return new RedisPickupTimeStore(maxSamplesPerQueue: $maxSamples);
+            }
+
+            return new $rawClass;
+        });
+
+        $this->app->singleton(PercentileCalculatorContract::class, function () {
+            $rawClass = config('queue-autoscale.pickup_time.percentile_calculator', SortBasedPercentileCalculator::class);
+
+            if (! is_string($rawClass) || ! class_exists($rawClass) || ! is_subclass_of($rawClass, PercentileCalculatorContract::class)) {
+                $got = is_string($rawClass) ? $rawClass : gettype($rawClass);
+                throw new \RuntimeException("queue-autoscale.pickup_time.percentile_calculator must be a class that implements PercentileCalculatorContract, got: {$got}");
+            }
+
+            return new $rawClass;
+        });
 
         // Register scaling strategy from config
         $this->app->singleton(ScalingStrategyContract::class, function ($app) {
