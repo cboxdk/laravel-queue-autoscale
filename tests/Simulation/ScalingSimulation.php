@@ -55,6 +55,7 @@ final class ScalingSimulation
         ?WorkloadSimulator $simulator = null,
         ?QueueConfiguration $config = null,
         ?ArrivalRateEstimator $arrivalEstimator = null,
+        ?SpawnLatencyTrackerContract $spawnTracker = null,
     ) {
         $this->simulator = $simulator ?? new WorkloadSimulator;
 
@@ -92,7 +93,8 @@ final class ScalingSimulation
         // Use provided estimator or create a fresh one for this simulation
         $this->arrivalEstimator = $arrivalEstimator ?? new ArrivalRateEstimator;
 
-        $spawnTracker = new class implements SpawnLatencyTrackerContract
+        // Use provided spawn tracker or fall back to a zero-latency stub for backward compat
+        $spawnTracker = $spawnTracker ?? new class implements SpawnLatencyTrackerContract
         {
             public function recordSpawn(string $workerId, string $connection, string $queue): void {}
 
