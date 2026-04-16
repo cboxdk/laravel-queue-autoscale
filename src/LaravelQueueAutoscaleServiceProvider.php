@@ -7,6 +7,7 @@ namespace Cbox\LaravelQueueAutoscale;
 use Cbox\LaravelQueueAutoscale\Commands\DebugQueueCommand;
 use Cbox\LaravelQueueAutoscale\Commands\DispatchTestJobsCommand;
 use Cbox\LaravelQueueAutoscale\Commands\LaravelQueueAutoscaleCommand;
+use Cbox\LaravelQueueAutoscale\Commands\MigrateConfigCommand;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\PercentileCalculatorContract;
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
@@ -83,6 +84,7 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
                 LaravelQueueAutoscaleCommand::class,
                 DispatchTestJobsCommand::class,
                 DebugQueueCommand::class,
+                MigrateConfigCommand::class,
             ]);
         }
 
