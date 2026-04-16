@@ -14,6 +14,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Manager\SignalHandler;
+use Cbox\LaravelQueueAutoscale\Pickup\PickupTimeRecorder;
 use Cbox\LaravelQueueAutoscale\Pickup\RedisPickupTimeStore;
 use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
 use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
@@ -25,6 +26,8 @@ use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\EmaSpawnLatencyTracker;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
+use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\ServiceProvider;
 
 class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
@@ -82,5 +85,10 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
                 DebugQueueCommand::class,
             ]);
         }
+
+        $this->app->make(Dispatcher::class)->listen(
+            JobProcessing::class,
+            PickupTimeRecorder::class,
+        );
     }
 }
