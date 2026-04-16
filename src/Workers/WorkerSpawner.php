@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Workers;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
 use Symfony\Component\Process\Process;
 
 final readonly class WorkerSpawner
@@ -23,15 +23,14 @@ final readonly class WorkerSpawner
      * @param  string  $connection  Queue connection name
      * @param  string  $queue  Queue name
      * @param  int  $count  Number of workers to spawn
+     * @param  SpawnCompensationConfiguration  $spawnConfig  Per-queue spawn compensation settings
      * @return Collection<int, WorkerProcess> Spawned workers
      */
-    public function spawn(string $connection, string $queue, int $count): Collection
+    public function spawn(string $connection, string $queue, int $count, SpawnCompensationConfiguration $spawnConfig): Collection
     {
         $workers = collect();
 
         for ($i = 0; $i < $count; $i++) {
-            $workerId = (string) Str::uuid();
-
             $process = new Process([
                 PHP_BINARY,
                 base_path('artisan'),
@@ -49,12 +48,17 @@ final readonly class WorkerSpawner
                 'AUTOSCALE_MANAGER_ID' => AutoscaleConfiguration::managerId(),
             ]);
 
-            // Record the spawn timestamp before starting the process so latency
-            // measurement begins at the moment we initiate the worker.
-            $this->spawnLatencyTracker->recordSpawn($workerId, $connection, $queue);
-
             try {
                 $process->start();
+
+                // Record the spawn timestamp keyed by the OS PID so the spawned
+                // worker can identify itself via getmypid() when its first job fires.
+                // We record after start() so the PID is available.
+                $pid = $process->getPid();
+
+                if ($pid !== null) {
+                    $this->spawnLatencyTracker->recordSpawn((string) $pid, $connection, $queue, $spawnConfig);
+                }
 
                 // Brief pause to allow process to fail fast if command is invalid
                 usleep(50000); // 50ms

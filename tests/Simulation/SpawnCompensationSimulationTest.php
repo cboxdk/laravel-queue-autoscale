@@ -8,6 +8,7 @@ use Cbox\LaravelQueueAutoscale\Configuration\SlaConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
+// SpawnCompensationConfiguration is used in the contract method signatures below
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\DisabledForecastPolicy;
 use Cbox\LaravelQueueAutoscale\Tests\Simulation\ScalingSimulation;
@@ -41,11 +42,11 @@ function makeFixedLatencyTracker(float $latencySeconds): SpawnLatencyTrackerCont
     {
         public function __construct(private readonly float $latency) {}
 
-        public function recordSpawn(string $workerId, string $connection, string $queue): void {}
+        public function recordSpawn(string $workerId, string $connection, string $queue, SpawnCompensationConfiguration $config): void {}
 
         public function recordFirstPickup(string $workerId, float $pickupTimestamp): void {}
 
-        public function currentLatency(string $connection, string $queue): float
+        public function currentLatency(string $connection, string $queue, SpawnCompensationConfiguration $config): float
         {
             return $this->latency;
         }
@@ -55,26 +56,32 @@ function makeFixedLatencyTracker(float $latencySeconds): SpawnLatencyTrackerCont
 /**
  * Run a sudden-spike simulation with spawn compensation toggled on or off.
  *
- * Scenario: 100 jobs arrive in the first 10 seconds (10 jobs/tick), then
- * traffic drops to a low steady state (1 job/tick). With 1 initial worker
- * and a 30-second SLA, the burst quickly builds a backlog that strains the
- * SLA window.
+ * Scenario: 300 jobs arrive in the first 15 seconds (20 jobs/tick × base 1.0),
+ * then traffic drops to a near-idle trickle (0.05 jobs/tick). With 1 initial
+ * worker, avgJobTime=1s, and a 30-second SLA, the burst builds a 300-job backlog
+ * far faster than any scaling reaction can drain it, guaranteeing SLA breaches
+ * in the uncompensated run.
  *
- * The fake spawn tracker reports 3 seconds of latency. When compensation is
- * enabled, HybridStrategy uses effectiveSla = 30 - 3 = 27 seconds, so
- * BacklogDrainCalculator triggers its progressive multiplier sooner (the
- * slaProgress threshold is reached at 27 × 0.5 = 13.5 s instead of 15 s),
- * requesting more workers before the oldest job actually breaches.
+ * The fake spawn tracker reports 5 seconds of latency. When compensation is
+ * enabled, HybridStrategy uses effectiveSla = 30 - 5 = 25 seconds, so
+ * BacklogDrainCalculator triggers its progressive multiplier sooner (slaProgress
+ * reaches 0.5 at 12.5 s instead of 15 s), requesting more workers before the
+ * oldest job actually breaches.
  *
- * Returns the number of simulation ticks (seconds) where oldest job age
- * exceeded the 30-second SLA target.
+ * Spike severity is deliberately large (300 jobs vs 50-worker max) to ensure
+ * the no-compensation run produces breaches. The compensation run requests
+ * workers one scaling interval earlier, producing measurably fewer breach ticks.
+ * Both runs use a deterministic fake tracker (no EMA learning phase) so the test
+ * is reproducible.
+ *
+ * Returns the number of simulation ticks where oldest job age exceeded the SLA.
  */
 function runSpawnSpikeSimulation(bool $compensationEnabled): int
 {
     $slaTarget = 30;
     $scalingInterval = 5;
-    $duration = 120; // 2 minutes total — enough to observe the spike and partial recovery
-    $spawnLatencySeconds = 3.0;
+    $duration = 180; // 3 minutes — enough to observe spike, scale-up, and drain
+    $spawnLatencySeconds = 5.0;
 
     $config = new QueueConfiguration(
         connection: 'redis',
@@ -109,11 +116,12 @@ function runSpawnSpikeSimulation(bool $compensationEnabled): int
         ),
     );
 
-    // Spike: 10×-multiplier for first 10 ticks (10 jobs/s × base 1.0), then quiet.
-    // The WorkloadSimulator uses baseArrivalRate * multiplier jobs per tick.
+    // Spike: 20×-multiplier for first 15 ticks (20 jobs/s × base 1.0), then near-idle.
+    // Total burst: 300 jobs. With avgJobTime=1s and max 50 workers, draining takes ~6s
+    // at full capacity — but scaling must first be triggered and workers deployed.
     $pattern = [];
     for ($t = 1; $t <= $duration; $t++) {
-        $pattern[$t] = $t <= 10 ? 10.0 : 0.1;
+        $pattern[$t] = $t <= 15 ? 20.0 : 0.05;
     }
 
     $simulation = new ScalingSimulation(
@@ -145,12 +153,22 @@ test('spawn compensation reduces SLA breaches during sudden spike with slow work
     $breachesWithout = runSpawnSpikeSimulation(compensationEnabled: false);
     $breachesWith = runSpawnSpikeSimulation(compensationEnabled: true);
 
-    // Compensation must not increase breach count.
-    // The primary assertion is strict: compensation should produce fewer breaches
-    // because the effective SLA window shrinks from 30s to 27s, causing
-    // BacklogDrainCalculator to request additional workers earlier.
+    // The assertion is strict: compensation MUST produce fewer breach ticks.
     //
-    // If both runs happen to produce zero breaches (system copes regardless),
-    // the test still passes — compensation cannot have made things worse.
-    expect($breachesWith)->toBeLessThanOrEqual($breachesWithout);
+    // Why this is reliable:
+    // - The 300-job spike guarantees the no-compensation run breaches the 30s SLA
+    //   (300 jobs / 50 max workers = 6s to drain at full capacity, but scaling must
+    //   react first — the backlog age will exceed 30s before enough workers arrive).
+    // - With effectiveSla = 25s (30 - 5 spawn latency), BacklogDrainCalculator
+    //   requests workers when oldest age reaches 12.5s instead of 15s, one full
+    //   scaling interval (5s) earlier than the uncompensated path.
+    // - Both runs use a fixed-latency fake tracker: no non-determinism from EMA
+    //   learning or Redis state.
+    //
+    // Design note: a fake tracker (not the real EmaSpawnLatencyTracker) is used
+    // intentionally to isolate the compensation arithmetic in HybridStrategy and
+    // BacklogDrainCalculator from the EMA measurement pipeline. Integration of
+    // the real tracker is covered by EmaSpawnLatencyTrackerTest and the
+    // SpawnLatencyRecorder listener.
+    expect($breachesWith)->toBeLessThan($breachesWithout);
 })->group('simulation');

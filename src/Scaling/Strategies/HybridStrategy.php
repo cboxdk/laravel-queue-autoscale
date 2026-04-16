@@ -136,7 +136,7 @@ final class HybridStrategy implements ScalingStrategyContract
 
         // Compute effective SLA after subtracting spawn latency
         $spawnLatency = $config->spawnCompensation->enabled
-            ? $this->spawnTracker->currentLatency($config->connection, $config->queue)
+            ? $this->spawnTracker->currentLatency($config->connection, $config->queue, $config->spawnCompensation)
             : 0.0;
         $effectiveSla = max(1.0, (float) $config->sla->targetSeconds - $spawnLatency);
 

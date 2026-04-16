@@ -84,6 +84,7 @@ final readonly class ScalingEngine
             predictedPickupTime: $this->strategy->getLastPrediction(),
             slaTarget: $config->sla->targetSeconds,
             capacity: $finalCapacityResult,
+            spawnCompensation: $config->spawnCompensation,
         );
     }
 

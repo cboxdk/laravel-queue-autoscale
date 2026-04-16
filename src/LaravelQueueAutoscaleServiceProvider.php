@@ -25,6 +25,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\EmaSpawnLatencyTracker;
+use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\SpawnLatencyRecorder;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
 use Illuminate\Contracts\Events\Dispatcher;
@@ -88,9 +89,16 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
             ]);
         }
 
-        $this->app->make(Dispatcher::class)->listen(
+        $dispatcher = $this->app->make(Dispatcher::class);
+
+        $dispatcher->listen(
             JobProcessing::class,
             PickupTimeRecorder::class,
+        );
+
+        $dispatcher->listen(
+            JobProcessing::class,
+            SpawnLatencyRecorder::class,
         );
     }
 }

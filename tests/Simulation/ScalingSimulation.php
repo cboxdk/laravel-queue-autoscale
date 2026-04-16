@@ -9,6 +9,7 @@ use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\SlaConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
+// SpawnCompensationConfiguration is used in the inline stub's method signatures
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
@@ -96,11 +97,11 @@ final class ScalingSimulation
         // Use provided spawn tracker or fall back to a zero-latency stub for backward compat
         $spawnTracker = $spawnTracker ?? new class implements SpawnLatencyTrackerContract
         {
-            public function recordSpawn(string $workerId, string $connection, string $queue): void {}
+            public function recordSpawn(string $workerId, string $connection, string $queue, SpawnCompensationConfiguration $config): void {}
 
             public function recordFirstPickup(string $workerId, float $pickupTimestamp): void {}
 
-            public function currentLatency(string $connection, string $queue): float
+            public function currentLatency(string $connection, string $queue, SpawnCompensationConfiguration $config): float
             {
                 return 0.0;
             }

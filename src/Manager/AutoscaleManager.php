@@ -515,10 +515,14 @@ final class AutoscaleManager
             $decision->reason
         );
 
+        $spawnConfig = $decision->spawnCompensation
+            ?? QueueConfiguration::fromConfig($decision->connection, $decision->queue)->spawnCompensation;
+
         $workers = $this->spawner->spawn(
             $decision->connection,
             $decision->queue,
-            $toAdd
+            $toAdd,
+            $spawnConfig,
         );
 
         foreach ($workers as $worker) {

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
@@ -16,11 +17,11 @@ use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
 beforeEach(function () {
     $spawnTracker = new class implements SpawnLatencyTrackerContract
     {
-        public function recordSpawn(string $workerId, string $connection, string $queue): void {}
+        public function recordSpawn(string $workerId, string $connection, string $queue, SpawnCompensationConfiguration $config): void {}
 
         public function recordFirstPickup(string $workerId, float $pickupTimestamp): void {}
 
-        public function currentLatency(string $connection, string $queue): float
+        public function currentLatency(string $connection, string $queue, SpawnCompensationConfiguration $config): float
         {
             return 0.0;
         }
