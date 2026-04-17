@@ -663,11 +663,11 @@ class AlertOnHighCosts
 
 **Check:**
 ```bash
-# Check autoscale manager status
-php artisan queue:autoscale:status
+# Inspect queue and metric state
+php artisan queue:autoscale:debug --queue=<your-queue> --connection=<your-connection>
 
-# Check worker spawn errors
-tail -f storage/logs/laravel.log | grep "worker spawn"
+# Check worker spawn errors in the app log
+tail -f storage/logs/laravel.log | grep -Ei "worker|autoscale"
 
 # Check system resources
 free -m

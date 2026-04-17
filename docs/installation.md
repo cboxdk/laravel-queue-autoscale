@@ -147,79 +147,34 @@ sudo supervisorctl start queue-autoscale:*
 
 ## Verification
 
-### Check Autoscaler Status
+### See what the autoscaler sees
 
-View current scaling status:
-
-```bash
-php artisan queue:autoscale:status
-```
-
-### Validate Configuration
-
-Verify your configuration is correct:
+Inspect the raw queue state and metrics the manager is working with:
 
 ```bash
-php artisan queue:autoscale:validate
+php artisan queue:autoscale:debug --queue=default --connection=redis
 ```
 
-### Test Dry-Run
+If the numbers shown here are wrong or zero, the problem is with metrics collection, not with the autoscaler itself.
 
-Evaluate scaling decisions without actually spawning workers:
+### Run the manager in verbose mode
 
 ```bash
-php artisan queue:autoscale:evaluate --dry-run
+php artisan queue:autoscale -vv
 ```
+
+Every evaluation cycle prints the decision, the limiting factor, and the scaling action. Let it run for a minute with some test traffic:
+
+```bash
+# In another terminal:
+php artisan queue:autoscale:test 50 --duration=1000
+```
+
+You should see the manager scale up, drain the backlog, and scale back down after `cooldown_seconds` (default 60).
 
 ## Troubleshooting
 
-### Autoscaler Not Discovering Queues
-
-**Issue**: No queues are being autoscaled.
-
-**Solution**: Ensure the metrics package is properly configured and collecting metrics:
-
-```bash
-# Check metrics collection
-php artisan queue:metrics:status
-
-# Verify storage backend is accessible
-php artisan tinker
-> Cache::store('redis')->get('test'); // For Redis
-```
-
-### Workers Not Spawning
-
-**Issue**: Autoscaler runs but doesn't spawn workers.
-
-**Common causes:**
-- `enabled` set to `false` in config
-- No queues with pending jobs
-- Already at `max_workers` limit
-- System resource limits reached
-
-**Solution**: Check logs for detailed information:
-
-```bash
-tail -f storage/logs/laravel.log
-```
-
-### Permission Errors
-
-**Issue**: Workers fail to spawn with permission errors.
-
-**Solution**: Ensure the PHP process has permission to spawn sub-processes:
-
-```bash
-# Check current user
-whoami
-
-# Verify artisan is executable
-ls -la artisan
-
-# Test manual worker spawn
-php artisan queue:work redis --queue=default --once
-```
+For a symptom-indexed guide (jobs piling up, workers dying, flapping, etc.), see [Troubleshooting](basic-usage/troubleshooting.md).
 
 ## Environment Variables
 

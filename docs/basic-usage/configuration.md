@@ -687,25 +687,14 @@ Different queues for different priority levels:
 
 ## Configuration Validation
 
-The package validates configuration on startup:
+Config validation runs at manager startup. If anything is wrong, `php artisan queue:autoscale` will fail with a specific message pointing at the offending key. Common errors:
 
-```php
-php artisan queue:autoscale:validate
-```
+- **`workers.min must be >= 0`** / **`workers.max must be >= workers.min`** — the worker bounds are inconsistent.
+- **`workers.scalable=false requires workers.min to equal workers.max`** — non-scalable (pinned) configs must declare exactly one target count.
+- **`Group 'X' cannot use a non-scalable profile`** — you pointed a group at `ExclusiveProfile`; use a per-queue exclusive config instead.
+- **`Queue 'X' is configured both in 'queues' and in group 'Y'`** — each queue may only appear once across `queues` and all groups.
 
-Common validation errors:
-
-### Invalid SLA
-
-```
-Error: max_pickup_time_seconds must be > 0
-Queue: default
-```
-
-Fix: Set a positive value:
-```php
-'max_pickup_time_seconds' => 60,  // Not 0 or negative
-```
+Fix the config and restart the manager.
 
 ### Invalid Worker Limits
 
@@ -740,17 +729,22 @@ Fix: Include all required fields:
 
 ## Configuration Testing
 
-Test your configuration before deploying:
+There's no separate dry-run command — the manager evaluates on a fixed interval. To test a config change without a deploy:
 
 ```bash
-# Validate configuration
-php artisan queue:autoscale:validate
+# Run the manager in very-verbose mode. It prints every decision with
+# reasoning, but only spawns/terminates when the decision differs from
+# the current worker count.
+php artisan queue:autoscale -vvv --interval=5
 
-# Dry-run evaluation (doesn't spawn workers)
-php artisan queue:autoscale:evaluate --dry-run
+# In another terminal, simulate load:
+php artisan queue:autoscale:test 50 --duration=1000 --queue=critical
+```
 
-# Test specific queue
-php artisan queue:autoscale:evaluate --queue=critical --dry-run
+Watch the manager output. If the decisions surprise you, inspect the debug state directly:
+
+```bash
+php artisan queue:autoscale:debug --queue=critical --connection=redis
 ```
 
 ## See Also

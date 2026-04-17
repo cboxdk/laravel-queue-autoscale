@@ -1,380 +1,155 @@
 ---
 title: "Quick Start"
-description: "Get your first queue autoscaled in 5 minutes with this step-by-step tutorial"
+description: "Get one queue autoscaled in 5 minutes with concrete, verifiable steps"
 weight: 3
 ---
 
 # Quick Start
 
-This guide gets you from zero to a working autoscaled queue in 5 minutes.
+Zero to a working autoscaled queue in about 5 minutes. Every command and file path on this page is real — nothing is a placeholder.
 
 ## Prerequisites
 
-- Queue Autoscale for Laravel [installed](installation.md)
-- Metrics package configured
-- A Laravel application with queue jobs
+- PHP 8.3+ and Laravel 11+
+- Redis (recommended) configured in `config/queue.php`
+- `cboxdk/laravel-queue-metrics` already set up — see [Installation](installation.md)
 
-## Step 1: Define Your SLA Target
-
-The most important decision: **How quickly should jobs start processing?**
-
-Edit `config/queue-autoscale.php`:
-
-```php
-return [
-    'enabled' => true,
-
-    'sla_defaults' => [
-        // Jobs should start within 30 seconds
-        'max_pickup_time_seconds' => 30,
-
-        // Worker limits
-        'min_workers' => 1,   // Always keep at least 1
-        'max_workers' => 10,  // Never exceed 10
-
-        // Prevent rapid scaling
-        'scale_cooldown_seconds' => 60,
-    ],
-];
-```
-
-**Choosing the right SLA:**
-- **5-15 seconds**: Real-time/critical operations
-- **30-60 seconds**: Standard user-facing features
-- **120-300 seconds**: Background processing, reports
-- **600+ seconds**: Batch jobs, analytics
-
-## Step 2: Start the Autoscaler
-
-Run the autoscaler daemon:
+## Step 1 — Install and publish config
 
 ```bash
-php artisan queue:autoscale
+composer require cboxdk/laravel-queue-autoscale
+php artisan vendor:publish --tag=queue-autoscale-config
 ```
 
-You'll see output like:
+You now have `config/queue-autoscale.php`. The defaults work out of the box: one queue (`default`) on your default connection, using the `BalancedProfile` (30s SLA, 1–10 workers).
+
+## Step 2 — Start the daemon
+
+In one terminal:
+
+```bash
+php artisan queue:autoscale -v
+```
+
+You should see something like:
 
 ```
-[autoscale] Starting autoscaler...
-[autoscale] Evaluation interval: 30 seconds
-[autoscale] Discovered queues: redis/default
-[autoscale] Queue: redis/default - Current: 0 workers, Target: 1 worker
-[autoscale] Spawning 1 worker for redis/default
+Starting Queue Autoscale Manager
+   Manager ID: your-host
+   Evaluation interval: 5s
 ```
 
-## Step 3: Dispatch Some Jobs
+The manager evaluates every 5 seconds. Leave it running.
 
-Create a test job or use an existing one:
+> Use `-vv` for debug-level output (per-queue metrics and decisions) and `-vvv` to also see the capacity breakdown used for each scaling decision.
+
+## Step 3 — Dispatch test jobs
+
+In a second terminal:
+
+```bash
+php artisan queue:autoscale:test 50 --duration=1000
+```
+
+This dispatches 50 jobs that each sleep for 1 second on the `default` queue. Switch back to the manager terminal and watch.
+
+Within a few evaluation cycles you'll see output like:
+
+```
+Evaluating queue: redis:default
+  Metrics: pending=42, oldest_age=14s, active_workers=1, throughput=6/min
+  📊 Decision: 1 → 6 workers
+     Reason: Little's Law (λ=0.80, W=1.00s) + backlog drain to target
+  ⬆️  Scaling UP: spawning 5 worker(s)
+```
+
+When the backlog drains, the manager scales back down (respecting `cooldown_seconds`, default 60s).
+
+## Step 4 — Tune for your workload
+
+The defaults cover ~80% of cases. When they don't, pick a shipped profile or override specific keys.
+
+### Pick a profile
+
+Five profiles ship with the package. Each is a pre-tuned bundle of SLA, worker limits, and forecast settings.
 
 ```php
-use App\Jobs\ProcessOrder;
+// config/queue-autoscale.php
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BackgroundProfile;
 
-// Dispatch jobs to the queue
-for ($i = 0; $i < 100; $i++) {
-    ProcessOrder::dispatch($order);
-}
-```
-
-## Step 4: Watch It Scale
-
-The autoscaler will automatically:
-
-1. **Detect new jobs** via metrics package
-2. **Calculate required workers** using the hybrid algorithm
-3. **Spawn workers** to meet SLA target
-4. **Scale down** when traffic decreases
-
-You'll see logs like:
-
-```
-[autoscale] Queue: redis/default
-  Current: 1 workers
-  Target: 5 workers
-  Reason: "trend predicts rate increase: 2.00/s → 5.00/s"
-  Action: Spawning 4 workers
-
-[autoscale] Queue: redis/default
-  Current: 5 workers
-  Target: 8 workers
-  Reason: "backlog drain to prevent SLA breach (25s / 30s target)"
-  Action: Spawning 3 workers
-
-[autoscale] Queue: redis/default
-  Current: 8 workers
-  Target: 3 workers
-  Reason: "workload decreased: 1.00/s processing rate"
-  Action: Terminating 5 workers (after cooldown)
-```
-
-## Understanding What Happened
-
-### The Algorithm in Action
-
-When you dispatched 100 jobs, the autoscaler:
-
-1. **Little's Law**: Calculated steady-state workers needed
-   - Rate: 10 jobs/sec
-   - Avg time: 2 seconds/job
-   - Workers: 10 × 2 = 20 workers
-
-2. **Trend Prediction**: Detected traffic increase
-   - Forecasted rate: 12 jobs/sec
-   - Workers: 12 × 2 = 24 workers
-
-3. **Backlog Drain**: Checked SLA risk
-   - No breach risk detected
-   - Workers: N/A
-
-4. **Decision**: max(20, 24, N/A) = **24 workers**
-   - But limited by `max_workers` = 10
-   - **Final: 10 workers**
-
-### Why This Matters
-
-**Without autoscaling:**
-- You'd manually set `numprocs=10` in supervisor
-- Under load: Jobs wait longer (SLA miss)
-- Light load: Wasting resources on idle workers
-
-**With autoscaling:**
-- Maintains SLA automatically
-- Scales up for peak traffic
-- Scales down to save resources
-- Responds to trends proactively
-
-## Common Scenarios
-
-### Scenario: Gradual Traffic Increase
-
-```
-09:00 - Morning traffic starts
-├─ Rate: 5 jobs/sec
-└─ Workers: 1 → 10 (gradual increase)
-
-09:30 - Peak traffic
-├─ Rate: 12 jobs/sec
-└─ Workers: 10 (at max_workers limit)
-
-10:00 - Traffic normalizes
-├─ Rate: 8 jobs/sec
-└─ Workers: 10 → 6 (gradual decrease after cooldown)
-```
-
-### Scenario: Sudden Traffic Spike
-
-```
-10:00 - Normal traffic
-├─ Rate: 10 jobs/sec
-├─ Backlog: 0
-└─ Workers: 5
-
-10:01 - Marketing campaign launches
-├─ Rate: 50 jobs/sec (5x increase!)
-├─ Backlog: 200 jobs accumulating
-└─ Workers: 5 → 10 (immediate scale-up)
-
-10:02 - SLA at risk detected
-├─ Oldest job: 28 seconds (approaching 30s target)
-├─ Backlog drain activates
-└─ Workers: 10 (already at max, SLA breach prevented)
-```
-
-### Scenario: Different Queue Priorities
-
-Configure different SLAs per queue:
-
-```php
-'sla_defaults' => [
-    'max_pickup_time_seconds' => 60,  // Default: 1 minute
-],
+'sla_defaults' => \Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile::class,
 
 'queues' => [
-    'critical' => [
-        'max_pickup_time_seconds' => 10,  // 10 seconds
-        'min_workers' => 5,
-        'max_workers' => 50,
-    ],
-    'emails' => [
-        'max_pickup_time_seconds' => 300,  // 5 minutes
-        'min_workers' => 0,
-        'max_workers' => 5,
+    'payments' => CriticalProfile::class,      // 10s SLA, 5-50 workers
+    'analytics' => BackgroundProfile::class,   // 300s SLA, 0-5 workers
+],
+```
+
+See [Workload Profiles](basic-usage/workload-profiles.md) for the full comparison.
+
+### Override specific keys
+
+Need almost a profile but with tighter limits? Pass an array that deep-merges on top of `sla_defaults`:
+
+```php
+'queues' => [
+    'exports' => [
+        'sla' => ['target_seconds' => 45],
+        'workers' => ['min' => 0, 'max' => 3],
     ],
 ],
 ```
 
-## Monitoring Your Autoscaler
+### Lock a queue to sequential processing
 
-### View Current Status
+Some queues must not run in parallel (customer integrations that need strict ordering, APIs with single-connection rate limits). Use `ExclusiveProfile`:
+
+```php
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\ExclusiveProfile;
+
+'queues' => [
+    'legacy-sync' => ExclusiveProfile::class,
+],
+```
+
+The manager pins the queue to exactly one worker and respawns it if it dies. It never scales. See [Queue Topology](basic-usage/queue-topology.md#exclusive-sequential-queues).
+
+## Step 5 — Hook up alerts
+
+The manager emits events (`SlaBreached`, `SlaRecovered`, `WorkersScaled`, etc.) that any Laravel listener can consume.
+
+Three paste-and-go recipes cover the common cases:
+
+- [Alert via Log](cookbook/alert-via-log.md) — dedicated log channel, zero external deps
+- [Alert via Slack](cookbook/alert-via-slack.md) — one webhook URL
+- [Alert via Email](cookbook/alert-via-email.md) — via Laravel Notifications
+
+All three use the built-in `AlertRateLimiter` so a sustained breach doesn't become a pager storm.
+
+## Step 6 — Deploy
+
+Run the manager as a long-running daemon. Pick your platform:
+
+- [Self-Hosted VPS (systemd / Supervisor)](deployment/self-hosted-vps.md)
+- [Laravel Forge](deployment/forge.md)
+- [Ploi](deployment/ploi.md)
+- [Docker / Compose](deployment/docker.md)
+
+**Important:** if your platform has a separate "queue workers" UI (Forge, Ploi), **don't** configure workers there for queues the autoscaler manages. They would fight. See each platform page for details.
+
+## Verify it worked
 
 ```bash
-php artisan queue:autoscale:status
+# Inspect what the manager and metrics package see for a queue.
+php artisan queue:autoscale:debug --queue=default --connection=redis
 ```
 
-Output:
-```
-Queue: redis/default
-  Status: Scaling
-  Current Workers: 8
-  Target Workers: 8
-  SLA Target: 30 seconds
-  Predicted Pickup: 15 seconds
-  Last Scaled: 45 seconds ago
-```
+If workers are not spawning even though jobs are piling up, head to [Troubleshooting](basic-usage/troubleshooting.md) — it's organized by symptom.
 
-### Check Metrics
+## What to read next
 
-```bash
-# View queue metrics
-php artisan queue:metrics:show redis/default
-
-# Watch live metrics
-watch -n 1 'php artisan queue:metrics:show redis/default'
-```
-
-### Enable Verbose Logging
-
-For debugging, increase log verbosity:
-
-```bash
-php artisan queue:autoscale -vvv
-```
-
-## Production Deployment
-
-Once you're comfortable with local testing, deploy to production:
-
-### 1. Update Configuration
-
-Set environment-specific values in `.env`:
-
-```env
-QUEUE_AUTOSCALE_ENABLED=true
-QUEUE_METRICS_STORAGE=redis
-
-# Production SLA targets
-QUEUE_AUTOSCALE_MAX_PICKUP_TIME=30
-QUEUE_AUTOSCALE_MAX_WORKERS=50
-```
-
-### 2. Setup Supervisor
-
-Create `/etc/supervisor/conf.d/queue-autoscale.conf`:
-
-```ini
-[program:queue-autoscale]
-process_name=%(program_name)s
-command=php /var/www/artisan queue:autoscale
-autostart=true
-autorestart=true
-stopasgroup=true
-killasgroup=true
-user=www-data
-numprocs=1
-redirect_stderr=true
-stdout_logfile=/var/www/storage/logs/autoscale.log
-stopwaitsecs=3600
-```
-
-### 3. Start Services
-
-```bash
-sudo supervisorctl reread
-sudo supervisorctl update
-sudo supervisorctl start queue-autoscale:*
-```
-
-### 4. Verify Operation
-
-```bash
-# Check supervisor status
-sudo supervisorctl status queue-autoscale:*
-
-# View logs
-tail -f /var/www/storage/logs/autoscale.log
-
-# Check metrics
-php artisan queue:autoscale:status
-```
-
-## Next Steps
-
-Congratulations! You now have a working autoscaled queue. Here's what to explore next:
-
-### Understand the Algorithm
-Learn how scaling decisions are made: [How It Works](basic-usage/how-it-works.md)
-
-### Optimize Configuration
-Fine-tune settings for your workload: [Configuration Guide](basic-usage/configuration.md)
-
-### Add Monitoring
-Track performance and scaling events: [Monitoring](basic-usage/monitoring.md)
-
-### Custom Logic
-Implement custom scaling strategies: [Custom Strategies](advanced-usage/custom-strategies.md)
-
-### Production Hardening
-Secure and optimize for production: [Deployment Guide](advanced-usage/deployment.md)
-
-## Troubleshooting
-
-### Workers Not Scaling
-
-**Check metrics collection:**
-```bash
-php artisan queue:metrics:status
-```
-
-**Verify configuration:**
-```bash
-php artisan queue:autoscale:validate
-```
-
-**Review logs:**
-```bash
-tail -f storage/logs/laravel.log | grep autoscale
-```
-
-### SLA Breaches Occurring
-
-If jobs wait longer than your SLA target:
-
-1. **Increase max_workers:**
-   ```php
-   'max_workers' => 20,  // From 10
-   ```
-
-2. **Decrease cooldown:**
-   ```php
-   'scale_cooldown_seconds' => 30,  // From 60
-   ```
-
-3. **Check system resources:**
-   ```bash
-   # CPU/Memory limits may prevent scaling
-   php artisan queue:autoscale:status --verbose
-   ```
-
-### Too Many Workers
-
-If the autoscaler spawns too many workers:
-
-1. **Decrease max_workers:**
-   ```php
-   'max_workers' => 5,  // From 10
-   ```
-
-2. **Relax SLA target:**
-   ```php
-   'max_pickup_time_seconds' => 60,  // From 30
-   ```
-
-3. **Increase cooldown:**
-   ```php
-   'scale_cooldown_seconds' => 120,  // From 60
-   ```
-
-## Getting Help
-
-- **Documentation**: See [Troubleshooting Guide](basic-usage/troubleshooting.md)
-- **Issues**: [GitHub Issues](https://github.com/cboxdk/laravel-queue-autoscale/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/cboxdk/laravel-queue-autoscale/discussions)
+- **[Queue Topology](basic-usage/queue-topology.md)** — when to use per-queue, groups, exclusive, or excluded. Start here before adding more queues.
+- **[Configuration](basic-usage/configuration.md)** — the full config reference, including advanced keys.
+- **[How It Works](basic-usage/how-it-works.md)** — Little's Law, backlog drain, and forecasting, explained.
+- **[Cookbook](cookbook/_index.md)** — more recipes beyond alerting.

@@ -115,8 +115,8 @@ protected $listen = [
 Force a breach in a local test to verify:
 
 ```bash
-# Shovel 50 slow jobs into the default queue, then watch Slack.
-php artisan queue-autoscale:dispatch-test-jobs --count=50
+# Shovel 50 slow jobs (1s each) into the default queue, then watch Slack.
+php artisan queue:autoscale:test 50 --duration=1000
 ```
 
 ## Tuning
