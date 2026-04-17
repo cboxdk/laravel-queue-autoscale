@@ -6,6 +6,10 @@ weight: 32
 
 # Deployment
 
+> **Looking for platform-specific steps?** Start at [Deployment → Platforms](../deployment/_index.md). You'll find short, concrete guides for self-hosted VPS, Laravel Forge, Ploi, and Docker.
+
+This page is the **general production reference** — prerequisites, installation, and deeper operational topics that apply across all platforms.
+
 Complete guide for deploying Queue Autoscale for Laravel to production.
 
 ## Prerequisites
