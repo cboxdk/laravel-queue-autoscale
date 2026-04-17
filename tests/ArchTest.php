@@ -15,6 +15,7 @@ arch('configuration value objects are final readonly')
         'Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration',
         'Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration',
         'Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration',
+        'Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration',
     ])
     ->toBeFinal()
     ->toBeReadonly();

@@ -13,6 +13,7 @@ final readonly class WorkerConfiguration
         public int $timeoutSeconds,
         public int $sleepSeconds,
         public int $shutdownTimeoutSeconds,
+        public bool $scalable = true,
     ) {
         if ($min < 0) {
             throw new InvalidConfigurationException("workers.min must be >= 0, got {$min}");
@@ -29,5 +30,29 @@ final readonly class WorkerConfiguration
         if ($timeoutSeconds <= 0) {
             throw new InvalidConfigurationException("workers.timeout_seconds must be > 0, got {$timeoutSeconds}");
         }
+
+        if (! $scalable && $min !== $max) {
+            throw new InvalidConfigurationException(
+                "workers.scalable=false requires workers.min ({$min}) to equal workers.max ({$max})"
+            );
+        }
+
+        if (! $scalable && $min === 0) {
+            throw new InvalidConfigurationException(
+                'workers.scalable=false requires workers.min >= 1 (a non-scalable queue needs at least one worker)'
+            );
+        }
+    }
+
+    /**
+     * Target worker count for this queue.
+     *
+     * For scalable queues this returns the minimum; the autoscaler is free to
+     * exceed it up to max. For non-scalable (supervised) queues this is the
+     * exact count we enforce — the autoscaler never deviates.
+     */
+    public function pinnedCount(): int
+    {
+        return $this->min;
     }
 }

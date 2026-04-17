@@ -41,6 +41,54 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Excluded queues
+    |--------------------------------------------------------------------------
+    |
+    | Queue name patterns (fnmatch globs) that this package will never manage.
+    | Use this for queues supervised elsewhere (e.g. by Horizon), throwaway
+    | queues, or queues you want to run manually with a fixed worker count.
+    |
+    | Examples: 'legacy-*', 'test-?', 'horizon-managed'
+    |
+    */
+    'excluded' => [
+        // 'legacy-*',
+        // 'horizon-managed',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Worker groups (multi-queue workers with strict priority)
+    |--------------------------------------------------------------------------
+    |
+    | A group runs one set of workers that polls multiple queues in priority
+    | order (first listed = highest priority). Use groups when several queues
+    | share a workload budget and you want idle workers in one queue to absorb
+    | bursts on another without paying spawn latency.
+    |
+    | A queue name may appear EITHER under 'queues' OR inside a group's
+    | 'queues' list, never both. Start-up validation will fail if it does.
+    |
+    | Supported 'mode' values: 'priority' (the only mode in v2).
+    |
+    | Example:
+    |     'notifications' => [
+    |         'queues' => ['email', 'sms', 'push'],
+    |         'profile' => BalancedProfile::class,
+    |         'connection' => 'redis',
+    |         'mode' => 'priority',
+    |     ],
+    |
+    */
+    'groups' => [
+        // 'notifications' => [
+        //     'queues' => ['email', 'sms', 'push'],
+        //     'profile' => BalancedProfile::class,
+        // ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Pickup time storage (global)
     |--------------------------------------------------------------------------
     */

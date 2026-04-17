@@ -140,13 +140,26 @@ final class HybridStrategy implements ScalingStrategyContract
             : 0.0;
         $effectiveSla = max(1.0, (float) $config->sla->targetSeconds - $spawnLatency);
 
-        // Compute p95 pickup time signal from sliding window
-        $pickupSamples = $this->pickupStore->recentSamples(
-            $config->connection,
-            $config->queue,
-            $config->sla->windowSeconds,
-        );
-        $pickupTimes = array_map(static fn (array $s): float => $s['pickup_seconds'], $pickupSamples);
+        // Compute p95 pickup time signal from sliding window.
+        //
+        // For a per-queue config this reads samples from a single Redis list.
+        // For a group-adapted config (memberQueues populated) we aggregate across
+        // every real queue the group polls — otherwise p95 would always be null
+        // for groups, because PickupTimeRecorder stores samples keyed by the real
+        // queue name, not by group name.
+        $pickupTimes = [];
+
+        foreach ($config->sampleQueues() as $sampleQueue) {
+            $samples = $this->pickupStore->recentSamples(
+                $config->connection,
+                $sampleQueue,
+                $config->sla->windowSeconds,
+            );
+
+            foreach ($samples as $s) {
+                $pickupTimes[] = $s['pickup_seconds'];
+            }
+        }
         $p95 = $this->percentileCalc->compute(
             $pickupTimes,
             $config->sla->percentile,

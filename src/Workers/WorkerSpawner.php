@@ -18,16 +18,22 @@ final readonly class WorkerSpawner
     ) {}
 
     /**
-     * Spawn N queue:work worker processes
+     * Spawn N queue:work worker processes.
      *
      * @param  string  $connection  Queue connection name
-     * @param  string  $queue  Queue name
+     * @param  string  $queue  Queue name OR comma-separated queue list (for group workers)
      * @param  int  $count  Number of workers to spawn
-     * @param  SpawnCompensationConfiguration  $spawnConfig  Per-queue spawn compensation settings
+     * @param  SpawnCompensationConfiguration  $spawnConfig  Spawn compensation settings
+     * @param  string|null  $group  Optional group name — tags spawned WorkerProcess instances
      * @return Collection<int, WorkerProcess> Spawned workers
      */
-    public function spawn(string $connection, string $queue, int $count, SpawnCompensationConfiguration $spawnConfig): Collection
-    {
+    public function spawn(
+        string $connection,
+        string $queue,
+        int $count,
+        SpawnCompensationConfiguration $spawnConfig,
+        ?string $group = null,
+    ): Collection {
         $workers = collect();
 
         for ($i = 0; $i < $count; $i++) {
@@ -43,10 +49,16 @@ final readonly class WorkerSpawner
             ]);
 
             // Inject environment variables for monitoring
-            $process->setEnv([
+            $env = [
                 'LARAVEL_AUTOSCALE_WORKER' => 'true',
                 'AUTOSCALE_MANAGER_ID' => AutoscaleConfiguration::managerId(),
-            ]);
+            ];
+
+            if ($group !== null) {
+                $env['AUTOSCALE_WORKER_GROUP'] = $group;
+            }
+
+            $process->setEnv($env);
 
             try {
                 $process->start();
@@ -57,7 +69,10 @@ final readonly class WorkerSpawner
                 $pid = $process->getPid();
 
                 if ($pid !== null) {
-                    $this->spawnLatencyTracker->recordSpawn((string) $pid, $connection, $queue, $spawnConfig);
+                    // For group workers the "queue" identity used by the spawn tracker
+                    // is the group name so pickup-time EMA is shared across member queues.
+                    $trackingQueue = $group ?? $queue;
+                    $this->spawnLatencyTracker->recordSpawn((string) $pid, $connection, $trackingQueue, $spawnConfig);
                 }
 
                 // Brief pause to allow process to fail fast if command is invalid
@@ -69,6 +84,7 @@ final readonly class WorkerSpawner
                         [
                             'connection' => $connection,
                             'queue' => $queue,
+                            'group' => $group,
                             'error' => $process->getErrorOutput(),
                             'output' => $process->getOutput(),
                         ]
@@ -82,6 +98,7 @@ final readonly class WorkerSpawner
                     connection: $connection,
                     queue: $queue,
                     spawnedAt: now(),
+                    group: $group,
                 );
 
                 $workers->push($worker);
@@ -91,6 +108,7 @@ final readonly class WorkerSpawner
                     [
                         'connection' => $connection,
                         'queue' => $queue,
+                        'group' => $group,
                         'pid' => $process->getPid(),
                     ]
                 );
@@ -100,6 +118,7 @@ final readonly class WorkerSpawner
                     [
                         'connection' => $connection,
                         'queue' => $queue,
+                        'group' => $group,
                         'exception' => $e->getMessage(),
                     ]
                 );

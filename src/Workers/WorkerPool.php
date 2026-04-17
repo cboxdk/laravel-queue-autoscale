@@ -48,18 +48,68 @@ final class WorkerPool
         );
 
         $toRemove = $matching->take($count);
+        $removePids = $this->pidSet($toRemove);
 
         $this->workers = $this->workers->reject(
-            fn (WorkerProcess $w) => $toRemove->contains($w)
+            fn (WorkerProcess $w) => isset($removePids[(string) $w->pid()])
         );
 
         return $toRemove;
+    }
+
+    /**
+     * Remove N workers belonging to a specific group.
+     *
+     * @return Collection<int, WorkerProcess> Removed workers
+     */
+    public function removeFromGroup(string $connection, string $group, int $count): Collection
+    {
+        $matching = $this->workers->filter(
+            fn (WorkerProcess $w) => $w->matchesGroup($connection, $group)
+        );
+
+        $toRemove = $matching->take($count);
+        $removePids = $this->pidSet($toRemove);
+
+        $this->workers = $this->workers->reject(
+            fn (WorkerProcess $w) => isset($removePids[(string) $w->pid()])
+        );
+
+        return $toRemove;
+    }
+
+    /**
+     * Build a PID lookup set for fast containment checks.
+     *
+     * Collections of domain objects cannot be compared via contains() on
+     * Mockery-wrapped test doubles without triggering recursive equality.
+     *
+     * @param  Collection<int, WorkerProcess>  $workers
+     * @return array<array-key, true>
+     */
+    private function pidSet(Collection $workers): array
+    {
+        /** @var array<array-key, true> $set */
+        $set = [];
+
+        foreach ($workers as $w) {
+            $set[(string) $w->pid()] = true;
+        }
+
+        return $set;
     }
 
     public function count(string $connection, string $queue): int
     {
         return $this->workers->filter(
             fn (WorkerProcess $w) => $w->matches($connection, $queue) && $w->isRunning()
+        )->count();
+    }
+
+    public function countGroup(string $connection, string $group): int
+    {
+        return $this->workers->filter(
+            fn (WorkerProcess $w) => $w->matchesGroup($connection, $group) && $w->isRunning()
         )->count();
     }
 

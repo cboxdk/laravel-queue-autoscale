@@ -130,6 +130,39 @@ final readonly class AutoscaleConfiguration
     }
 
     /**
+     * Queue name patterns that should be skipped entirely by the autoscaler.
+     *
+     * Supports fnmatch-style globs (e.g. "legacy-*", "test-?"). Excluded queues
+     * are never managed, regardless of whether metrics are observed for them.
+     *
+     * @return array<int, string>
+     */
+    public static function excludedPatterns(): array
+    {
+        /** @var array<int, mixed> $patterns */
+        $patterns = (array) config('queue-autoscale.excluded', []);
+
+        return array_values(array_filter(
+            array_map(static fn (mixed $p): string => is_string($p) ? $p : '', $patterns),
+            static fn (string $p): bool => $p !== '',
+        ));
+    }
+
+    /**
+     * Test whether a queue name matches any configured exclusion pattern.
+     */
+    public static function isExcluded(string $queue): bool
+    {
+        foreach (self::excludedPatterns() as $pattern) {
+            if (fnmatch($pattern, $queue)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Get all configured queues from the autoscale configuration.
      *
      * @return array<string, array{connection: string, queue: string}>

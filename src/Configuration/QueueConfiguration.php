@@ -10,6 +10,11 @@ use Cbox\LaravelQueueAutoscale\Contracts\ProfileContract;
 
 final readonly class QueueConfiguration
 {
+    /**
+     * @param  list<string>  $memberQueues  When this configuration represents a group, lists the real
+     *                                      member queues whose metrics/samples should be aggregated.
+     *                                      Empty for per-queue configurations.
+     */
     public function __construct(
         public string $connection,
         public string $queue,
@@ -17,7 +22,22 @@ final readonly class QueueConfiguration
         public ForecastConfiguration $forecast,
         public SpawnCompensationConfiguration $spawnCompensation,
         public WorkerConfiguration $workers,
+        public array $memberQueues = [],
     ) {}
+
+    /**
+     * Queue names to consult for per-real-queue signals (pickup time, spawn latency).
+     *
+     * For per-queue configs this returns [queue]. For group-adapted configs this returns
+     * the member queue list so strategies can aggregate samples across every real queue
+     * the group polls.
+     *
+     * @return list<string>
+     */
+    public function sampleQueues(): array
+    {
+        return $this->memberQueues !== [] ? $this->memberQueues : [$this->queue];
+    }
 
     public static function fromConfig(string $connection, string $queue): self
     {
@@ -30,7 +50,7 @@ final readonly class QueueConfiguration
          *     sla: array{target_seconds: int, percentile: int, window_seconds: int, min_samples: int},
          *     forecast: array{forecaster: class-string<ForecasterContract>, policy: class-string<ForecastPolicyContract>, horizon_seconds: int, history_seconds: int},
          *     spawn_compensation: array{enabled: bool, fallback_seconds: float, min_samples: int, ema_alpha: float},
-         *     workers: array{min: int, max: int, tries: int, timeout_seconds: int, sleep_seconds: int, shutdown_timeout_seconds: int},
+         *     workers: array{min: int, max: int, tries: int, timeout_seconds: int, sleep_seconds: int, shutdown_timeout_seconds: int, scalable?: bool},
          * } $merged
          */
         $merged = self::deepMerge($defaults, $overrideArray);
@@ -63,6 +83,7 @@ final readonly class QueueConfiguration
                 timeoutSeconds: (int) $merged['workers']['timeout_seconds'],
                 sleepSeconds: (int) $merged['workers']['sleep_seconds'],
                 shutdownTimeoutSeconds: (int) $merged['workers']['shutdown_timeout_seconds'],
+                scalable: (bool) ($merged['workers']['scalable'] ?? true),
             ),
         );
     }

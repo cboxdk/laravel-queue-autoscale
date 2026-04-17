@@ -191,6 +191,8 @@ final class MigrateConfigCommand extends Command
             'manager_id' => $v1['manager_id'] ?? gethostname(),
             'sla_defaults' => $slaDefaults,
             'queues' => $v2Queues,
+            'excluded' => is_array($v1['excluded'] ?? null) ? $v1['excluded'] : [],
+            'groups' => is_array($v1['groups'] ?? null) ? $v1['groups'] : [],
             'pickup_time' => [
                 'store' => RedisPickupTimeStore::class,
                 'percentile_calculator' => SortBasedPercentileCalculator::class,
