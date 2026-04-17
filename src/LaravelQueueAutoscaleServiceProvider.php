@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale;
 
+use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
 use Cbox\LaravelQueueAutoscale\Commands\DebugQueueCommand;
 use Cbox\LaravelQueueAutoscale\Commands\DispatchTestJobsCommand;
 use Cbox\LaravelQueueAutoscale\Commands\LaravelQueueAutoscaleCommand;
@@ -44,6 +45,16 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
             __DIR__.'/../config/queue-autoscale.php',
             'queue-autoscale'
         );
+
+        // Alert rate limiter — reads default cooldown from config so operators
+        // can tune it without writing a custom binding.
+        $this->app->singleton(AlertRateLimiter::class, function (): AlertRateLimiter {
+            $cooldown = config('queue-autoscale.alerting.cooldown_seconds', 300);
+
+            return new AlertRateLimiter(
+                cooldownSeconds: is_numeric($cooldown) ? (int) $cooldown : 300,
+            );
+        });
 
         // Register calculators
         $this->app->singleton(LittlesLawCalculator::class);

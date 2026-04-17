@@ -154,4 +154,21 @@ return [
         ConservativeScaleDownPolicy::class,
         BreachNotificationPolicy::class,
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Alert rate limiting
+    |--------------------------------------------------------------------------
+    |
+    | How long (in seconds) to suppress repeated alerts for the same queue
+    | and signal. Applies to the built-in BreachNotificationPolicy and any
+    | listener that injects the AlertRateLimiter.
+    |
+    | A breach that stays active will log once, then go quiet for this many
+    | seconds. Flapping alerts are suppressed too.
+    |
+    */
+    'alerting' => [
+        'cooldown_seconds' => env('QUEUE_AUTOSCALE_ALERT_COOLDOWN', 300),
+    ],
 ];
