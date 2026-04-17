@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
 use Cbox\LaravelQueueAutoscale\Configuration\Profiles\ExclusiveProfile;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\ProfileContract;
@@ -20,7 +21,7 @@ test('pins workers to exactly one and disables scaling', function (): void {
 
 test('resolves through QueueConfiguration as non-scalable', function (): void {
     config([
-        'queue-autoscale.sla_defaults' => \Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile::class,
+        'queue-autoscale.sla_defaults' => BalancedProfile::class,
         'queue-autoscale.queues' => [
             'sequential-sync' => ExclusiveProfile::class,
         ],
@@ -34,7 +35,7 @@ test('resolves through QueueConfiguration as non-scalable', function (): void {
 
 test('defaults to scalable when profile does not set the flag', function (): void {
     config([
-        'queue-autoscale.sla_defaults' => \Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile::class,
+        'queue-autoscale.sla_defaults' => BalancedProfile::class,
         'queue-autoscale.queues' => [],
     ]);
 
