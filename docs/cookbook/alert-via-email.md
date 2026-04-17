@@ -117,7 +117,7 @@ protected $listen = [
 
 ## Done
 
-Test with Mailtrap or `MAIL_MAILER=log` locally, force a breach with `php artisan queue:autoscale:test 50 --duration=1000`, then check the inbox (or `storage/logs/laravel.log`).
+Test with Mailtrap or `MAIL_MAILER=log` locally. Force a breach by dispatching a burst of slow jobs — via tinker: `for ($i = 0; $i < 50; $i++) { dispatch(function () { sleep(1); }); }`. Then check the inbox (or `storage/logs/laravel.log`).
 
 ## Tuning
 

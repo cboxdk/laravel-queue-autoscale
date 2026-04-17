@@ -134,22 +134,28 @@ php artisan tinker
 Edit `config/queue-autoscale.php`:
 
 ```php
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
+
 return [
     'enabled' => env('QUEUE_AUTOSCALE_ENABLED', true),
 
-    'sla_defaults' => [
-        'max_pickup_time_seconds' => 30,  // Jobs picked up within 30s
-        'min_workers' => 1,
-        'max_workers' => 10,
-        'scale_cooldown_seconds' => 60,
+    // Profile applied to every queue unless overridden below.
+    'sla_defaults' => BalancedProfile::class,
+
+    'queues' => [
+        // Pick a shipped profile:
+        'critical' => CriticalProfile::class,
+
+        // Or deep-merge a partial override on top of sla_defaults:
+        'exports'  => [
+            'sla' => ['target_seconds' => 45],
+            'workers' => ['max' => 20],
+        ],
     ],
 
-    // Override for specific queues
-    'queue_overrides' => [
-        'critical' => [
-            'max_pickup_time_seconds' => 10,
-            'max_workers' => 20,
-        ],
+    'scaling' => [
+        'cooldown_seconds' => 60,
     ],
 ];
 ```
@@ -160,9 +166,11 @@ return [
 # Run autoscaler in foreground
 php artisan queue:autoscale
 
-# In another terminal, dispatch test jobs
+# In another terminal, dispatch a burst of work using any job your app
+# already has. For a quick smoke test without an existing job class,
+# queued closures work fine:
 php artisan tinker
-> dispatch(new \App\Jobs\TestJob);
+>>> for ($i = 0; $i < 50; $i++) { dispatch(function () { sleep(1); }); }
 ```
 
 Watch the autoscaler logs to verify it scales workers.
@@ -380,43 +388,35 @@ AUTOSCALE_MAX_WORKERS=10
 
 ### Production Recommendations
 
+Pick the shipped profile that matches your traffic shape. See [Workload Profiles](../basic-usage/workload-profiles.md) for the full reference.
+
 #### High-Traffic Application
 
 ```php
-'sla_defaults' => [
-    'max_pickup_time_seconds' => 15,  // Fast pickup
-    'min_workers' => 5,                // Always ready
-    'max_workers' => 50,               // High capacity
-    'scale_cooldown_seconds' => 30,    // Quick response
-],
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\HighVolumeProfile;
 
-'evaluation_interval_seconds' => 5,  // Frequent checks
+'sla_defaults' => HighVolumeProfile::class,  // 20s SLA, 3-40 workers, moderate forecast
+'scaling' => ['cooldown_seconds' => 30],     // Quick reactions
+'manager' => ['evaluation_interval_seconds' => 5],
 ```
 
 #### Medium-Traffic Application
 
 ```php
-'sla_defaults' => [
-    'max_pickup_time_seconds' => 30,
-    'min_workers' => 2,
-    'max_workers' => 20,
-    'scale_cooldown_seconds' => 60,
-],
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
 
-'evaluation_interval_seconds' => 5,
+'sla_defaults' => BalancedProfile::class,    // 30s SLA, 1-10 workers
+'scaling' => ['cooldown_seconds' => 60],
 ```
 
 #### Low-Traffic Application
 
 ```php
-'sla_defaults' => [
-    'max_pickup_time_seconds' => 60,
-    'min_workers' => 0,                // Scale to zero
-    'max_workers' => 10,
-    'scale_cooldown_seconds' => 120,   // Conservative
-],
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BackgroundProfile;
 
-'evaluation_interval_seconds' => 10,
+'sla_defaults' => BackgroundProfile::class,  // 300s SLA, 0-5 workers
+'scaling' => ['cooldown_seconds' => 120],
+'manager' => ['evaluation_interval_seconds' => 10],
 ```
 
 ## Monitoring
@@ -588,14 +588,21 @@ watch -n 1 'ps aux | grep "queue:work" | awk "{sum+=\$6} END {print sum/1024\" M
 
 ### CPU Overload
 
-**Reduce max workers:**
+**Lower the worker ceiling for one queue:**
 ```php
-'max_workers' => 10,  // Lower this
+'queues' => [
+    'heavy' => ['workers' => ['max' => 10]],
+],
+```
+
+**Or tighten the global CPU cap so the autoscaler backs off sooner:**
+```php
+'limits' => ['max_cpu_percent' => 75],
 ```
 
 **Increase evaluation interval:**
 ```php
-'evaluation_interval_seconds' => 10,  // Check less often
+'manager' => ['evaluation_interval_seconds' => 10],
 ```
 
 ## Security Considerations
@@ -613,22 +620,21 @@ chmod 644 config/queue-autoscale.php
 ### 2. Resource Limits
 
 ```php
-// Prevent resource exhaustion
-'max_workers' => 50,  // Hard cap
-'evaluation_interval_seconds' => 5,  // Not too frequent
+// Prevent resource exhaustion at the host level
+'limits' => [
+    'max_cpu_percent' => 85,
+    'max_memory_percent' => 85,
+],
+'manager' => ['evaluation_interval_seconds' => 5],
 ```
 
 ### 3. Queue Isolation
 
 ```php
-// Separate critical from non-critical
-'queue_overrides' => [
-    'critical' => [
-        'max_workers' => 20,
-    ],
-    'low-priority' => [
-        'max_workers' => 5,
-    ],
+// Separate critical from non-critical via per-queue bounds
+'queues' => [
+    'critical' => ['workers' => ['max' => 20]],
+    'low-priority' => ['workers' => ['max' => 5]],
 ],
 ```
 

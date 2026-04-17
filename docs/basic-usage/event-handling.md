@@ -42,88 +42,109 @@ Use **Policies** when:
 
 ## Available Events
 
-### ScalingDecisionMade
+The package emits exactly these five events. Nothing else. Anything else referenced in older guides was never shipped.
 
-Dispatched after a scaling decision is calculated, before workers are actually scaled.
+### `ScalingDecisionMade`
+
+Fired every evaluation cycle after the scaling engine computes a decision — even when the decision is HOLD.
 
 ```php
 namespace Cbox\LaravelQueueAutoscale\Events;
 
-class ScalingDecisionMade
+final class ScalingDecisionMade
 {
     public function __construct(
         public readonly ScalingDecision $decision,
-        public readonly QueueConfiguration $config,
-        public readonly int $currentWorkers,
-        public readonly object $metrics
     ) {}
 }
 ```
 
-**When**: After strategy calculates target workers
-**Use for**: Logging decisions, sending notifications, analytics
+`$decision` carries `connection`, `queue`, `currentWorkers`, `targetWorkers`, `reason`, `predictedPickupTime`, `slaTarget`, and a `capacity` DTO. See `ScalingDecision` source for the full shape.
 
-### WorkersScaled
+**Use for:** logging every decision, analytics, dashboards showing scaler activity.
 
-Dispatched after workers have been successfully spawned or terminated.
+### `SlaBreachPredicted`
+
+Fired every cycle where the predicted pickup time exceeds the SLA target — i.e. the forecaster expects a breach before we can scale up enough.
 
 ```php
-namespace Cbox\LaravelQueueAutoscale\Events;
+final class SlaBreachPredicted
+{
+    public function __construct(
+        public readonly ScalingDecision $decision,
+    ) {}
+}
+```
 
-class WorkersScaled
+**Use for:** early warnings, pre-breach notifications. **Fires per cycle** during sustained risk — rate-limit your listener (see [AlertRateLimiter](../cookbook/_index.md)).
+
+### `SlaBreached`
+
+Fired **once** when the oldest pending job crosses the SLA target — a state transition, not per cycle.
+
+```php
+final class SlaBreached
 {
     public function __construct(
         public readonly string $connection,
         public readonly string $queue,
-        public readonly int $previousCount,
-        public readonly int $newCount,
-        public readonly string $direction  // 'up', 'down', or 'none'
+        public readonly int $oldestJobAge,
+        public readonly int $slaTarget,
+        public readonly int $pending,
+        public readonly int $activeWorkers,
     ) {}
+
+    public function breachSeconds(): int;      // how far over SLA
+    public function breachPercentage(): float; // same, as %
 }
 ```
 
-**When**: After worker count changes
-**Use for**: Tracking actual scaling operations, cost accounting
+**Use for:** paging, alert creation, incident tracking.
 
-### ScalingFailed
+### `SlaRecovered`
 
-Dispatched when a scaling operation fails.
+Fired **once** when the queue drops back under its SLA target — the counterpart to `SlaBreached`.
 
 ```php
-namespace Cbox\LaravelQueueAutoscale\Events;
-
-class ScalingFailed
+final class SlaRecovered
 {
     public function __construct(
-        public readonly QueueConfiguration $config,
-        public readonly \Throwable $exception,
-        public readonly int $attemptedWorkers,
-        public readonly int $currentWorkers
+        public readonly string $connection,
+        public readonly string $queue,
+        public readonly int $currentJobAge,
+        public readonly int $slaTarget,
+        public readonly int $pending,
+        public readonly int $activeWorkers,
     ) {}
+
+    public function marginSeconds(): int;       // buffer below SLA
+    public function marginPercentage(): float;
 }
 ```
 
-**When**: Scaling operation encounters an error
-**Use for**: Error tracking, alerting, incident response
+**Use for:** closing alerts, MTTR tracking.
 
-### WorkerHealthCheckFailed
+### `WorkersScaled`
 
-Dispatched when a worker fails health checks.
+Fired whenever workers actually spawn or terminate. Also fired by the exclusive-queue supervisor when respawning a pinned worker.
 
 ```php
-namespace Cbox\LaravelQueueAutoscale\Events;
-
-class WorkerHealthCheckFailed
+final class WorkersScaled
 {
     public function __construct(
-        public readonly WorkerProcess $worker,
-        public readonly string $reason
+        public readonly string $connection,
+        public readonly string $queue,
+        public readonly int $from,
+        public readonly int $to,
+        public readonly string $action,     // 'up' | 'down'
+        public readonly string $reason,
     ) {}
 }
 ```
 
-**When**: Worker becomes unhealthy or unresponsive
-**Use for**: Debugging, alerting, worker lifecycle tracking
+For group workers, `$queue` holds the group name. For supervisor respawns on exclusive queues, `$reason` is `'supervisor:respawn'` or `'supervisor:trim'`.
+
+**Use for:** cost accounting, scaling audit logs.
 
 ## Listening to Events
 
@@ -160,13 +181,15 @@ Register in `EventServiceProvider`:
 protected $listen = [
     \Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade::class => [
         \App\Listeners\LogScalingDecision::class,
-        \App\Listeners\SendSlackNotification::class,
     ],
     \Cbox\LaravelQueueAutoscale\Events\WorkersScaled::class => [
         \App\Listeners\RecordWorkerMetrics::class,
     ],
-    \Cbox\LaravelQueueAutoscale\Events\ScalingFailed::class => [
-        \App\Listeners\AlertOperations::class,
+    \Cbox\LaravelQueueAutoscale\Events\SlaBreached::class => [
+        \App\Listeners\AlertOnSlaBreach::class,
+    ],
+    \Cbox\LaravelQueueAutoscale\Events\SlaRecovered::class => [
+        \App\Listeners\CloseSlaIncident::class,
     ],
 ];
 ```
@@ -209,9 +232,9 @@ class RecordWorkerMetrics implements ShouldQueue
         // Heavy processing - runs on queue
         app(MetricsService::class)->recordScalingEvent([
             'queue' => $event->queue,
-            'previous' => $event->previousCount,
-            'new' => $event->newCount,
-            'direction' => $event->direction,
+            'previous' => $event->from,
+            'new' => $event->to,
+            'direction' => $event->action,
         ]);
     }
 }
@@ -219,69 +242,65 @@ class RecordWorkerMetrics implements ShouldQueue
 
 ## Event Payloads
 
-### ScalingDecisionMade Payload
+### `ScalingDecisionMade` / `SlaBreachPredicted` Payload
+
+Both events carry a single `$decision` property of type `ScalingDecision`:
 
 ```php
-$event->decision          // ScalingDecision object
-$event->decision->targetWorkers
-$event->decision->reason
-$event->decision->confidence
-$event->decision->predictedPickupTime
-
-$event->config           // QueueConfiguration object
-$event->config->connection
-$event->config->queue
-$event->config->maxPickupTimeSeconds
-$event->config->minWorkers
-$event->config->maxWorkers
-
-$event->currentWorkers   // int
-
-$event->metrics          // object
-$event->metrics->processingRate
-$event->metrics->activeWorkerCount
-$event->metrics->depth->pending
-$event->metrics->depth->oldestJobAgeSeconds
-$event->metrics->trend->direction
-$event->metrics->trend->forecast
+$event->decision->connection            // 'redis'
+$event->decision->queue                 // 'default'
+$event->decision->currentWorkers        // 5
+$event->decision->targetWorkers         // 10
+$event->decision->reason                // 'Little\'s Law + backlog drain'
+$event->decision->predictedPickupTime   // float|null — null when p95 unavailable
+$event->decision->slaTarget             // 30
+$event->decision->capacity              // CapacityCalculationResult|null
+$event->decision->spawnCompensation     // SpawnCompensationConfiguration|null
 ```
 
-### WorkersScaled Payload
+`$event->decision->capacity` (when present) exposes `maxWorkersByCpu`, `maxWorkersByMemory`, `maxWorkersByConfig`, `finalMaxWorkers`, and `limitingFactor` (one of `cpu`, `memory`, `config`, `strategy`).
+
+### `WorkersScaled` Payload
 
 ```php
 $event->connection       // 'redis'
-$event->queue           // 'default'
-$event->previousCount   // 5
-$event->newCount        // 10
-$event->direction       // 'up', 'down', or 'none'
+$event->queue            // 'default' (or group name for group workers)
+$event->from             // 5
+$event->to               // 10
+$event->action           // 'up' | 'down'
+$event->reason           // 'Little\'s Law + backlog drain' | 'supervisor:respawn' | ...
 ```
 
 Calculate change:
 
 ```php
-$workerChange = $event->newCount - $event->previousCount;
-$scalingUp = $event->direction === 'up';
-$scalingDown = $event->direction === 'down';
+$workerChange = $event->to - $event->from;
+$scalingUp = $event->action === 'up';
+$scalingDown = $event->action === 'down';
 ```
 
-### ScalingFailed Payload
+### `SlaBreached` / `SlaRecovered` Payload
 
 ```php
-$event->config           // QueueConfiguration
-$event->exception        // Throwable
-$event->attemptedWorkers // int
-$event->currentWorkers   // int
-```
+$event->connection      // 'redis'
+$event->queue           // 'default'
+$event->oldestJobAge    // int seconds (SlaBreached only — SlaRecovered uses ->currentJobAge)
+$event->slaTarget       // int seconds
+$event->pending         // int — pending jobs at the moment the event fired
+$event->activeWorkers   // int
 
-Access error details:
-
-```php
-$errorMessage = $event->exception->getMessage();
-$stackTrace = $event->exception->getTraceAsString();
-$errorClass = get_class($event->exception);
+// Convenience methods:
+$event->breachSeconds()        // SlaBreached
+$event->breachPercentage()     // SlaBreached
+$event->marginSeconds()        // SlaRecovered
+$event->marginPercentage()     // SlaRecovered
 ```
 
 ## Common Use Cases
+
+> **Note:** the following listener examples are **templates**, not copy-paste-ready code. Several reference fields that this package does not ship on its events (e.g. `$event->metrics->depth->pending`, `$event->metrics->trend->direction`). Those need to be fetched separately — typically from the `QueueMetrics` facade provided by `cboxdk/laravel-queue-metrics`. Similarly, any `DB::table('autoscale_*')` references are illustrative; no such tables exist in this package. Adapt to your own persistence layer.
+>
+> For production-ready alerting with no external dependencies, use the recipes in the [Cookbook](../cookbook/_index.md) instead.
 
 ### Use Case 1: Slack Notifications
 
@@ -362,14 +381,14 @@ class RecordWorkerMetrics
         $tags = [
             "queue:{$event->queue}",
             "connection:{$event->connection}",
-            "direction:{$event->direction}",
+            "direction:{$event->action}",
         ];
 
         // Record worker count
-        $this->datadog->gauge('queue.autoscale.workers', $event->newCount, $tags);
+        $this->datadog->gauge('queue.autoscale.workers', $event->to, $tags);
 
         // Record worker change
-        $change = $event->newCount - $event->previousCount;
+        $change = $event->to - $event->from;
         $this->datadog->gauge('queue.autoscale.worker_change', abs($change), $tags);
 
         // Increment scaling events
@@ -396,7 +415,7 @@ class TrackScalingCosts
 
     public function handle(WorkersScaled $event): void
     {
-        $workerChange = $event->newCount - $event->previousCount;
+        $workerChange = $event->to - $event->from;
 
         if ($workerChange === 0) {
             return;
@@ -408,8 +427,8 @@ class TrackScalingCosts
         DB::table('autoscale_costs')->insert([
             'queue' => $event->queue,
             'connection' => $event->connection,
-            'previous_workers' => $event->previousCount,
-            'new_workers' => $event->newCount,
+            'previous_workers' => $event->from,
+            'new_workers' => $event->to,
             'worker_change' => $workerChange,
             'hourly_cost_impact' => $costImpact,
             'recorded_at' => now(),
@@ -430,9 +449,9 @@ class TrackScalingCosts
 }
 ```
 
-### Use Case 4: PagerDuty Alerts
+### Use Case 4: PagerDuty Alerts on SLA breach
 
-Alert on-call for failures:
+Alert on-call when an SLA breach actually starts (note: `SlaBreached` fires once per state transition, so no rate-limiting is strictly required — but use `AlertRateLimiter` if you want to dedup across rapid flapping):
 
 ```php
 <?php
@@ -440,27 +459,34 @@ Alert on-call for failures:
 namespace App\Listeners;
 
 use App\Services\PagerDutyClient;
-use Cbox\LaravelQueueAutoscale\Events\ScalingFailed;
+use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
+use Cbox\LaravelQueueAutoscale\Events\SlaBreached;
 
-class AlertOnScalingFailure
+class AlertOnSlaBreach
 {
     public function __construct(
-        private readonly PagerDutyClient $pagerDuty
+        private readonly PagerDutyClient $pagerDuty,
+        private readonly AlertRateLimiter $limiter,
     ) {}
 
-    public function handle(ScalingFailed $event): void
+    public function handle(SlaBreached $event): void
     {
+        if (! $this->limiter->allow("pagerduty:breach:{$event->connection}:{$event->queue}")) {
+            return;
+        }
+
         $this->pagerDuty->trigger([
-            'summary' => "Autoscaling failed for queue: {$event->config->queue}",
+            'summary' => "Queue SLA breach: {$event->connection}:{$event->queue}",
             'severity' => 'error',
             'source' => 'laravel-queue-autoscale',
             'custom_details' => [
-                'queue' => $event->config->queue,
-                'connection' => $event->config->connection,
-                'error' => $event->exception->getMessage(),
-                'attempted_workers' => $event->attemptedWorkers,
-                'current_workers' => $event->currentWorkers,
-                'stack_trace' => $event->exception->getTraceAsString(),
+                'connection' => $event->connection,
+                'queue' => $event->queue,
+                'oldest_job_age_seconds' => $event->oldestJobAge,
+                'sla_target_seconds' => $event->slaTarget,
+                'breach_seconds' => $event->breachSeconds(),
+                'pending' => $event->pending,
+                'active_workers' => $event->activeWorkers,
             ],
         ]);
     }
@@ -532,14 +558,14 @@ class TriggerLoadTestOnScaling
         }
 
         // Only when scaling up significantly
-        if ($event->direction !== 'up' || $event->newCount < 20) {
+        if ($event->action !== 'up' || $event->to < 20) {
             return;
         }
 
         // Trigger load test to verify capacity
         $this->jenkins->triggerBuild('queue-load-test', [
             'queue' => $event->queue,
-            'worker_count' => $event->newCount,
+            'worker_count' => $event->to,
             'trigger' => 'autoscale_event',
         ]);
     }

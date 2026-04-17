@@ -116,7 +116,9 @@ Force a breach in a local test to verify:
 
 ```bash
 # Shovel 50 slow jobs (1s each) into the default queue, then watch Slack.
-php artisan queue:autoscale:test 50 --duration=1000
+# Run this in tinker; the queued-closure approach avoids needing a job class.
+php artisan tinker
+>>> for ($i = 0; $i < 50; $i++) { dispatch(function () { sleep(1); }); }
 ```
 
 ## Tuning

@@ -38,7 +38,7 @@ This dumps what both the metrics package and the autoscaler see for that queue. 
 1. **The manager isn't running.** Check with `ps aux | grep queue:autoscale`. If missing, start it (see your [platform deployment guide](../deployment/_index.md)).
 2. **The queue is `excluded`.** Check `config/queue-autoscale.php` for a pattern matching your queue name in the `excluded` key, or check the log for `Queue excluded from autoscaling`.
 3. **The metrics package isn't collecting data.** Run `php artisan queue:autoscale:debug --queue=default`. If `QueueMetrics::getQueueDepth()` returns zeros when you know there are pending jobs, `laravel-queue-metrics` isn't wired up — check its config and storage backend (Redis vs database).
-4. **The manager is at the config-driven worker cap.** Check `workers.max` for the queue. `-vv` mode on the manager says `Constrained by max_workers config limit` when this happens.
+4. **The manager is at the config-driven worker cap.** Check `workers.max` for the queue. `-vv` mode on the manager says `Constrained by workers.max config limit` when this happens.
 5. **System capacity is maxed out.** `-vvv` mode shows the CPU/memory ceiling. If `limits.max_cpu_percent` or `max_memory_percent` is reached, spawning is blocked to protect the host.
 
 **Quick check:**
@@ -65,7 +65,7 @@ The output names the limiting factor for every queue.
 
    The error will be immediate — almost always `.env` permissions, missing Redis connection, or a wrong PHP path.
 2. **PHP is running out of memory on each job.** Check `storage/logs/laravel.log` for `Allowed memory size` errors in the spawned workers. Raise `memory_limit` in php.ini or `--memory` on the worker.
-3. **A `TestJob` or long-running job is hitting the `workers.timeout_seconds` limit.** Default is 3600s — workers are recycled after that. Expected behaviour unless you see it every few seconds.
+3. **A long-running job is hitting the `workers.timeout_seconds` limit.** Default is 3600s — workers are recycled after that. Expected behaviour unless you see it every few seconds.
 
 ## Workers keep spawning and terminating (flapping)
 

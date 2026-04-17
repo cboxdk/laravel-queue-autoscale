@@ -45,13 +45,14 @@ The manager evaluates every 5 seconds. Leave it running.
 
 ## Step 3 — Dispatch test jobs
 
-In a second terminal:
+In a second terminal, push some work onto the queue. One quick way via tinker:
 
 ```bash
-php artisan queue:autoscale:test 50 --duration=1000
+php artisan tinker
+>>> for ($i = 0; $i < 50; $i++) { dispatch(function () { sleep(1); }); }
 ```
 
-This dispatches 50 jobs that each sleep for 1 second on the `default` queue. Switch back to the manager terminal and watch.
+(If your app already has job classes, dispatch those instead.) Switch back to the manager terminal and watch.
 
 Within a few evaluation cycles you'll see output like:
 

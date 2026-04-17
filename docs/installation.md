@@ -78,31 +78,29 @@ php artisan migrate
 
 ## Step 4: Configure Basic Settings
 
-Edit `config/queue-autoscale.php` to configure your first queue:
+Edit `config/queue-autoscale.php`. The defaults already work for most apps (`BalancedProfile` as the default with 30s SLA, 1–10 workers). Adjust only when you want different behaviour for specific queues:
 
 ```php
 <?php
 
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
+
 return [
     'enabled' => env('QUEUE_AUTOSCALE_ENABLED', true),
 
-    'sla_defaults' => [
-        'max_pickup_time_seconds' => 30,  // Jobs picked up within 30s
-        'min_workers' => 1,
-        'max_workers' => 10,
-        'scale_cooldown_seconds' => 60,
-    ],
+    // Every queue gets this profile unless overridden below.
+    'sla_defaults' => BalancedProfile::class,
 
-    // Per-queue overrides
+    // Per-queue overrides: a profile class OR a partial override array.
     'queues' => [
-        // Example: Custom settings for email queue
-        'emails' => [
-            'max_pickup_time_seconds' => 60,  // Less strict
-            'max_workers' => 5,
-        ],
+        'payments' => CriticalProfile::class,          // 10s SLA, 5-50 workers
+        'emails'   => ['sla' => ['target_seconds' => 60]],
     ],
 ];
 ```
+
+See [Workload Profiles](basic-usage/workload-profiles.md) for the full list of shipped profiles, and [Configuration](basic-usage/configuration.md) for the full nested key reference.
 
 ## Step 5: Start the Autoscaler
 
@@ -163,11 +161,11 @@ If the numbers shown here are wrong or zero, the problem is with metrics collect
 php artisan queue:autoscale -vv
 ```
 
-Every evaluation cycle prints the decision, the limiting factor, and the scaling action. Let it run for a minute with some test traffic:
+Every evaluation cycle prints the decision, the limiting factor, and the scaling action. Let it run for a minute while you push some work onto the queue — any real job from your app will do. For a quick smoke test via tinker:
 
 ```bash
-# In another terminal:
-php artisan queue:autoscale:test 50 --duration=1000
+php artisan tinker
+>>> for ($i = 0; $i < 50; $i++) { dispatch(function () { sleep(1); }); }
 ```
 
 You should see the manager scale up, drain the backlog, and scale back down after `cooldown_seconds` (default 60).

@@ -72,7 +72,7 @@ That subtle distinction is the whole reason this package exists in per-queue for
 
 **What you pay:**
 
-- **More idle capacity.** A quiet queue still holds its `min_workers`. If `emails` is idle while `payments` is drowning, `emails`'s workers cannot help.
+- **More idle capacity.** A quiet queue still holds its `workers.min` floor. If `emails` is idle while `payments` is drowning, `emails`'s workers cannot help.
 - **Spawn latency on bursts.** When `payments` suddenly needs more workers, we predict, forecast, and spawn — which takes seconds. A shared worker would have absorbed the spike immediately.
 
 **Use this when:** queues have different job durations, different SLA targets, or different failure characteristics. This is the right default for the vast majority of queues.

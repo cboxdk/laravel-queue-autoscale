@@ -144,8 +144,8 @@ Add to `config/queue-autoscale.php`:
 
 ```php
 'policies' => [
-    \Cbox\LaravelQueueAutoscale\Scaling\Policies\ResourceConstraintPolicy::class,
-    \Cbox\LaravelQueueAutoscale\Scaling\Policies\CooldownEnforcementPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy::class,
 
     // Your custom policies
     \App\Autoscale\Policies\CustomPolicy::class,
@@ -486,13 +486,13 @@ class PagerDutyAlertPolicy implements ScalingPolicyContract
     public function afterScaling(ScalingDecision $decision, QueueConfiguration $config, int $currentWorkers): void
     {
         // Alert if we hit max workers (capacity limit)
-        if ($decision->targetWorkers >= $config->maxWorkers) {
+        if ($decision->targetWorkers >= $config->workers->max) {
             $this->triggerAlert(
                 severity: 'error',
                 summary: "Queue at maximum capacity: {$config->queue}",
                 details: [
                     'queue' => $config->queue,
-                    'max_workers' => $config->maxWorkers,
+                    'workers_max' => $config->workers->max,
                     'current_workers' => $currentWorkers,
                     'reason' => $decision->reason,
                 ]

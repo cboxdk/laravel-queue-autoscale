@@ -202,7 +202,7 @@ Time: 17:20 - Cooldown expires
 │
 Time: 18:00 - Minimal traffic
 ├─ Rate: 2 jobs/sec
-└─ Workers: 4 → 1 (min_workers)
+└─ Workers: 4 → 1 (workers.min)
 ```
 
 **Result**: Gradual, cost-effective scale-down
@@ -213,7 +213,7 @@ Time: 18:00 - Minimal traffic
 
 Instead of saying "I want 10 workers", you say:
 ```php
-'max_pickup_time_seconds' => 30
+'sla' => ['target_seconds' => 30]
 ```
 
 This means: **"Jobs should start processing within 30 seconds of being queued"**
@@ -245,17 +245,15 @@ When oldest job reaches 24s:
 You can configure different SLAs per queue:
 
 ```php
-'sla_defaults' => [
-    'max_pickup_time_seconds' => 60,  // Default: 1 minute
-],
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BackgroundProfile;
 
-'queue_overrides' => [
-    'critical' => [
-        'max_pickup_time_seconds' => 10,  // 10 seconds
-    ],
-    'emails' => [
-        'max_pickup_time_seconds' => 300,  // 5 minutes
-    ],
+'sla_defaults' => BalancedProfile::class,        // 30s SLA default
+
+'queues' => [
+    'critical' => CriticalProfile::class,         // 10s SLA
+    'emails'   => ['sla' => ['target_seconds' => 300]],  // 5 min override
 ],
 ```
 
@@ -324,14 +322,16 @@ Capacity limit: min(160, 16) = 16 workers
 ### Configuration Limits
 
 ```php
-'min_workers' => 1,   // Always maintain at least 1
-'max_workers' => 10,  // Never exceed 10
+'workers' => [
+    'min' => 1,   // Always maintain at least 1
+    'max' => 10,  // Never exceed 10
+],
 ```
 
 ### Cooldown Periods
 
 ```php
-'scale_cooldown_seconds' => 60,
+'scaling' => ['cooldown_seconds' => 60],  // global, top-level
 ```
 
 **Purpose**: Prevent rapid scaling oscillations
@@ -423,7 +423,7 @@ php artisan vendor:publish --tag=queue-metrics-config
 
 ### Q: Can I force immediate scaling?
 
-**A**: Reduce `scale_cooldown_seconds` but be cautious of oscillations.
+**A**: Reduce `scaling.cooldown_seconds` but be cautious of oscillations.
 
 ### Q: What happens if system runs out of resources?
 
