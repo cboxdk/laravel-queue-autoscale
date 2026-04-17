@@ -62,6 +62,14 @@ final class EmaSpawnLatencyTracker implements SpawnLatencyTrackerContract
             ? $storedAlpha
             : $this->alpha;
 
+        /*
+         * NOTE: Read-modify-write of the EMA key is non-atomic.
+         * Concurrent first-pickups from multiple workers on the same queue
+         * can lose samples (last-write-wins). This is tolerable because the
+         * EMA is a smoothed signal; one lost sample doesn't degrade accuracy
+         * meaningfully. If that guarantee is insufficient, wrap the update
+         * in a Redis EVAL (Lua) or use WATCH/MULTI/EXEC.
+         */
         $currentEma = Redis::get($emaKey);
         $newEma = is_numeric($currentEma)
             ? ($alpha * $latency) + ((1 - $alpha) * (float) $currentEma)
