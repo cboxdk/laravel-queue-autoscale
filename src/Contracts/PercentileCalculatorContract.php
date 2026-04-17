@@ -10,7 +10,7 @@ interface PercentileCalculatorContract
      * Compute the given percentile (0-100) over the values.
      *
      * @param  list<float>  $values
-     * @return float|null Null if insufficient samples.
+     * @return float|null Null if fewer than minSamples present.
      */
-    public function compute(array $values, int $percentile): ?float;
+    public function compute(array $values, int $percentile, int $minSamples = 20): ?float;
 }

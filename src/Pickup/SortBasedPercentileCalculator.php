@@ -8,13 +8,11 @@ use Cbox\LaravelQueueAutoscale\Contracts\PercentileCalculatorContract;
 
 final class SortBasedPercentileCalculator implements PercentileCalculatorContract
 {
-    private const MIN_SAMPLES = 20;
-
-    public function compute(array $values, int $percentile): ?float
+    public function compute(array $values, int $percentile, int $minSamples = 20): ?float
     {
         $count = count($values);
 
-        if ($count < self::MIN_SAMPLES) {
+        if ($count < $minSamples) {
             return null;
         }
 

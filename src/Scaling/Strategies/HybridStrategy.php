@@ -147,7 +147,11 @@ final class HybridStrategy implements ScalingStrategyContract
             $config->sla->windowSeconds,
         );
         $pickupTimes = array_map(static fn (array $s): float => $s['pickup_seconds'], $pickupSamples);
-        $p95 = $this->percentileCalc->compute($pickupTimes, $config->sla->percentile);
+        $p95 = $this->percentileCalc->compute(
+            $pickupTimes,
+            $config->sla->percentile,
+            $config->sla->minSamples,
+        );
         $slaSignal = $p95 ?? (float) $oldestJobAge;
         $slaSignalSource = $p95 !== null ? 'p95' : 'oldest_age_fallback';
 

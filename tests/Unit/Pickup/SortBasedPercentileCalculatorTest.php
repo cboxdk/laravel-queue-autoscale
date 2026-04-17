@@ -58,3 +58,12 @@ test('all-same values return that value', function (): void {
 
     expect($calc->compute($values, 95))->toBe(7.5);
 });
+
+test('respects minSamples parameter', function (): void {
+    $calc = new SortBasedPercentileCalculator;
+    $values = array_fill(0, 10, 5.0);
+
+    expect($calc->compute($values, 95, 20))->toBeNull();
+    expect($calc->compute($values, 95, 10))->toBe(5.0);
+    expect($calc->compute($values, 95, 5))->toBe(5.0);
+});
