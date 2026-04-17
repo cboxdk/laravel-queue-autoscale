@@ -9,10 +9,6 @@ use Cbox\LaravelQueueAutoscale\Contracts\ForecastPolicyContract;
 
 final readonly class ForecastConfiguration
 {
-    /**
-     * @param  class-string<ForecasterContract>  $forecasterClass
-     * @param  class-string<ForecastPolicyContract>  $policyClass
-     */
     public function __construct(
         public string $forecasterClass,
         public string $policyClass,
