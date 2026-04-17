@@ -539,7 +539,7 @@ final class AutoscaleManager
             if ($factor === 'cpu' || $factor === 'memory') {
                 $this->verbose("     ⚠️  Constrained by system capacity: {$factor}", 'warn');
             } elseif ($factor === 'config') {
-                $this->verbose('     ⚠️  Constrained by max_workers config limit', 'warn');
+                $this->verbose('     ⚠️  Constrained by workers.max config limit', 'warn');
             } elseif ($factor === 'strategy') {
                 $this->verbose('     ✓ Optimal worker count determined by demand analysis', 'debug');
             }

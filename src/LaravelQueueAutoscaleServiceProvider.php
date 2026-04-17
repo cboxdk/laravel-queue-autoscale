@@ -6,7 +6,6 @@ namespace Cbox\LaravelQueueAutoscale;
 
 use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
 use Cbox\LaravelQueueAutoscale\Commands\DebugQueueCommand;
-use Cbox\LaravelQueueAutoscale\Commands\DispatchTestJobsCommand;
 use Cbox\LaravelQueueAutoscale\Commands\LaravelQueueAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Commands\MigrateConfigCommand;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
@@ -128,7 +127,6 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
 
             $this->commands([
                 LaravelQueueAutoscaleCommand::class,
-                DispatchTestJobsCommand::class,
                 DebugQueueCommand::class,
                 MigrateConfigCommand::class,
             ]);
