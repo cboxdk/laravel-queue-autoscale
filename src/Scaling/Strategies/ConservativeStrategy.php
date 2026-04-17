@@ -13,10 +13,10 @@ use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 /**
  * Conservative scaling strategy with safety buffers
  *
- * Uses the same multi-algorithm approach as PredictiveStrategy but adds
+ * Uses the same multi-algorithm approach as HybridStrategy but adds
  * safety buffers to ensure SLA compliance even under uncertainty.
  *
- * Differences from PredictiveStrategy:
+ * Differences from HybridStrategy:
  * - Adds 25% buffer to calculated worker count
  * - Uses 75% breach threshold (more proactive)
  * - Rounds up more aggressively
