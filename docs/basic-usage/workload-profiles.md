@@ -17,6 +17,9 @@ Workload profiles are pre-configured settings optimized for specific queue patte
 | **Balanced** ⭐ | 30s | 1 | 10 | General purpose | $$ |
 | **Bursty** | 60s | 0 | 100 | Campaigns, webhooks | $ |
 | **Background** | 300s | 0 | 5 | Cleanup, analytics | $ |
+| **Exclusive** (v2) | 60s | **1** (pinned) | **1** (pinned) | Sequential integrations, ordered jobs | $ |
+
+> **New in v2:** `ExclusiveProfile` pins a queue to a single worker that is never scaled. The autoscaler acts as a process supervisor (respawn on death) but never adds or removes workers. Use this for customer integrations that require strict sequential processing. See [Queue Topology](queue-topology.md) for the full behaviour model.
 
 ## Profile Deep Dive
 

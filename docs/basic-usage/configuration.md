@@ -12,12 +12,15 @@ Complete Queue Autoscale for Laravel configuration reference.
 - [Prerequisites: Metrics Package Setup](#prerequisites-metrics-package-setup)
 - [Basic Configuration](#basic-configuration)
 - [Queue Configuration](#queue-configuration)
+- [Worker Topology (v2)](#worker-topology-v2)
 - [Strategy Configuration](#strategy-configuration)
 - [Policy Configuration](#policy-configuration)
 - [Manager Configuration](#manager-configuration)
 - [Advanced Options](#advanced-options)
 - [Environment Variables](#environment-variables)
 - [Configuration Patterns](#configuration-patterns)
+
+> **Reading tip:** the conceptual model for per-queue vs. group vs. exclusive vs. excluded workers lives in [Queue Topology](queue-topology.md). This page is the reference for **how** to express each of those in config.
 
 ## Prerequisites: Metrics Package Setup
 
@@ -223,6 +226,69 @@ Seconds to wait before retrying a failed job.
     ],
 ],
 ```
+
+## Worker Topology (v2)
+
+v2 introduces three new capabilities on top of per-queue autoscaling. Each is expressed as its own top-level config key. See [Queue Topology](queue-topology.md) for the conceptual explanation; this section is the config reference.
+
+### `excluded` — queues this package ignores
+
+```php
+'excluded' => [
+    'horizon-managed',   // exact match
+    'legacy-*',          // fnmatch glob
+    'test-?',            // fnmatch glob (single char)
+],
+```
+
+- Patterns use PHP's `fnmatch()` semantics.
+- An excluded queue is never discovered, evaluated, spawned, or terminated — even if the metrics package reports activity for it.
+- The first time the manager sees an excluded queue in a cycle, it logs a single `info` line so you can confirm.
+- Exclusion wins over everything: if you put the same name in both `queues` and `excluded`, it is excluded.
+
+**When to use:** queues managed by Horizon or another supervisor, throwaway queues during migrations, or queues with workers started manually via `queue:work` under systemd/supervisord.
+
+### `groups` — multi-queue workers with strict priority
+
+```php
+'groups' => [
+    'notifications' => [
+        'queues'     => ['email', 'sms', 'push'],   // priority order
+        'profile'    => BalancedProfile::class,     // optional — defaults to sla_defaults
+        'connection' => 'redis',                    // optional — defaults to 'default'
+        'mode'       => 'priority',                 // only supported mode in v2
+        'overrides'  => [                           // optional partial override
+            'sla' => ['target_seconds' => 45],
+        ],
+    ],
+],
+```
+
+- Each worker spawned for the group invokes `queue:work redis --queue=email,sms,push` — Laravel polls them in that order per poll cycle.
+- The group is the scaling unit. Metrics are aggregated across members (`pending`, `throughput`: summed; `oldest_job_age`: max). The SLA target is the group's SLA, not any individual queue's.
+- A queue may appear in **at most one place**: either under `queues.{name}` or inside **one** group. Startup validation throws `InvalidConfigurationException` if this is violated.
+- Groups cannot use `ExclusiveProfile`. A pinned group is a contradiction — use a per-queue exclusive config instead.
+
+**When to use:** queues that share a failure domain and have compatible SLA expectations, where you want idle capacity in one queue to absorb bursts on another without paying spawn latency.
+
+### `ExclusiveProfile` — pinned single-worker queues
+
+```php
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\ExclusiveProfile;
+
+'queues' => [
+    'legacy-integration' => ExclusiveProfile::class,
+],
+```
+
+- `workers.min = 1`, `workers.max = 1`, `workers.scalable = false`.
+- The manager never evaluates scaling for this queue. Instead, it enforces exactly one live worker: respawns on death, terminates any duplicates.
+- SLA breach events still fire for observability (operators need to know when a sequential queue falls behind) but scaling **will not** happen — the whole point is to preserve order.
+- Jobs run strictly one at a time, in the order the queue driver delivers them.
+
+**When to use:** third-party integrations that require single-connection semantics, customer workflows that assume jobs run in order, or any queue where two concurrent jobs would corrupt state.
+
+> Custom variation: a `PinnedProfile` with `min == max == N` and `scalable: false` would enforce "exactly N workers, always." The `WorkerConfiguration` constructor validates this invariant. We ship `ExclusiveProfile` (N = 1) because it covers the most common case; write your own profile class if you need N > 1.
 
 ## Strategy Configuration
 
