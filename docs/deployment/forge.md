@@ -43,6 +43,8 @@ If you want to restart manually:
 # Forge → Daemons → Restart button
 # or via SSH:
 sudo supervisorctl restart daemon-<daemon-id>
+# or inside a deploy hook without sudo:
+php artisan queue:autoscale:restart
 ```
 
 ## 4. Verify

@@ -8,6 +8,7 @@ use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
 use Cbox\LaravelQueueAutoscale\Commands\DebugQueueCommand;
 use Cbox\LaravelQueueAutoscale\Commands\LaravelQueueAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Commands\MigrateConfigCommand;
+use Cbox\LaravelQueueAutoscale\Commands\RestartAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\ForecasterContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ForecastPolicyContract;
@@ -28,6 +29,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\ModerateForecastPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
+use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
 use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\EmaSpawnLatencyTracker;
 use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\SpawnLatencyRecorder;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
@@ -114,6 +116,7 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
         $this->app->singleton(PolicyExecutor::class);
 
         // Register manager
+        $this->app->singleton(RestartSignal::class);
         $this->app->singleton(SignalHandler::class);
         $this->app->singleton(AutoscaleManager::class);
     }
@@ -127,6 +130,7 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
 
             $this->commands([
                 LaravelQueueAutoscaleCommand::class,
+                RestartAutoscaleCommand::class,
                 DebugQueueCommand::class,
                 MigrateConfigCommand::class,
             ]);

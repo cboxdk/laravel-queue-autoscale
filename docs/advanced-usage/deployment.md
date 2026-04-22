@@ -664,7 +664,7 @@ sudo pkill -9 -f "queue:work"
 ### Recovery
 
 ```bash
-# Clear any stuck jobs (if needed)
+# If you also run standalone queue workers outside the autoscaler, release them
 php artisan queue:restart
 
 # Start autoscaler

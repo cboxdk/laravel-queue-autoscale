@@ -19,6 +19,7 @@ use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\WorkerStatus;
 use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
+use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerOutputBuffer;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerPool;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
@@ -69,6 +70,8 @@ final class AutoscaleManager
 
     private WorkerOutputBuffer $outputBuffer;
 
+    private int $startedAt = 0;
+
     /** @var array<string, QueueStats> */
     private array $currentQueueStats = [];
 
@@ -81,6 +84,7 @@ final class AutoscaleManager
         private readonly WorkerTerminator $terminator,
         private readonly PolicyExecutor $policies,
         private readonly SignalHandler $signals,
+        private readonly RestartSignal $restartSignal,
     ) {
         $this->pool = new WorkerPool;
         $this->outputBuffer = new WorkerOutputBuffer;
@@ -134,6 +138,8 @@ final class AutoscaleManager
 
     public function run(): int
     {
+        $this->startedAt = (int) round(microtime(true) * 1000);
+
         Log::channel(AutoscaleConfiguration::logChannel())->info(
             'Autoscale manager started',
             [
@@ -160,6 +166,18 @@ final class AutoscaleManager
     private function runLoop(): void
     {
         while (! $this->signals->shouldStop()) {
+            if ($this->restartSignal->requestedAfter($this->startedAt)) {
+                $this->verbose('Restart signal detected; shutting down manager for supervised restart.', 'info');
+
+                Log::channel(AutoscaleConfiguration::logChannel())->info(
+                    'Restart signal detected; shutting down manager for supervised restart'
+                );
+
+                $this->signals->requestStop();
+
+                continue;
+            }
+
             $startTime = microtime(true);
             $this->signals->dispatch();
 

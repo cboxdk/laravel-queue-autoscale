@@ -80,15 +80,19 @@ sudo supervisorctl status queue-autoscale
 
 ## Zero-downtime deploys
 
-Your deploy script should do exactly one of:
+Your deploy script should trigger exactly one restart path:
 
 ```bash
+php artisan queue:autoscale:restart
+# or
 sudo systemctl restart queue-autoscale
 # or
 sudo supervisorctl restart queue-autoscale
 ```
 
-The manager catches SIGTERM, gracefully terminates all spawned `queue:work` processes (SIGTERM → wait → SIGKILL fallback), and exits. Systemd/Supervisor starts a fresh manager with the new code.
+`php artisan queue:autoscale:restart` works like Laravel's `queue:restart`: it writes a cache signal, the running manager notices it on the next evaluation tick, gracefully terminates all spawned `queue:work` processes, and exits. Your process supervisor then starts a fresh manager with the new code/config.
+
+Direct `systemctl` / `supervisorctl` restarts are also fine; they send SIGTERM immediately, and the manager performs the same graceful shutdown path.
 
 **Do not also run `php artisan queue:restart`** — that's for separately-supervised `queue:work` daemons. Our spawned workers are killed directly when the manager shuts down.
 

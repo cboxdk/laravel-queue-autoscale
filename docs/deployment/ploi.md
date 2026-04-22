@@ -38,6 +38,8 @@ Ploi's deploy script restarts daemons automatically when the deploy hook runs `s
 
 ```bash
 sudo -S supervisorctl restart daemon-<id>
+# or, if your deploy hook only has Artisan access:
+php artisan queue:autoscale:restart
 ```
 
 Find the daemon ID in the Ploi UI or via `supervisorctl status`.

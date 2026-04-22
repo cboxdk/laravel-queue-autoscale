@@ -20,7 +20,7 @@ The autoscaler manager (`php artisan queue:autoscale`) is a long-running daemon.
 - **One instance.** Running two autoscalers against the same queues will double-spawn workers. If you horizontally scale your web layer, the autoscaler belongs on one dedicated node or a leader-elected container, not every web node.
 - **Graceful shutdown.** The manager catches `SIGTERM` and cleanly stops all spawned workers. Your platform should send SIGTERM, wait for `shutdown_timeout_seconds` (default 30), then SIGKILL.
 - **Don't double-configure workers.** If your platform has a "queue workers" section (Forge, Ploi) **do not** add entries for queues the autoscaler manages. The autoscaler IS your queue worker supervisor — the platform UI is for `queue:work` daemons that the autoscaler would fight with.
-- **Restart on deploy.** When your code changes, the manager must restart to pick up new config. All supported platforms do this automatically as part of the zero-downtime deploy flow.
+- **Restart on deploy.** When your code changes, the manager must restart to pick up new config. All supported platforms do this automatically as part of the zero-downtime deploy flow, or you can signal a graceful restart with `php artisan queue:autoscale:restart`.
 
 ## Logs to keep an eye on
 
