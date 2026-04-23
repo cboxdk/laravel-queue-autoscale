@@ -6,6 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Cluster;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Illuminate\Redis\Connections\Connection;
+use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Support\Facades\Redis;
 
 class ClusterStore
@@ -104,18 +105,23 @@ class ClusterStore
             return true;
         }
 
-        $acquired = $redis->command(
-            'set',
-            [
-                $this->leaderKey(),
-                $this->encode($payload),
-                'EX',
-                AutoscaleConfiguration::clusterLeaderLeaseSeconds(),
-                'NX',
-            ],
-        );
+        $script = <<<'LUA'
+if redis.call('exists', KEYS[1]) == 0 then
+    redis.call('setex', KEYS[1], ARGV[2], ARGV[1])
+    return 1
+end
 
-        return $acquired === true || $acquired === 'OK';
+return 0
+LUA;
+        $leaderKey = $this->leaderKey();
+        $encodedPayload = $this->encode($payload);
+        $ttl = AutoscaleConfiguration::clusterLeaderLeaseSeconds();
+
+        $acquired = $redis instanceof PhpRedisConnection
+            ? $redis->command('eval', [$script, [$leaderKey, $encodedPayload, $ttl], 1])
+            : $redis->command('eval', [$script, 1, $leaderKey, $encodedPayload, $ttl]);
+
+        return $acquired === true || $acquired === 1 || $acquired === '1';
     }
 
     public function publishRecommendation(ClusterRecommendation $recommendation): void
