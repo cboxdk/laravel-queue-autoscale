@@ -17,6 +17,8 @@ Queue Autoscale for Laravel is a smart queue worker manager that automatically s
 - ⚡ **SLA Breach Prevention** - Aggressive backlog drain when approaching SLA violations
 - 🖥️ **Resource-Aware** - Respects CPU and memory limits from system metrics
 - 🔄 **Metrics-Driven** - Uses [`laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics) for queue discovery and all metrics
+- 🌐 **Cluster-Aware** - Multiple autoscale managers auto-join via Redis, elect a leader, and distribute worker targets across hosts
+- 🌐 **Cluster-Aware** - Multiple autoscale managers auto-join via Redis, elect a leader, and distribute worker targets across hosts
 - 🎛️ **Extensible** - Custom scaling strategies and policies via interfaces
 - 📊 **Event Broadcasting** - React to scaling decisions, SLA predictions, worker changes
 - 🛡️ **Graceful Shutdown** - SIGTERM → SIGKILL worker termination
@@ -38,6 +40,19 @@ Install via Composer:
 ```bash
 composer require cboxdk/laravel-queue-autoscale
 ```
+
+Run the interactive installer to publish config, choose the right topology, and generate the matching `.env` values:
+
+```bash
+php artisan queue:autoscale:install
+```
+
+It guides you through three safe presets:
+- single host, low traffic, no Redis infrastructure
+- single host with Redis-backed metrics and predictive signals
+- multi-host cluster with Redis coordination
+
+If you prefer the manual path, you can still publish the config files yourself:
 
 Publish the configuration file:
 
@@ -67,6 +82,26 @@ QUEUE_METRICS_CONNECTION=default
 # Option B: Database (persistent storage)
 QUEUE_METRICS_STORAGE=database
 ```
+
+Queue Autoscale itself can now run in three safe modes:
+
+```env
+# Single host without Redis
+QUEUE_AUTOSCALE_CLUSTER_ENABLED=false
+QUEUE_AUTOSCALE_PICKUP_TIME_STORE=auto
+QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=auto
+
+# Single host with Redis-backed predictive signals
+QUEUE_AUTOSCALE_PICKUP_TIME_STORE=redis
+QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=redis
+
+# Multi-host cluster
+QUEUE_AUTOSCALE_CLUSTER_ENABLED=true
+```
+
+`auto` keeps single-host mode Redis-free and switches to Redis-backed coordination automatically in cluster mode.
+
+The installer can also write the recommended values straight into `.env` for you.
 
 If using database storage, publish and run migrations:
 
@@ -106,6 +141,15 @@ return [
 
 ```bash
 php artisan queue:autoscale
+
+# Inspect cluster leader, hosts, capacity, and workload targets
+php artisan queue:autoscale:cluster
+
+# Inspect cluster leader, hosts, capacity, and workload targets
+php artisan queue:autoscale:cluster
+
+# Replace the existing local manager on this host/app
+php artisan queue:autoscale --replace
 ```
 
 The autoscaler will:

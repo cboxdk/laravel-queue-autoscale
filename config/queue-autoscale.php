@@ -2,121 +2,144 @@
 
 declare(strict_types=1);
 
-use Cbox\LaravelQueueAutoscale\Configuration\ProfilePresets;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
+use Cbox\LaravelQueueAutoscale\Pickup\RedisPickupTimeStore;
+use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
 use Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy;
 use Cbox\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy;
-use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
+use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
 
 return [
     'enabled' => env('QUEUE_AUTOSCALE_ENABLED', true),
-    'manager_id' => env('QUEUE_AUTOSCALE_MANAGER_ID', gethostname()),
+    'manager_id' => env('QUEUE_AUTOSCALE_MANAGER_ID'),
 
     /*
     |--------------------------------------------------------------------------
-    | Default SLA Configuration (Balanced Profile)
+    | Default Profile (per-queue settings)
     |--------------------------------------------------------------------------
     |
-    | These defaults use the "Balanced" profile - a general-purpose configuration
-    | suitable for typical web applications with mixed workloads.
-    |
-    | Available Profiles:
-    | - ProfilePresets::critical()    - Mission-critical (10s SLA, 5-50 workers)
-    | - ProfilePresets::highVolume()  - High-throughput (20s SLA, 3-40 workers)
-    | - ProfilePresets::balanced()    - General-purpose (30s SLA, 1-10 workers) [DEFAULT]
-    | - ProfilePresets::bursty()      - Sporadic spikes (60s SLA, 0-100 workers)
-    | - ProfilePresets::background()  - Low-priority (300s SLA, 0-5 workers)
+    | Provide a ProfileContract class OR a literal array matching the shape
+    | returned by BalancedProfile::resolve(). See docs/upgrade-guide-v2.md
+    | for migration details from v1.
     |
     */
-    'sla_defaults' => ProfilePresets::balanced(),
+    'sla_defaults' => BalancedProfile::class,
 
     /*
     |--------------------------------------------------------------------------
-    | Queue-Specific Overrides
+    | Per-queue overrides
     |--------------------------------------------------------------------------
     |
-    | Override settings for specific queues. You can use ProfilePresets or
-    | customize individual settings.
+    | Each value can be a ProfileContract class OR an array of partial overrides
+    | that merges with sla_defaults.
     |
-    | Examples:
+    */
+    'queues' => [
+        // 'payments' => CriticalProfile::class,
+        // 'custom' => ['sla' => ['target_seconds' => 45]],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Excluded queues
+    |--------------------------------------------------------------------------
     |
-    | 'queues' => [
-    |     // Use a preset profile
-    |     'payments' => ProfilePresets::critical(),
-    |     'emails' => ProfilePresets::highVolume(),
-    |     'cleanup' => ProfilePresets::background(),
+    | Queue name patterns (fnmatch globs) that this package will never manage.
+    | Use this for queues supervised elsewhere (e.g. by Horizon), throwaway
+    | queues, or queues you want to run manually with a fixed worker count.
     |
-    |     // Customize a profile
-    |     'custom' => array_merge(ProfilePresets::balanced(), [
-    |         'max_workers' => 20,
-    |     ]),
+    | Examples: 'legacy-*', 'test-?', 'horizon-managed'
     |
-    |     // Full manual configuration
-    |     'manual' => [
-    |         'max_pickup_time_seconds' => 45,
-    |         'min_workers' => 2,
-    |         'max_workers' => 15,
-    |         'scale_cooldown_seconds' => 90,
+    */
+    'excluded' => [
+        // 'legacy-*',
+        // 'horizon-managed',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Worker groups (multi-queue workers with strict priority)
+    |--------------------------------------------------------------------------
+    |
+    | A group runs one set of workers that polls multiple queues in priority
+    | order (first listed = highest priority). Use groups when several queues
+    | share a workload budget and you want idle workers in one queue to absorb
+    | bursts on another without paying spawn latency.
+    |
+    | A queue name may appear EITHER under 'queues' OR inside a group's
+    | 'queues' list, never both. Start-up validation will fail if it does.
+    |
+    | Supported 'mode' values: 'priority' (the only mode in v2).
+    |
+    | Example:
+    |     'notifications' => [
+    |         'queues' => ['email', 'sms', 'push'],
+    |         'profile' => BalancedProfile::class,
+    |         'connection' => 'redis',
+    |         'mode' => 'priority',
     |     ],
-    | ],
     |
     */
-    'queues' => [],
+    'groups' => [
+        // 'notifications' => [
+        //     'queues' => ['email', 'sms', 'push'],
+        //     'profile' => BalancedProfile::class,
+        // ],
+    ],
 
     /*
     |--------------------------------------------------------------------------
-    | Scaling Algorithm Configuration
+    | Pickup time storage (global)
     |--------------------------------------------------------------------------
     |
-    | Controls how the scaling algorithms calculate worker requirements.
+    | Controls the optional shared store used for p95 pickup-time forecasting.
     |
-    | Job Time Estimation:
-    | When actual job duration metrics are unavailable, the algorithm needs
-    | a fallback estimate. Set this based on your typical job characteristics:
-    | - Fast jobs (notifications, cache updates): 0.1 - 0.5 seconds
-    | - Medium jobs (emails, API calls): 1 - 5 seconds
-    | - Slow jobs (reports, file processing): 10 - 60 seconds
-    | - Long jobs (video encoding, ML): 60+ seconds
+    | Supported values:
+    | - 'auto'  => Redis in cluster mode, null/no-op in single-host mode
+    | - 'redis' => force RedisPickupTimeStore
+    | - 'null'  => disable shared pickup-time persistence
+    | - FQCN    => custom PickupTimeStoreContract implementation
     |
-    | Arrival Rate Estimation:
-    | The algorithm estimates job arrival rate from backlog changes over time.
-    | This is more accurate than using processing rate during traffic spikes.
-    | - min_confidence: Minimum confidence to use estimated arrival rate (0.0-1.0)
+    */
+    'pickup_time' => [
+        'store' => env('QUEUE_AUTOSCALE_PICKUP_TIME_STORE', 'auto'),
+        'percentile_calculator' => SortBasedPercentileCalculator::class,
+        'max_samples_per_queue' => 1000,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Spawn latency tracker (global)
+    |--------------------------------------------------------------------------
     |
-    | Trend Policy Options:
-    | - 'disabled'   - Ignore trend predictions, reactive scaling only
-    | - 'hint'       - Conservative (30% trend weight, confidence >= 0.8)
-    | - 'moderate'   - Balanced (50% trend weight, confidence >= 0.7) [DEFAULT]
-    | - 'aggressive' - Proactive (80% trend weight, confidence >= 0.5)
+    | Controls the optional cross-process tracker used for spawn compensation.
     |
+    | Supported values:
+    | - 'auto'  => Redis in cluster mode, null/fallback in single-host mode
+    | - 'redis' => force EMA latency tracking in Redis
+    | - 'null'  => disable shared spawn-latency tracking
+    | - FQCN    => custom SpawnLatencyTrackerContract implementation
+    |
+    */
+    'spawn_latency' => [
+        'tracker' => env('QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER', 'auto'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Scaling algorithm tuning (global)
+    |--------------------------------------------------------------------------
     */
     'scaling' => [
         'fallback_job_time_seconds' => env('QUEUE_AUTOSCALE_FALLBACK_JOB_TIME', 2.0),
-        'min_arrival_rate_confidence' => 0.5,   // Use estimated rate when confidence >= 50%
-        'trend_window_seconds' => 300,          // 5 minutes historical window
-        'forecast_horizon_seconds' => 60,       // 1 minute ahead prediction
-        'breach_threshold' => 0.5,              // Act at 50% of SLA for proactive scaling
-        'trend_policy' => env('QUEUE_AUTOSCALE_TREND_POLICY', 'moderate'),
+        'breach_threshold' => 0.5,
+        'cooldown_seconds' => 60,
     ],
 
     /*
     |--------------------------------------------------------------------------
-    | Prediction Configuration (DEPRECATED - use 'scaling' instead)
+    | Resource limits (global)
     |--------------------------------------------------------------------------
-    |
-    | Kept for backwards compatibility. Values here are merged with 'scaling'.
-    |
-    */
-    'prediction' => [
-        // These are read from 'scaling' now, but kept for backwards compatibility
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Resource Constraints
-    |--------------------------------------------------------------------------
-    |
-    | System resource limits to prevent over-provisioning workers.
-    |
     */
     'limits' => [
         'max_cpu_percent' => 85,
@@ -127,10 +150,11 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Worker Configuration
+    | Worker configuration
     |--------------------------------------------------------------------------
     |
-    | Settings for spawned queue workers.
+    | Settings for spawned queue workers. These control how queue:work
+    | processes are started by the autoscale manager.
     |
     */
     'workers' => [
@@ -143,11 +167,8 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Manager Configuration
+    | Manager process
     |--------------------------------------------------------------------------
-    |
-    | Settings for the autoscale manager process.
-    |
     */
     'manager' => [
         'evaluation_interval_seconds' => 5,
@@ -156,103 +177,49 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Scaling Strategy
+    | Cluster coordination
     |--------------------------------------------------------------------------
     |
-    | The strategy class responsible for calculating target worker counts based
-    | on queue metrics and SLA configuration.
+    | Single-host mode does NOT require Redis and continues to work with any
+    | supported queue driver (database, redis, SQS, etc.).
     |
-    | Available Strategies:
-    | - PredictiveStrategy    - Multi-algorithm (rate + trend + backlog) [DEFAULT]
-    | - SimpleRateStrategy    - Little's Law only, for stable workloads
-    | - BacklogOnlyStrategy   - Backlog drain focus, for batch processing
-    | - ConservativeStrategy  - PredictiveStrategy + 25% safety buffer
+    | Enable this when you run the autoscale manager on multiple hosts against
+    | the same queues. Managers auto-join the cluster via Redis, elect a
+    | leader, publish local host capacity/state, and receive per-host worker
+    | recommendations from the leader.
     |
-    | PredictiveStrategy Algorithm (DEFAULT):
-    | 1. Rate-Based: Little's Law (L = λW) for steady-state worker count
-    | 2. Trend-Based: Predict future arrival rate using configured trend policy
-    | 3. Backlog-Based: Calculate workers needed to prevent SLA breach
-    | 4. Combine: Take maximum (most conservative) of all three calculations
-    |
-    | The strategy takes the maximum to ensure:
-    | - Current workload is handled (rate-based)
-    | - Future spikes are anticipated (trend-based)
-    | - SLA breaches are prevented (backlog-based)
-    |
-    | Custom Strategies:
-    | Create your own by implementing ScalingStrategyContract with methods:
-    | - calculateTargetWorkers(QueueMetricsData, QueueConfiguration): int
-    | - getLastReason(): string
-    | - getLastPrediction(): ?float
-    |
-    | Example custom strategy:
-    | class SimpleRateStrategy implements ScalingStrategyContract {
-    |     public function calculateTargetWorkers($metrics, $config): int {
-    |         return (int) ceil($metrics->pending / 100); // 1 worker per 100 jobs
-    |     }
-    |     // ... implement other required methods
-    | }
-    |
-    | Strategy Selection Guide:
-    |
-    | PredictiveStrategy (DEFAULT):
-    | ✓ General-purpose workloads
-    | ✓ Bursty traffic patterns
-    | ✓ Need proactive scaling
-    | ✗ Minimal resource usage (use SimpleRateStrategy)
-    |
-    | SimpleRateStrategy:
-    | ✓ Stable, predictable workloads
-    | ✓ Minimal overhead desired
-    | ✓ Simple scaling logic
-    | ✗ Bursty traffic (use PredictiveStrategy)
-    | ✗ Strict SLA requirements (use ConservativeStrategy)
-    |
-    | BacklogOnlyStrategy:
-    | ✓ Batch processing
-    | ✓ Irregular arrival patterns
-    | ✓ Processing accumulated work
-    | ✗ Real-time requirements (use PredictiveStrategy)
-    |
-    | ConservativeStrategy:
-    | ✓ Mission-critical queues
-    | ✓ Strict SLA requirements
-    | ✓ Over-provisioning acceptable
-    | ✗ Cost-sensitive environments (use PredictiveStrategy)
-    |
-    | When to Create Custom Strategies:
-    | - Domain-specific scaling logic (e.g., time-of-day patterns)
-    | - Special constraints (hardware limits, cost optimization)
-    | - Integration with external autoscalers (Kubernetes HPA, AWS ASG)
-    | - Complex business rules for scaling decisions
+    | Redis is required for cluster mode.
     |
     */
-    'strategy' => PredictiveStrategy::class,
+    'cluster' => [
+        'enabled' => env('QUEUE_AUTOSCALE_CLUSTER_ENABLED', false),
+        'heartbeat_ttl_seconds' => env('QUEUE_AUTOSCALE_CLUSTER_HEARTBEAT_TTL', 15),
+        'leader_lease_seconds' => env('QUEUE_AUTOSCALE_CLUSTER_LEADER_LEASE', 15),
+        'recommendation_ttl_seconds' => env('QUEUE_AUTOSCALE_CLUSTER_RECOMMENDATION_TTL', 30),
+        'summary_ttl_seconds' => env('QUEUE_AUTOSCALE_CLUSTER_SUMMARY_TTL', 30),
+    ],
+
+    'strategy' => HybridStrategy::class,
+
+    'policies' => [
+        ConservativeScaleDownPolicy::class,
+        BreachNotificationPolicy::class,
+    ],
 
     /*
     |--------------------------------------------------------------------------
-    | Scaling Policies
+    | Alert rate limiting
     |--------------------------------------------------------------------------
     |
-    | Policies modify scaling behavior. Policies are executed in order and can
-    | modify scaling decisions before they are applied.
+    | How long (in seconds) to suppress repeated alerts for the same queue
+    | and signal. Applies to the built-in BreachNotificationPolicy and any
+    | listener that injects the AlertRateLimiter.
     |
-    | Available Policies:
-    | - ConservativeScaleDownPolicy - Limit scale-down to 1 worker per cycle
-    | - AggressiveScaleDownPolicy   - Allow rapid scale-down when idle
-    | - NoScaleDownPolicy           - Prevent all scale-down (critical workloads)
-    | - BreachNotificationPolicy    - Log/alert on SLA breaches
-    |
-    | Recommended Combinations by Profile:
-    | - Critical:    [NoScaleDownPolicy::class, BreachNotificationPolicy::class]
-    | - High-Volume: [ConservativeScaleDownPolicy::class, BreachNotificationPolicy::class]
-    | - Balanced:    [ConservativeScaleDownPolicy::class]
-    | - Bursty:      [AggressiveScaleDownPolicy::class, BreachNotificationPolicy::class]
-    | - Background:  [AggressiveScaleDownPolicy::class]
+    | A breach that stays active will log once, then go quiet for this many
+    | seconds. Flapping alerts are suppressed too.
     |
     */
-    'policies' => [
-        ConservativeScaleDownPolicy::class,  // Default: Conservative scale-down
-        BreachNotificationPolicy::class,     // Default: Monitor SLA compliance
+    'alerting' => [
+        'cooldown_seconds' => env('QUEUE_AUTOSCALE_ALERT_COOLDOWN', 300),
     ],
 ];

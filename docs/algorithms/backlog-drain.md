@@ -16,7 +16,7 @@ The backlog drain algorithm provides **SLA protection** by:
 - Aggressively scaling to meet deadlines
 - Prioritizing SLA compliance over cost
 
-**Goal:** Ensure no job waits longer than the configured `max_pickup_time_seconds`.
+**Goal:** Ensure no job waits longer than the configured `sla.target_seconds`.
 
 ## Mathematical Foundation
 
@@ -183,7 +183,7 @@ Time remaining = 60 - 65 = -5 seconds
 
 Status: BREACH!
 Action: Scale to maximum immediately
-Workers = 20 (max_workers)
+Workers = 20 (workers.max)
 ```
 
 ## SLA Urgency Levels
@@ -302,7 +302,7 @@ public function preventCascade(object $metrics, QueueConfiguration $config): int
 ## Integration with Hybrid Strategy
 
 ```php
-class HybridPredictiveStrategy
+class HybridStrategy
 {
     public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
     {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Policies;
 
+use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
@@ -33,6 +34,10 @@ use Illuminate\Support\Facades\Log;
  */
 final readonly class BreachNotificationPolicy implements ScalingPolicy
 {
+    public function __construct(
+        private AlertRateLimiter $limiter = new AlertRateLimiter,
+    ) {}
+
     public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
     {
         // This policy doesn't modify decisions, only monitors
@@ -41,9 +46,16 @@ final readonly class BreachNotificationPolicy implements ScalingPolicy
 
     public function afterScaling(ScalingDecision $decision): void
     {
-        // Check for SLA breach risk
+        // Check for SLA breach risk. isSlaBreachRisk() returns true on every
+        // cycle while risk is present, so we gate the log through the rate
+        // limiter — one line per queue per cooldown window rather than one
+        // per 5-second evaluation cycle.
         if ($decision->isSlaBreachRisk()) {
-            $this->logBreachRisk($decision);
+            $key = "breach_risk:{$decision->connection}:{$decision->queue}";
+
+            if ($this->limiter->allow($key)) {
+                $this->logBreachRisk($decision);
+            }
         }
 
         // Check if predicted pickup time is very close to SLA (90%+)
@@ -51,7 +63,11 @@ final readonly class BreachNotificationPolicy implements ScalingPolicy
             $slaUtilization = ($decision->predictedPickupTime / $decision->slaTarget) * 100;
 
             if ($slaUtilization >= 90) {
-                $this->logHighSlaUtilization($decision, $slaUtilization);
+                $key = "high_util:{$decision->connection}:{$decision->queue}";
+
+                if ($this->limiter->allow($key)) {
+                    $this->logHighSlaUtilization($decision, $slaUtilization);
+                }
             }
         }
     }

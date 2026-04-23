@@ -2,20 +2,12 @@
 
 declare(strict_types=1);
 
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\Strategies\ConservativeStrategy;
 use Tests\Helpers\MetricsHelper;
 
 beforeEach(function () {
     $this->strategy = app(ConservativeStrategy::class);
-    $this->config = new QueueConfiguration(
-        connection: 'redis',
-        queue: 'default',
-        maxPickupTimeSeconds: 30,
-        minWorkers: 0,
-        maxWorkers: 10,
-        scaleCooldownSeconds: 60,
-    );
+    $this->config = makeQueueConfig(['minWorkers' => 0]);
 });
 
 test('adds safety buffer to calculated workers', function () {

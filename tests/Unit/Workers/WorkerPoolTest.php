@@ -15,7 +15,7 @@ afterEach(function () {
     Mockery::close();
 });
 
-function createMockWorker(string $connection, string $queue, int $pid, bool $isRunning = true): WorkerProcess
+function createMockWorker(string $connection, string $queue, int $pid, bool $isRunning = true, ?string $group = null): WorkerProcess
 {
     $process = Mockery::mock(Process::class);
     $process->shouldReceive('getPid')->andReturn($pid);
@@ -26,6 +26,7 @@ function createMockWorker(string $connection, string $queue, int $pid, bool $isR
         connection: $connection,
         queue: $queue,
         spawnedAt: Carbon::now(),
+        group: $group,
     );
 }
 
@@ -144,4 +145,44 @@ test('all returns all workers regardless of status', function () {
     $this->pool->add(createMockWorker('redis', 'default', 1002, false));
 
     expect($this->pool->all())->toHaveCount(2);
+});
+
+test('countGroup counts only workers in the named group', function () {
+    $this->pool->add(createMockWorker('redis', 'email,sms', 2001, true, 'notifications'));
+    $this->pool->add(createMockWorker('redis', 'email,sms', 2002, true, 'notifications'));
+    $this->pool->add(createMockWorker('redis', 'reports', 2003, true, 'reports'));
+    $this->pool->add(createMockWorker('redis', 'default', 2004, true));
+
+    expect($this->pool->countGroup('redis', 'notifications'))->toBe(2);
+    expect($this->pool->countGroup('redis', 'reports'))->toBe(1);
+    expect($this->pool->countGroup('redis', 'nonexistent'))->toBe(0);
+});
+
+test('count ignores group workers even if queue string matches', function () {
+    $this->pool->add(createMockWorker('redis', 'email', 3001, true));
+    $this->pool->add(createMockWorker('redis', 'email,sms', 3002, true, 'notifications'));
+
+    expect($this->pool->count('redis', 'email'))->toBe(1);
+    expect($this->pool->count('redis', 'email,sms'))->toBe(0);
+});
+
+test('removeFromGroup removes only workers in the group', function () {
+    $this->pool->add(createMockWorker('redis', 'email,sms', 4001, true, 'notifications'));
+    $this->pool->add(createMockWorker('redis', 'email,sms', 4002, true, 'notifications'));
+    $this->pool->add(createMockWorker('redis', 'email,sms', 4003, true, 'notifications'));
+    $this->pool->add(createMockWorker('redis', 'default', 4004, true));
+
+    $removed = $this->pool->removeFromGroup('redis', 'notifications', 2);
+
+    expect($removed)->toHaveCount(2);
+    expect($this->pool->countGroup('redis', 'notifications'))->toBe(1);
+    expect($this->pool->count('redis', 'default'))->toBe(1);
+});
+
+test('totalCount counts group and per-queue workers together', function () {
+    $this->pool->add(createMockWorker('redis', 'email,sms', 5001, true, 'notifications'));
+    $this->pool->add(createMockWorker('redis', 'default', 5002, true));
+    $this->pool->add(createMockWorker('redis', 'reports', 5003, false));
+
+    expect($this->pool->totalCount())->toBe(2);
 });

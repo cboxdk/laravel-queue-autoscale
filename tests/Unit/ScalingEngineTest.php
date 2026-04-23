@@ -2,32 +2,53 @@
 
 declare(strict_types=1);
 
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
+use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
+use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
-use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
+use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
 
 beforeEach(function () {
-    $this->strategy = new PredictiveStrategy(
-        new LittlesLawCalculator,
-        new BacklogDrainCalculator,
-        new ArrivalRateEstimator,
+    $spawnTracker = new class implements SpawnLatencyTrackerContract
+    {
+        public function recordSpawn(string $workerId, string $connection, string $queue, SpawnCompensationConfiguration $config): void {}
+
+        public function recordFirstPickup(string $workerId, float $pickupTimestamp): void {}
+
+        public function currentLatency(string $connection, string $queue, SpawnCompensationConfiguration $config): float
+        {
+            return 0.0;
+        }
+    };
+
+    $pickupStore = new class implements PickupTimeStoreContract
+    {
+        public function record(string $connection, string $queue, float $timestamp, float $pickupSeconds): void {}
+
+        public function recentSamples(string $connection, string $queue, int $windowSeconds): array
+        {
+            return [];
+        }
+    };
+
+    $this->strategy = new HybridStrategy(
+        littles: new LittlesLawCalculator,
+        backlog: new BacklogDrainCalculator,
+        arrivalEstimator: new ArrivalRateEstimator,
+        spawnTracker: $spawnTracker,
+        pickupStore: $pickupStore,
+        percentileCalc: new SortBasedPercentileCalculator,
     );
     $this->capacity = new CapacityCalculator;
     $this->engine = new ScalingEngine($this->strategy, $this->capacity);
 
-    $this->config = new QueueConfiguration(
-        connection: 'redis',
-        queue: 'default',
-        maxPickupTimeSeconds: 30,
-        minWorkers: 1,
-        maxWorkers: 10,
-        scaleCooldownSeconds: 60,
-    );
+    $this->config = makeQueueConfig();
 
     $this->metrics = createMetrics([
         'throughput_per_minute' => 300.0, // 5.0 jobs/sec * 60
@@ -59,7 +80,7 @@ it('enforces minimum workers constraint', function () {
     $decision = $this->engine->evaluate($emptyMetrics, $this->config, 0);
 
     // Should be at least minWorkers (1)
-    expect($decision->targetWorkers)->toBeGreaterThanOrEqual($this->config->minWorkers);
+    expect($decision->targetWorkers)->toBeGreaterThanOrEqual($this->config->workers->min);
 });
 
 it('enforces maximum workers constraint', function () {
@@ -74,19 +95,12 @@ it('enforces maximum workers constraint', function () {
     $decision = $this->engine->evaluate($highLoadMetrics, $this->config, 5);
 
     // Should not exceed maxWorkers (10)
-    expect($decision->targetWorkers)->toBeLessThanOrEqual($this->config->maxWorkers);
+    expect($decision->targetWorkers)->toBeLessThanOrEqual($this->config->workers->max);
 });
 
 it('applies capacity constraints from system resources', function () {
     // Create config with very high max workers
-    $highConfig = new QueueConfiguration(
-        connection: 'redis',
-        queue: 'default',
-        maxPickupTimeSeconds: 30,
-        minWorkers: 1,
-        maxWorkers: 1000, // unrealistic max
-        scaleCooldownSeconds: 60,
-    );
+    $highConfig = makeQueueConfig(['maxWorkers' => 1000]);
 
     $highLoadMetrics = createMetrics([
         'throughput_per_minute' => 6000.0, // 100.0 jobs/sec * 60
@@ -156,8 +170,8 @@ it('respects strategy recommendation within bounds', function () {
     $decision = $this->engine->evaluate($metrics, $this->config, 5);
 
     // Should be within bounds (strategy recommends 5, but capacity may limit)
-    expect($decision->targetWorkers)->toBeGreaterThanOrEqual($this->config->minWorkers)
-        ->and($decision->targetWorkers)->toBeLessThanOrEqual($this->config->maxWorkers);
+    expect($decision->targetWorkers)->toBeGreaterThanOrEqual($this->config->workers->min)
+        ->and($decision->targetWorkers)->toBeLessThanOrEqual($this->config->workers->max);
 });
 
 it('prioritizes min workers over capacity when capacity is very low', function () {
@@ -174,7 +188,7 @@ it('prioritizes min workers over capacity when capacity is very low', function (
     $decision = $this->engine->evaluate($emptyMetrics, $this->config, 0);
 
     // Even with 0 demand, should maintain at least minWorkers
-    expect($decision->targetWorkers)->toBe($this->config->minWorkers);
+    expect($decision->targetWorkers)->toBe($this->config->workers->min);
 });
 
 it('creates decision with all required fields', function () {
@@ -199,14 +213,7 @@ it('shares system capacity across multiple queues', function () {
     // When totalPoolWorkers is provided, capacity should account for workers
     // from other queues. With 20 total workers, this queue (5 workers) should
     // have less available capacity than if it were alone.
-    $highConfig = new QueueConfiguration(
-        connection: 'redis',
-        queue: 'default',
-        maxPickupTimeSeconds: 30,
-        minWorkers: 1,
-        maxWorkers: 100,
-        scaleCooldownSeconds: 60,
-    );
+    $highConfig = makeQueueConfig(['maxWorkers' => 100]);
 
     $highLoadMetrics = createMetrics([
         'throughput_per_minute' => 6000.0,
@@ -229,14 +236,7 @@ it('applies constraints in correct order', function () {
     // Test: strategy → capacity → config bounds
     // Create scenario where each constraint matters
 
-    $config = new QueueConfiguration(
-        connection: 'redis',
-        queue: 'test',
-        maxPickupTimeSeconds: 30,
-        minWorkers: 2, // min constraint
-        maxWorkers: 8, // max constraint
-        scaleCooldownSeconds: 60,
-    );
+    $config = makeQueueConfig(['queue' => 'test', 'minWorkers' => 2, 'maxWorkers' => 8]);
 
     $highMetrics = createMetrics([
         'throughput_per_minute' => 3000.0, // 50.0 jobs/sec * 60
@@ -248,5 +248,5 @@ it('applies constraints in correct order', function () {
     $decision = $this->engine->evaluate($highMetrics, $config, 5);
 
     // Should be capped at config maxWorkers
-    expect($decision->targetWorkers)->toBeLessThanOrEqual($config->maxWorkers);
+    expect($decision->targetWorkers)->toBeLessThanOrEqual($config->workers->max);
 });

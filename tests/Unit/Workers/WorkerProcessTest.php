@@ -140,3 +140,44 @@ test('matches returns false for different connection and queue', function () {
 
     expect($worker->matches('database', 'high'))->toBeFalse();
 });
+
+test('group worker is identified via matchesGroup', function () {
+    $worker = new WorkerProcess(
+        process: $this->mockProcess,
+        connection: 'redis',
+        queue: 'email,sms,push',
+        spawnedAt: $this->spawnedAt,
+        group: 'notifications',
+    );
+
+    expect($worker->isGroupWorker())->toBeTrue();
+    expect($worker->matchesGroup('redis', 'notifications'))->toBeTrue();
+    expect($worker->matchesGroup('redis', 'other'))->toBeFalse();
+    expect($worker->matchesGroup('sqs', 'notifications'))->toBeFalse();
+});
+
+test('group worker does not match via per-queue matches() even with matching queue string', function () {
+    $worker = new WorkerProcess(
+        process: $this->mockProcess,
+        connection: 'redis',
+        queue: 'email,sms,push',
+        spawnedAt: $this->spawnedAt,
+        group: 'notifications',
+    );
+
+    // A per-queue operation must not accidentally target a group worker.
+    expect($worker->matches('redis', 'email,sms,push'))->toBeFalse();
+    expect($worker->matches('redis', 'email'))->toBeFalse();
+});
+
+test('per-queue worker reports no group', function () {
+    $worker = new WorkerProcess(
+        process: $this->mockProcess,
+        connection: 'redis',
+        queue: 'default',
+        spawnedAt: $this->spawnedAt,
+    );
+
+    expect($worker->isGroupWorker())->toBeFalse();
+    expect($worker->group)->toBeNull();
+});

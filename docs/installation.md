@@ -12,7 +12,7 @@ This guide walks you through installing and configuring Queue Autoscale for Lara
 
 Before installing, ensure your environment meets these requirements:
 
-- **PHP**: 8.3 or 8.4
+- **PHP**: 8.3, 8.4, or 8.5
 - **Laravel**: 11.0 or higher
 - **Composer**: Latest version recommended
 
@@ -28,7 +28,21 @@ The package will automatically register its service provider using Laravel's aut
 
 ## Step 2: Publish Configuration
 
-Publish the configuration file to customize settings:
+The fastest path is the interactive installer:
+
+```bash
+php artisan queue:autoscale:install
+```
+
+It will:
+
+- publish `queue-autoscale` and `queue-metrics` config files
+- guide you to the right preset for single-host vs cluster mode
+- recommend the correct `QUEUE_METRICS_*` and `QUEUE_AUTOSCALE_*` env values
+- optionally write those values into `.env`
+- publish queue-metrics database migrations when you choose the low-traffic database preset
+
+If you prefer the manual path, publish the configuration file yourself:
 
 ```bash
 php artisan vendor:publish --tag=queue-autoscale-config
@@ -39,6 +53,79 @@ This creates `config/queue-autoscale.php` with sensible defaults.
 ## Step 3: Setup Metrics Package
 
 Queue Autoscale for Laravel requires `cboxdk/laravel-queue-metrics` for queue discovery and metrics collection. This package is automatically installed as a dependency.
+
+## Cluster mode
+
+Cluster mode is optional, but when enabled it requires Redis for manager coordination. No cluster ID or host list is needed in config: managers auto-join the cluster from shared app and queue configuration.
+
+If you run a single autoscale manager, Redis is **not** required for this package. Single-host autoscaling continues to work with non-Redis queue backends such as `database` and `sqs`.
+
+The package now uses safe signal defaults:
+
+- In single-host mode, `QUEUE_AUTOSCALE_PICKUP_TIME_STORE=auto` and `QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=auto` resolve to null/no-op backends, so the manager stays Redis-free.
+- In cluster mode, those same `auto` settings resolve to Redis-backed implementations automatically.
+- If you want Redis-backed pickup-time and spawn-latency signals on a single host too, set both values explicitly to `redis`.
+
+```php
+'cluster' => [
+    'enabled' => env('QUEUE_AUTOSCALE_CLUSTER_ENABLED', false),
+]
+```
+
+Use this when you run multiple `queue:autoscale` processes across replicas or hosts against the same queues.
+
+### Choose your deployment shape
+
+`php artisan queue:autoscale:install` maps directly to these presets and prevents invalid combinations.
+
+#### Option A: Single host, no Redis
+
+Good for low-traffic environments, database-backed metrics, and queues on `database` / `sqs` / similar backends.
+
+```env
+QUEUE_METRICS_STORAGE=database
+QUEUE_AUTOSCALE_CLUSTER_ENABLED=false
+QUEUE_AUTOSCALE_PICKUP_TIME_STORE=auto
+QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=auto
+```
+
+#### Option B: Single host, Redis-backed predictive signals
+
+Use this when you want pickup-time percentiles and shared spawn-latency tracking even though you only run one manager.
+
+```env
+QUEUE_METRICS_STORAGE=redis
+QUEUE_METRICS_CONNECTION=default
+QUEUE_AUTOSCALE_CLUSTER_ENABLED=false
+QUEUE_AUTOSCALE_PICKUP_TIME_STORE=redis
+QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=redis
+```
+
+#### Option C: Cluster mode
+
+Required when you run multiple `queue:autoscale` managers against the same queues.
+
+```env
+QUEUE_METRICS_STORAGE=redis
+QUEUE_METRICS_CONNECTION=default
+QUEUE_AUTOSCALE_CLUSTER_ENABLED=true
+QUEUE_AUTOSCALE_PICKUP_TIME_STORE=auto
+QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=auto
+```
+
+## Cluster mode
+
+Cluster mode is optional, but when enabled it requires Redis for manager coordination. No cluster ID or host list is needed in config: managers auto-join the cluster from shared app and queue configuration.
+
+If you run a single autoscale manager, Redis is **not** required for this package. Single-host autoscaling continues to work with non-Redis queue backends such as `database` and `sqs`.
+
+```php
+'cluster' => [
+    'enabled' => env('QUEUE_AUTOSCALE_CLUSTER_ENABLED', false),
+]
+```
+
+Use this when you run multiple `queue:autoscale` processes across replicas or hosts against the same queues.
 
 ### Publish Metrics Configuration
 
@@ -78,31 +165,29 @@ php artisan migrate
 
 ## Step 4: Configure Basic Settings
 
-Edit `config/queue-autoscale.php` to configure your first queue:
+Edit `config/queue-autoscale.php`. The defaults already work for most apps (`BalancedProfile` as the default with 30s SLA, 1–10 workers). Adjust only when you want different behaviour for specific queues:
 
 ```php
 <?php
 
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
+
 return [
     'enabled' => env('QUEUE_AUTOSCALE_ENABLED', true),
 
-    'sla_defaults' => [
-        'max_pickup_time_seconds' => 30,  // Jobs picked up within 30s
-        'min_workers' => 1,
-        'max_workers' => 10,
-        'scale_cooldown_seconds' => 60,
-    ],
+    // Every queue gets this profile unless overridden below.
+    'sla_defaults' => BalancedProfile::class,
 
-    // Per-queue overrides
+    // Per-queue overrides: a profile class OR a partial override array.
     'queues' => [
-        // Example: Custom settings for email queue
-        'emails' => [
-            'max_pickup_time_seconds' => 60,  // Less strict
-            'max_workers' => 5,
-        ],
+        'payments' => CriticalProfile::class,          // 10s SLA, 5-50 workers
+        'emails'   => ['sla' => ['target_seconds' => 60]],
     ],
 ];
 ```
+
+See [Workload Profiles](basic-usage/workload-profiles.md) for the full list of shipped profiles, and [Configuration](basic-usage/configuration.md) for the full nested key reference.
 
 ## Step 5: Start the Autoscaler
 
@@ -147,79 +232,34 @@ sudo supervisorctl start queue-autoscale:*
 
 ## Verification
 
-### Check Autoscaler Status
+### See what the autoscaler sees
 
-View current scaling status:
-
-```bash
-php artisan queue:autoscale:status
-```
-
-### Validate Configuration
-
-Verify your configuration is correct:
+Inspect the raw queue state and metrics the manager is working with:
 
 ```bash
-php artisan queue:autoscale:validate
+php artisan queue:autoscale:debug --queue=default --connection=redis
 ```
 
-### Test Dry-Run
+If the numbers shown here are wrong or zero, the problem is with metrics collection, not with the autoscaler itself.
 
-Evaluate scaling decisions without actually spawning workers:
+### Run the manager in verbose mode
 
 ```bash
-php artisan queue:autoscale:evaluate --dry-run
+php artisan queue:autoscale -vv
 ```
+
+Every evaluation cycle prints the decision, the limiting factor, and the scaling action. Let it run for a minute while you push some work onto the queue — any real job from your app will do. For a quick smoke test via tinker:
+
+```bash
+php artisan tinker
+>>> for ($i = 0; $i < 50; $i++) { dispatch(function () { sleep(1); }); }
+```
+
+You should see the manager scale up, drain the backlog, and scale back down after `cooldown_seconds` (default 60).
 
 ## Troubleshooting
 
-### Autoscaler Not Discovering Queues
-
-**Issue**: No queues are being autoscaled.
-
-**Solution**: Ensure the metrics package is properly configured and collecting metrics:
-
-```bash
-# Check metrics collection
-php artisan queue:metrics:status
-
-# Verify storage backend is accessible
-php artisan tinker
-> Cache::store('redis')->get('test'); // For Redis
-```
-
-### Workers Not Spawning
-
-**Issue**: Autoscaler runs but doesn't spawn workers.
-
-**Common causes:**
-- `enabled` set to `false` in config
-- No queues with pending jobs
-- Already at `max_workers` limit
-- System resource limits reached
-
-**Solution**: Check logs for detailed information:
-
-```bash
-tail -f storage/logs/laravel.log
-```
-
-### Permission Errors
-
-**Issue**: Workers fail to spawn with permission errors.
-
-**Solution**: Ensure the PHP process has permission to spawn sub-processes:
-
-```bash
-# Check current user
-whoami
-
-# Verify artisan is executable
-ls -la artisan
-
-# Test manual worker spawn
-php artisan queue:work redis --queue=default --once
-```
+For a symptom-indexed guide (jobs piling up, workers dying, flapping, etc.), see [Troubleshooting](basic-usage/troubleshooting.md).
 
 ## Environment Variables
 

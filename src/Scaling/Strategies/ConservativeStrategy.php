@@ -13,10 +13,10 @@ use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 /**
  * Conservative scaling strategy with safety buffers
  *
- * Uses the same multi-algorithm approach as PredictiveStrategy but adds
+ * Uses the same multi-algorithm approach as HybridStrategy but adds
  * safety buffers to ensure SLA compliance even under uncertainty.
  *
- * Differences from PredictiveStrategy:
+ * Differences from HybridStrategy:
  * - Adds 25% buffer to calculated worker count
  * - Uses 75% breach threshold (more proactive)
  * - Rounds up more aggressively
@@ -65,7 +65,7 @@ final class ConservativeStrategy implements ScalingStrategyContract
         $backlogDrainWorkers = $this->backlog->calculateRequiredWorkers(
             backlog: $backlogSize,
             oldestJobAge: $oldestJobAge,
-            slaTarget: $config->maxPickupTimeSeconds,
+            slaTarget: $config->sla->targetSeconds,
             avgJobTime: $avgJobTime,
             breachThreshold: self::BREACH_THRESHOLD, // More proactive than default
         );

@@ -221,7 +221,7 @@ $workers = max($littlesLawWorkers, $baselineWorkers);
 Little's Law forms the foundation of the hybrid strategy:
 
 ```php
-class HybridPredictiveStrategy
+class HybridStrategy
 {
     public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
     {

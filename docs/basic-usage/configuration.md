@@ -12,12 +12,15 @@ Complete Queue Autoscale for Laravel configuration reference.
 - [Prerequisites: Metrics Package Setup](#prerequisites-metrics-package-setup)
 - [Basic Configuration](#basic-configuration)
 - [Queue Configuration](#queue-configuration)
+- [Worker Topology (v2)](#worker-topology-v2)
 - [Strategy Configuration](#strategy-configuration)
 - [Policy Configuration](#policy-configuration)
 - [Manager Configuration](#manager-configuration)
 - [Advanced Options](#advanced-options)
 - [Environment Variables](#environment-variables)
 - [Configuration Patterns](#configuration-patterns)
+
+> **Reading tip:** the conceptual model for per-queue vs. group vs. exclusive vs. excluded workers lives in [Queue Topology](queue-topology.md). This page is the reference for **how** to express each of those in config.
 
 ## Prerequisites: Metrics Package Setup
 
@@ -68,161 +71,169 @@ php artisan migrate
 
 ## Basic Configuration
 
-The package is configured through the published configuration file:
+Publish the config:
 
 ```bash
-php artisan vendor:publish --tag="queue-autoscale-config"
+php artisan vendor:publish --tag=queue-autoscale-config
 ```
 
-This creates `config/queue-autoscale.php` with sensible defaults.
+The defaults work out of the box. You only need to touch the config when you want to override the default profile, add per-queue overrides, declare groups/excluded queues, or tune global scaling parameters.
 
 ### Minimal Configuration
 
 ```php
 <?php
 
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
+
 return [
     'enabled' => env('QUEUE_AUTOSCALE_ENABLED', true),
 
-    'queues' => [
-        [
-            'connection' => 'redis',
-            'queue' => 'default',
-            'max_pickup_time_seconds' => 60,
-            'min_workers' => 1,
-            'max_workers' => 10,
-        ],
-    ],
+    // Every queue discovered at runtime gets this profile unless overridden.
+    'sla_defaults' => BalancedProfile::class,
+
+    // Per-queue overrides. See "Queue Configuration" below.
+    'queues' => [],
 ];
 ```
 
+Five profiles ship with the package (`BalancedProfile`, `CriticalProfile`, `HighVolumeProfile`, `BurstyProfile`, `BackgroundProfile`, plus the single-worker `ExclusiveProfile`). See [Workload Profiles](workload-profiles.md) for what each one sets.
+
 ## Queue Configuration
 
-Each queue requires specific configuration parameters:
+A queue entry takes one of two shapes:
 
-### Required Parameters
-
-#### `connection` (string)
-The Laravel queue connection name.
+### Shape 1 — a profile class
 
 ```php
-'connection' => 'redis',  // Must match config/queue.php connections
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
+
+'queues' => [
+    'payments' => CriticalProfile::class,
+],
 ```
 
-#### `queue` (string)
-The queue name to autoscale.
+Pick the profile whose SLA + worker bounds match what you want. Nothing else required.
 
-```php
-'queue' => 'default',  // Or 'emails', 'reports', etc.
-```
+### Shape 2 — a partial override array
 
-#### `max_pickup_time_seconds` (int)
-**SLA Target**: Maximum acceptable time before a job starts processing.
-
-```php
-'max_pickup_time_seconds' => 30,  // 30 second SLA
-```
-
-This is the most important parameter. The autoscaler will:
-- Scale UP if jobs wait longer than this
-- Scale DOWN if jobs are processed faster than this
-- Maintain worker count to meet this target
-
-#### `min_workers` (int)
-Minimum number of workers to maintain.
-
-```php
-'min_workers' => 0,  // Can scale to zero for low-priority queues
-'min_workers' => 2,  // Always maintain 2 workers for critical queues
-```
-
-Setting to 0 allows complete scale-down during idle periods.
-
-#### `max_workers` (int)
-Maximum number of workers allowed.
-
-```php
-'max_workers' => 20,  // Hard limit on worker count
-```
-
-Prevents runaway scaling and resource exhaustion.
-
-### Optional Parameters
-
-#### `scale_cooldown_seconds` (int)
-Minimum time between scaling operations.
-
-```php
-'scale_cooldown_seconds' => 60,  // Default: 60 seconds
-```
-
-Prevents rapid scaling oscillations. During cooldown:
-- No scaling operations occur
-- System waits for metrics to stabilize
-
-#### `worker_timeout` (int)
-Maximum job execution time in seconds.
-
-```php
-'worker_timeout' => 300,  // 5 minutes
-```
-
-Workers are terminated if jobs exceed this duration.
-
-#### `worker_memory` (int)
-Memory limit per worker in MB.
-
-```php
-'worker_memory' => 512,  // 512MB per worker
-```
-
-#### `worker_sleep` (int)
-Seconds to sleep when queue is empty.
-
-```php
-'worker_sleep' => 3,  // Default: 3 seconds
-```
-
-#### `worker_tries` (int)
-Number of times to attempt a job.
-
-```php
-'worker_tries' => 3,  // Retry failed jobs up to 3 times
-```
-
-#### `worker_backoff` (int)
-Seconds to wait before retrying a failed job.
-
-```php
-'worker_backoff' => 10,  // Wait 10 seconds between retries
-```
-
-### Full Queue Configuration Example
+When you want *almost* the defaults but with one or two changes, pass an array. It is deep-merged on top of `sla_defaults`:
 
 ```php
 'queues' => [
-    [
-        // Identity
-        'connection' => 'redis',
-        'queue' => 'critical',
-
-        // SLA & Capacity
-        'max_pickup_time_seconds' => 10,  // Strict 10-second SLA
-        'min_workers' => 5,                // Always ready
-        'max_workers' => 50,               // High capacity
-
-        // Scaling Behavior
-        'scale_cooldown_seconds' => 30,    // Fast reactions
-
-        // Worker Configuration
-        'worker_timeout' => 120,
-        'worker_memory' => 256,
-        'worker_sleep' => 1,
-        'worker_tries' => 2,
-        'worker_backoff' => 5,
+    'exports' => [
+        'sla' => ['target_seconds' => 45],
+        'workers' => ['min' => 0, 'max' => 3],
     ],
 ],
 ```
+
+### The nested config shape
+
+A fully-resolved queue configuration has four sections. You rarely need to see all of them — a profile populates them all — but here's the reference when you need to override specific keys:
+
+```php
+'payments' => [
+    'sla' => [
+        'target_seconds' => 10,      // pickup SLA; the most important single number
+        'percentile' => 99,          // which percentile to measure against (50–99)
+        'window_seconds' => 120,     // rolling window for the percentile
+        'min_samples' => 20,         // below this many samples we fall back to oldest_job_age
+    ],
+    'forecast' => [
+        'forecaster' => \Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster::class,
+        'policy' => \Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\AggressiveForecastPolicy::class,
+        'horizon_seconds' => 60,
+        'history_seconds' => 300,
+    ],
+    'workers' => [
+        'min' => 5,                  // floor — autoscaler won't drop below this
+        'max' => 50,                 // ceiling — autoscaler won't exceed this
+        'tries' => 5,                // --tries= on queue:work
+        'timeout_seconds' => 3600,   // --max-time= on queue:work
+        'sleep_seconds' => 1,        // --sleep= on queue:work
+        'shutdown_timeout_seconds' => 30,
+        'scalable' => true,          // set false for pinned/exclusive queues
+    ],
+    'spawn_compensation' => [
+        'enabled' => true,
+        'fallback_seconds' => 2.0,
+        'min_samples' => 3,
+        'ema_alpha' => 0.3,
+    ],
+],
+```
+
+**The keys most operators touch:**
+
+- `sla.target_seconds` — your SLA pickup target.
+- `workers.min` / `workers.max` — floor and ceiling on concurrency.
+- `workers.scalable = false` — pin the queue and bypass the scaling engine (see [ExclusiveProfile](#exclusiveprofile--pinned-single-worker-queues)).
+
+Global scaling keys (cooldown, breach threshold, fallback job time) live under `scaling.*` at the top level — see the published config file.
+
+## Worker Topology (v2)
+
+v2 introduces three new capabilities on top of per-queue autoscaling. Each is expressed as its own top-level config key. See [Queue Topology](queue-topology.md) for the conceptual explanation; this section is the config reference.
+
+### `excluded` — queues this package ignores
+
+```php
+'excluded' => [
+    'horizon-managed',   // exact match
+    'legacy-*',          // fnmatch glob
+    'test-?',            // fnmatch glob (single char)
+],
+```
+
+- Patterns use PHP's `fnmatch()` semantics.
+- An excluded queue is never discovered, evaluated, spawned, or terminated — even if the metrics package reports activity for it.
+- The first time the manager sees an excluded queue in a cycle, it logs a single `info` line so you can confirm.
+- Exclusion wins over everything: if you put the same name in both `queues` and `excluded`, it is excluded.
+
+**When to use:** queues managed by Horizon or another supervisor, throwaway queues during migrations, or queues with workers started manually via `queue:work` under systemd/supervisord.
+
+### `groups` — multi-queue workers with strict priority
+
+```php
+'groups' => [
+    'notifications' => [
+        'queues'     => ['email', 'sms', 'push'],   // priority order
+        'profile'    => BalancedProfile::class,     // optional — defaults to sla_defaults
+        'connection' => 'redis',                    // optional — defaults to 'default'
+        'mode'       => 'priority',                 // only supported mode in v2
+        'overrides'  => [                           // optional partial override
+            'sla' => ['target_seconds' => 45],
+        ],
+    ],
+],
+```
+
+- Each worker spawned for the group invokes `queue:work redis --queue=email,sms,push` — Laravel polls them in that order per poll cycle.
+- The group is the scaling unit. Metrics are aggregated across members (`pending`, `throughput`: summed; `oldest_job_age`: max). The SLA target is the group's SLA, not any individual queue's.
+- A queue may appear in **at most one place**: either under `queues.{name}` or inside **one** group. Startup validation throws `InvalidConfigurationException` if this is violated.
+- Groups cannot use `ExclusiveProfile`. A pinned group is a contradiction — use a per-queue exclusive config instead.
+
+**When to use:** queues that share a failure domain and have compatible SLA expectations, where you want idle capacity in one queue to absorb bursts on another without paying spawn latency.
+
+### `ExclusiveProfile` — pinned single-worker queues
+
+```php
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\ExclusiveProfile;
+
+'queues' => [
+    'legacy-integration' => ExclusiveProfile::class,
+],
+```
+
+- `workers.min = 1`, `workers.max = 1`, `workers.scalable = false`.
+- The manager never evaluates scaling for this queue. Instead, it enforces exactly one live worker: respawns on death, terminates any duplicates.
+- SLA breach events still fire for observability (operators need to know when a sequential queue falls behind) but scaling **will not** happen — the whole point is to preserve order.
+- Jobs run strictly one at a time, in the order the queue driver delivers them.
+
+**When to use:** third-party integrations that require single-connection semantics, customer workflows that assume jobs run in order, or any queue where two concurrent jobs would corrupt state.
+
+> Custom variation: a `PinnedProfile` with `min == max == N` and `scalable: false` would enforce "exactly N workers, always." The `WorkerConfiguration` constructor validates this invariant. We ship `ExclusiveProfile` (N = 1) because it covers the most common case; write your own profile class if you need N > 1.
 
 ## Strategy Configuration
 
@@ -231,7 +242,7 @@ Strategies determine HOW workers are calculated. The package includes a hybrid s
 ### Using Default Strategy
 
 ```php
-'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridPredictiveStrategy::class,
+'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy::class,
 ```
 
 The hybrid strategy combines:
@@ -253,7 +264,7 @@ Some strategies accept additional configuration:
 
 ```php
 'strategy' => [
-    'class' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridPredictiveStrategy::class,
+    'class' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy::class,
     'options' => [
         'trend_weight' => 0.7,        // How much to trust trend predictions
         'safety_margin' => 1.2,       // 20% buffer for uncertainty
@@ -268,47 +279,41 @@ Policies add cross-cutting concerns (notifications, logging, etc.) to scaling op
 
 ### Default Policies
 
+The shipped default policies (set in the published config):
+
 ```php
 'policies' => [
-    \Cbox\LaravelQueueAutoscale\Scaling\Policies\ResourceConstraintPolicy::class,
-    \Cbox\LaravelQueueAutoscale\Scaling\Policies\CooldownEnforcementPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy::class,
 ],
 ```
+
+Available policy classes:
+
+- `ConservativeScaleDownPolicy` — limits scale-down to one worker per cycle (prevents thrashing)
+- `AggressiveScaleDownPolicy` — allows rapid scale-down (for cost optimisation)
+- `NoScaleDownPolicy` — never scales down (for strict capacity guarantees)
+- `BreachNotificationPolicy` — logs SLA breach risks with built-in rate limiting (see [Alerting](../cookbook/_index.md))
+
+Resource constraints and cooldown enforcement are built into the scaling engine itself, not expressed as policies — you don't configure them here.
 
 ### Adding Custom Policies
 
 ```php
 'policies' => [
-    // Built-in policies
-    \Cbox\LaravelQueueAutoscale\Scaling\Policies\ResourceConstraintPolicy::class,
-    \Cbox\LaravelQueueAutoscale\Scaling\Policies\CooldownEnforcementPolicy::class,
+    // Shipped defaults
+    \Cbox\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy::class,
 
-    // Custom policies
+    // Your own policies — any class implementing ScalingPolicy
     \App\Autoscale\Policies\SlackNotificationPolicy::class,
-    \App\Autoscale\Policies\MetricsLoggingPolicy::class,
     \App\Autoscale\Policies\CostOptimizationPolicy::class,
 ],
 ```
 
 ### Policy Order
 
-Policies execute in the order defined. Common patterns:
-
-```php
-'policies' => [
-    // 1. Validate constraints first
-    \Cbox\LaravelQueueAutoscale\Scaling\Policies\ResourceConstraintPolicy::class,
-
-    // 2. Check cooldown
-    \Cbox\LaravelQueueAutoscale\Scaling\Policies\CooldownEnforcementPolicy::class,
-
-    // 3. Notify stakeholders
-    \App\Policies\SlackNotificationPolicy::class,
-
-    // 4. Log metrics last
-    \App\Policies\MetricsLoggingPolicy::class,
-],
-```
+Policies execute in the order listed. `beforeScaling()` hooks run top-to-bottom (each may modify the decision), then the scaling action fires, then `afterScaling()` hooks run top-to-bottom.
 
 See [Scaling Policies](../advanced-usage/scaling-policies.md) for implementation guide.
 
@@ -344,347 +349,196 @@ Balance based on:
 
 ## Advanced Options
 
-### Multiple Queues
+### Multiple queues with different SLAs
 
-Configure different settings per queue:
+Pick the profile that matches each queue's SLA:
+
+```php
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BackgroundProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
+
+'sla_defaults' => BalancedProfile::class,
+
+'queues' => [
+    'critical'   => CriticalProfile::class,     // 10s SLA, 5-50 workers
+    'default'    => BalancedProfile::class,     // 30s SLA, 1-10 workers
+    'background' => BackgroundProfile::class,   // 300s SLA, 0-5 workers
+],
+```
+
+### Per-queue overrides
+
+When a profile is almost right but you want to adjust one or two values, pass an array. It deep-merges on top of `sla_defaults`:
 
 ```php
 'queues' => [
-    // Critical queue - strict SLA, high capacity
-    [
-        'connection' => 'redis',
-        'queue' => 'critical',
-        'max_pickup_time_seconds' => 10,
-        'min_workers' => 5,
-        'max_workers' => 50,
-        'scale_cooldown_seconds' => 30,
-    ],
-
-    // Default queue - moderate SLA
-    [
-        'connection' => 'redis',
-        'queue' => 'default',
-        'max_pickup_time_seconds' => 60,
-        'min_workers' => 1,
-        'max_workers' => 20,
-        'scale_cooldown_seconds' => 60,
-    ],
-
-    // Background queue - relaxed SLA, can scale to zero
-    [
-        'connection' => 'redis',
-        'queue' => 'background',
-        'max_pickup_time_seconds' => 300,
-        'min_workers' => 0,
-        'max_workers' => 10,
-        'scale_cooldown_seconds' => 120,
+    'exports' => [
+        'sla' => ['target_seconds' => 45],
+        'workers' => ['min' => 0, 'max' => 3],
     ],
 ],
 ```
 
-### Multiple Connections
+### Multiple queue connections
 
-Support different queue drivers:
+Queue names are keys into the `queues` map; the connection is resolved from your Laravel queue config. For one queue on a non-default connection, add a `connection` key:
 
 ```php
 'queues' => [
-    // Redis queue
-    [
-        'connection' => 'redis',
-        'queue' => 'default',
-        'max_pickup_time_seconds' => 60,
-        'min_workers' => 1,
-        'max_workers' => 10,
-    ],
-
-    // Database queue
-    [
-        'connection' => 'database',
-        'queue' => 'emails',
-        'max_pickup_time_seconds' => 120,
-        'min_workers' => 0,
-        'max_workers' => 5,
-    ],
-
-    // SQS queue
-    [
+    'notifications' => [
         'connection' => 'sqs',
-        'queue' => 'notifications',
-        'max_pickup_time_seconds' => 30,
-        'min_workers' => 2,
-        'max_workers' => 15,
+        'sla' => ['target_seconds' => 30],
     ],
 ],
 ```
 
-### Resource Limits
+### Resource limits (global)
 
-Prevent system resource exhaustion:
+Caps are under the top-level `limits` key:
 
 ```php
-'resource_limits' => [
-    'max_total_workers' => 100,          // Across all queues
-    'max_memory_percent' => 80,          // Max system memory usage
-    'max_cpu_percent' => 90,             // Max CPU usage
-    'reserved_memory_mb' => 1024,        // Reserve for system
+'limits' => [
+    'max_cpu_percent' => 85,           // Skip spawning when host CPU ≥ this
+    'max_memory_percent' => 85,        // Skip spawning when host memory ≥ this
+    'worker_memory_mb_estimate' => 128, // Assumed memory footprint per worker
+    'reserve_cpu_cores' => 1,           // Cores reserved for the OS/other services
 ],
 ```
 
-### Health Checks
+These apply to every queue and group — they are how the package avoids spawning workers that would destabilise the host. See [Resource Constraints](../algorithms/resource-constraints.md) for the math.
 
-Configure health check behavior:
+### Business-hours scheduling
+
+The config file is plain PHP, so any runtime logic is available:
 
 ```php
-'health_checks' => [
-    'enabled' => true,
-    'interval_seconds' => 60,            // Check worker health every minute
-    'max_unresponsive_seconds' => 300,   // Kill workers after 5 minutes
-    'restart_dead_workers' => true,      // Auto-restart crashed workers
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BackgroundProfile;
+
+$isBusinessHours = now()->isWeekday() && now()->hour >= 9 && now()->hour < 17;
+
+'queues' => [
+    'exports' => $isBusinessHours ? CriticalProfile::class : BackgroundProfile::class,
 ],
 ```
+
+**Gotcha:** config is read once per manager start. Business-hours swaps require you to schedule a manager restart when the window changes (e.g. at 09:00 and 17:00).
 
 ## Environment Variables
 
-Override configuration via environment:
+A small set of environment variables is wired into the shipped config file. Anything else is a plain PHP key — change the file instead.
 
 ```bash
-# Enable/disable autoscaling
+# Enable/disable the manager
 QUEUE_AUTOSCALE_ENABLED=true
 
-# Manager settings
-QUEUE_AUTOSCALE_EVALUATION_INTERVAL=30
+# Optional explicit manager/node ID override.
+# Leave unset to use the built-in auto-generated node identity.
+QUEUE_AUTOSCALE_MANAGER_ID=web-01
 
-# Default queue settings
-QUEUE_AUTOSCALE_MAX_PICKUP_TIME=60
-QUEUE_AUTOSCALE_MIN_WORKERS=1
-QUEUE_AUTOSCALE_MAX_WORKERS=10
-QUEUE_AUTOSCALE_COOLDOWN=60
+# Optional signal backends.
+# auto => null/no-op on single host, Redis-backed in cluster mode
+# redis => force Redis-backed signal storage
+# null => force fallback/no-op signal storage
+QUEUE_AUTOSCALE_PICKUP_TIME_STORE=auto
+QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=auto
 
-# Resource limits
-QUEUE_AUTOSCALE_MAX_TOTAL_WORKERS=100
-QUEUE_AUTOSCALE_MAX_MEMORY_PERCENT=80
+# Enable only when multiple managers run against the same queues
+QUEUE_AUTOSCALE_CLUSTER_ENABLED=false
+
+# Fallback job time when metrics aren't available yet (seconds)
+QUEUE_AUTOSCALE_FALLBACK_JOB_TIME=2.0
+
+# Alert cooldown for BreachNotificationPolicy / AlertRateLimiter (seconds)
+QUEUE_AUTOSCALE_ALERT_COOLDOWN=300
+
+# Log channel the manager writes to
+QUEUE_AUTOSCALE_LOG_CHANNEL=stack
 ```
 
-### Queue-Specific Environment Variables
+Per-queue SLA targets are **not** env-driven — they live in profile classes or queue-level override arrays. If you need per-queue env configuration, author a custom Profile class that reads env inside `resolve()`.
 
-For per-queue configuration:
+### Signal backend modes
 
-```bash
-# Critical queue
-QUEUE_AUTOSCALE_CRITICAL_MAX_PICKUP_TIME=10
-QUEUE_AUTOSCALE_CRITICAL_MIN_WORKERS=5
-QUEUE_AUTOSCALE_CRITICAL_MAX_WORKERS=50
-
-# Default queue
-QUEUE_AUTOSCALE_DEFAULT_MAX_PICKUP_TIME=60
-QUEUE_AUTOSCALE_DEFAULT_MIN_WORKERS=1
-QUEUE_AUTOSCALE_DEFAULT_MAX_WORKERS=20
-```
-
-Reference in config:
-
-```php
-'queues' => [
-    [
-        'connection' => 'redis',
-        'queue' => 'critical',
-        'max_pickup_time_seconds' => env('QUEUE_AUTOSCALE_CRITICAL_MAX_PICKUP_TIME', 10),
-        'min_workers' => env('QUEUE_AUTOSCALE_CRITICAL_MIN_WORKERS', 5),
-        'max_workers' => env('QUEUE_AUTOSCALE_CRITICAL_MAX_WORKERS', 50),
-    ],
-],
-```
+- `QUEUE_AUTOSCALE_PICKUP_TIME_STORE=auto` keeps single-host mode Redis-free and switches to Redis automatically in cluster mode.
+- `QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=auto` follows the same rule for spawn-latency compensation.
+- Set either key to `redis` if you want Redis-backed predictive signals on a single host.
+- Set either key to `null` if you want to force fallback behaviour even when Redis exists.
 
 ## Configuration Patterns
 
-### Pattern 1: Conservative Scaling
+### Conservative — stability over responsiveness
 
-Slow, steady scaling with high stability:
-
-```php
-[
-    'max_pickup_time_seconds' => 120,    // Relaxed SLA
-    'min_workers' => 2,                  // Always some capacity
-    'max_workers' => 10,                 // Moderate ceiling
-    'scale_cooldown_seconds' => 120,     // Long cooldown for stability
-]
-```
-
-**Use when:**
-- Traffic is predictable
-- Slow ramp-up is acceptable
-- Stability > responsiveness
-
-### Pattern 2: Aggressive Scaling
-
-Fast reactions to traffic changes:
+Use `BalancedProfile` with a wider cooldown:
 
 ```php
-[
-    'max_pickup_time_seconds' => 15,     // Strict SLA
-    'min_workers' => 0,                  // Can scale to zero
-    'max_workers' => 50,                 // High ceiling
-    'scale_cooldown_seconds' => 30,      // Short cooldown for fast reactions
-]
+'sla_defaults' => BalancedProfile::class,
+'scaling' => ['cooldown_seconds' => 120],
 ```
 
-**Use when:**
-- Traffic is unpredictable/bursty
-- Fast response is critical
-- Resources are plentiful
+### Aggressive — fast reactions to bursts
 
-### Pattern 3: Cost-Optimized
+Use `CriticalProfile` (10s SLA, p99, short cooldown). Nothing else to tune — the profile's forecast policy is already aggressive.
 
-Minimize worker count while meeting SLA:
+### Cost-optimised — can scale to zero
 
-```php
-[
-    'max_pickup_time_seconds' => 180,    // Relaxed SLA
-    'min_workers' => 0,                  // Scale to zero when idle
-    'max_workers' => 5,                  // Low ceiling
-    'scale_cooldown_seconds' => 180,     // Long cooldown prevents churning
-]
-```
-
-**Use when:**
-- Cost is primary concern
-- SLA is flexible
-- Queue can tolerate delays
-
-### Pattern 4: Business Hours
-
-Different behavior for peak vs off-peak:
+Use `BackgroundProfile` (min=0, max=5) for queues that can tolerate multi-minute SLA:
 
 ```php
 'queues' => [
-    [
-        'connection' => 'redis',
-        'queue' => 'default',
-        'max_pickup_time_seconds' => now()->isWeekday() && now()->hour >= 9 && now()->hour < 17
-            ? 30   // Strict during business hours
-            : 300, // Relaxed outside business hours
-        'min_workers' => now()->isWeekday() && now()->hour >= 9 && now()->hour < 17
-            ? 5    // Higher minimum during business hours
-            : 0,   // Can scale to zero outside business hours
-        'max_workers' => 20,
-    ],
+    'cleanup' => BackgroundProfile::class,
 ],
 ```
 
-Or use environment-based configuration:
+### Multi-tier
 
-```bash
-# .env.production
-QUEUE_AUTOSCALE_BUSINESS_HOURS_MIN_WORKERS=5
-QUEUE_AUTOSCALE_AFTER_HOURS_MIN_WORKERS=0
-```
-
-### Pattern 5: Multi-Tier Queues
-
-Different queues for different priority levels:
+Pick a profile per tier:
 
 ```php
 'queues' => [
-    // Tier 1: Critical/Real-time
-    [
-        'queue' => 'critical',
-        'max_pickup_time_seconds' => 5,
-        'min_workers' => 10,
-        'max_workers' => 100,
-    ],
-
-    // Tier 2: High Priority
-    [
-        'queue' => 'high',
-        'max_pickup_time_seconds' => 30,
-        'min_workers' => 3,
-        'max_workers' => 30,
-    ],
-
-    // Tier 3: Normal
-    [
-        'queue' => 'default',
-        'max_pickup_time_seconds' => 120,
-        'min_workers' => 1,
-        'max_workers' => 15,
-    ],
-
-    // Tier 4: Background/Batch
-    [
-        'queue' => 'background',
-        'max_pickup_time_seconds' => 600,
-        'min_workers' => 0,
-        'max_workers' => 5,
-    ],
+    'tier-1-realtime'   => CriticalProfile::class,
+    'tier-2-user-facing' => HighVolumeProfile::class,
+    'tier-3-standard'    => BalancedProfile::class,
+    'tier-4-background'  => BackgroundProfile::class,
 ],
 ```
 
 ## Configuration Validation
 
-The package validates configuration on startup:
+Config validation runs at manager startup. If anything is wrong, `php artisan queue:autoscale` fails with a specific `InvalidConfigurationException` pointing at the offending key. The common ones:
 
-```php
-php artisan queue:autoscale:validate
-```
+- **`workers.min must be >= 0`** / **`workers.max (X) must be >= workers.min (Y)`** — inconsistent worker bounds.
+- **`workers.scalable=false requires workers.min (X) to equal workers.max (Y)`** — non-scalable (pinned) configs must declare exactly one target count.
+- **`workers.scalable=false requires workers.min >= 1`** — a pinned queue needs at least one worker.
+- **`Group 'X' cannot use a non-scalable profile`** — you pointed a group at `ExclusiveProfile`; use a per-queue exclusive config instead.
+- **`Queue 'X' is configured both in 'queues' and in group 'Y'`** — each queue may only appear once across `queues` and all groups.
+- **`Queue 'X' appears in multiple groups (...)`** — a queue may only belong to one group.
+- **`Group 'X' must declare at least one queue`** — the group's `queues` list was empty.
 
-Common validation errors:
-
-### Invalid SLA
-
-```
-Error: max_pickup_time_seconds must be > 0
-Queue: default
-```
-
-Fix: Set a positive value:
-```php
-'max_pickup_time_seconds' => 60,  // Not 0 or negative
-```
-
-### Invalid Worker Limits
-
-```
-Error: min_workers (15) exceeds max_workers (10)
-Queue: critical
-```
-
-Fix: Ensure min ≤ max:
-```php
-'min_workers' => 5,
-'max_workers' => 10,  // Must be >= min_workers
-```
-
-### Missing Required Fields
-
-```
-Error: Required field 'connection' is missing
-Queue: default
-```
-
-Fix: Include all required fields:
-```php
-[
-    'connection' => 'redis',     // Required
-    'queue' => 'default',        // Required
-    'max_pickup_time_seconds' => 60,  // Required
-    'min_workers' => 1,          // Required
-    'max_workers' => 10,         // Required
-]
-```
+Fix the config and restart the manager.
 
 ## Configuration Testing
 
-Test your configuration before deploying:
+There's no separate dry-run command — the manager evaluates on a fixed interval. To test a config change without a deploy:
 
 ```bash
-# Validate configuration
-php artisan queue:autoscale:validate
+# Run the manager in very-verbose mode. It prints every decision with
+# reasoning, but only spawns/terminates when the decision differs from
+# the current worker count.
+php artisan queue:autoscale -vvv --interval=5
 
-# Dry-run evaluation (doesn't spawn workers)
-php artisan queue:autoscale:evaluate --dry-run
+# In another terminal, push some representative work onto the target
+# queue. Anything your app already dispatches works — for a quick smoke
+# test, queued closures via tinker:
+php artisan tinker
+>>> for ($i = 0; $i < 50; $i++) { dispatch(function () { sleep(1); })->onQueue('critical'); }
+```
 
-# Test specific queue
-php artisan queue:autoscale:evaluate --queue=critical --dry-run
+Watch the manager output. If the decisions surprise you, inspect the debug state directly:
+
+```bash
+php artisan queue:autoscale:debug --queue=critical --connection=redis
 ```
 
 ## See Also

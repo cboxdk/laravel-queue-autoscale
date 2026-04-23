@@ -20,6 +20,7 @@ final readonly class BacklogDrainCalculator
      * @param  int  $slaTarget  Max pickup time SLA in seconds
      * @param  float  $avgJobTime  Average processing time per job in seconds
      * @param  float  $breachThreshold  Threshold (0-1) to trigger action (typically 0.5 = 50%)
+     * @param  float|null  $effectiveSlaSeconds  Effective SLA after spawn compensation (optional, defaults to slaTarget)
      * @return float Required workers (fractional, caller should ceil())
      */
     public function calculateRequiredWorkers(
@@ -28,30 +29,34 @@ final readonly class BacklogDrainCalculator
         int $slaTarget,
         float $avgJobTime,
         float $breachThreshold,
+        ?float $effectiveSlaSeconds = null,
     ): float {
         if ($backlog === 0 || $avgJobTime <= 0) {
             return 0.0;
         }
 
+        // Use effective SLA if provided, otherwise default to slaTarget
+        $effectiveSla = $effectiveSlaSeconds ?? (float) $slaTarget;
+
         // Fallback: If oldest job age is unavailable (0) but we have backlog,
         // assume we should start processing. Not all queue drivers can provide age data.
         if ($oldestJobAge === 0 && $backlog > 0) {
             // Use conservative estimate: process backlog within full SLA window
-            $jobsPerWorker = max($slaTarget / $avgJobTime, 1.0);
+            $jobsPerWorker = max($effectiveSla / $avgJobTime, 1.0);
 
             return $backlog / $jobsPerWorker;
         }
 
         // Calculate how far through SLA we are (as percentage)
-        $slaProgress = min($oldestJobAge / $slaTarget, 1.5); // Cap at 150% for extreme cases
+        $slaProgress = min($oldestJobAge / $effectiveSla, 1.5); // Cap at 150% for extreme cases
 
         // Act proactively at threshold (e.g., 50% of SLA)
         if ($slaProgress < $breachThreshold) {
             return 0.0; // No urgent action needed yet
         }
 
-        // Time until SLA breach
-        $timeUntilBreach = $slaTarget - $oldestJobAge;
+        // Time until SLA breach (using effective SLA)
+        $timeUntilBreach = $effectiveSla - $oldestJobAge;
 
         // Calculate base workers needed
         $baseWorkers = $timeUntilBreach > 0

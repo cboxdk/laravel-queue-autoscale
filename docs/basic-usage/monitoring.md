@@ -68,7 +68,7 @@ Event::listen(ScalingDecisionMade::class, function ($event) {
 ```
 
 **Monitor for:**
-- Sustained high depth → May need higher max_workers
+- Sustained high depth → May need higher workers.max
 - Rapid growth → Potential traffic spike or processing issues
 
 #### Processing Rate
@@ -108,7 +108,7 @@ Event::listen(WorkersScaled::class, function ($event) {
 ```
 
 **Monitor for:**
-- Frequently at max_workers → Consider raising limit
+- Frequently at workers.max → Consider raising limit
 - Rapid oscillation → Adjust cooldown or strategy
 
 #### Scaling Frequency
@@ -174,7 +174,7 @@ $availableMb = $event->metrics->resources->availableMemoryMb;
 
 **Monitor for:**
 - Memory leaks → Increasing usage over time
-- Out of memory errors → Reduce worker_memory or max_workers
+- Out of memory errors → Reduce limits.worker_memory_mb_estimate or workers.max
 
 #### Worker Health
 Worker process health status.
@@ -254,7 +254,7 @@ Route::get('/metrics', MetricsController::class);
 namespace App\Http\Controllers;
 
 use Illuminate\Support\Facades\Queue;
-use Cbox\LaravelQueueAutoscale\AutoscaleManager;
+use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 
 class MetricsController
 {
@@ -275,7 +275,7 @@ class MetricsController
 
             // SLA metrics
             $oldestAge = $this->getOldestJobAge($connection, $queue);
-            $slaLimit = $queueConfig['max_pickup_time_seconds'];
+            $slaLimit = $queueConfig['sla.target_seconds'];
             $slaUsage = ($oldestAge / $slaLimit) * 100;
 
             $metrics[] = "queue_oldest_job_age{queue=\"{$queue}\"} {$oldestAge}";
@@ -545,9 +545,9 @@ public function handle(ScalingDecisionMade $event): void
         $this->alerting->send([
             'severity' => 'warning',
             'title' => "Queue at maximum capacity: {$event->config->queue}",
-            'message' => "Consider raising max_workers limit",
+            'message' => "Consider raising workers.max limit",
             'details' => [
-                'max_workers' => $event->config->maxWorkers,
+                'workers.max' => $event->config->maxWorkers,
                 'pending_jobs' => $event->metrics->depth->pending ?? 0,
             ],
         ]);
@@ -663,11 +663,11 @@ class AlertOnHighCosts
 
 **Check:**
 ```bash
-# Check autoscale manager status
-php artisan queue:autoscale:status
+# Inspect queue and metric state
+php artisan queue:autoscale:debug --queue=<your-queue> --connection=<your-connection>
 
-# Check worker spawn errors
-tail -f storage/logs/laravel.log | grep "worker spawn"
+# Check worker spawn errors in the app log
+tail -f storage/logs/laravel.log | grep -Ei "worker|autoscale"
 
 # Check system resources
 free -m
@@ -699,21 +699,21 @@ LIMIT 20;
 ```
 
 **Solutions:**
-- Increase `scale_cooldown_seconds`
+- Increase `scaling.cooldown_seconds`
 - Adjust strategy sensitivity
 - Check for metric noise
 
 ### Issue: SLA Breaches
 
 **Symptoms:**
-- Jobs waiting longer than `max_pickup_time_seconds`
+- Jobs waiting longer than `sla.target_seconds`
 - Oldest job age exceeds SLA
 
 **Check:**
 ```php
-// Check if hitting max_workers
+// Check if hitting workers.max
 if ($currentWorkers >= $maxWorkers) {
-    // Need to raise max_workers
+    // Need to raise workers.max
 }
 
 // Check processing rate
@@ -723,7 +723,7 @@ if ($processingRate < expected) {
 ```
 
 **Solutions:**
-- Increase `max_workers`
+- Increase `workers.max`
 - Optimize job performance
 - Check for stuck workers
 

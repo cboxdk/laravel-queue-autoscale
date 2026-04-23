@@ -4,8 +4,20 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Configuration;
 
+use Illuminate\Support\Str;
+
 final readonly class AutoscaleConfiguration
 {
+    public static function applicationScopeId(): string
+    {
+        $appName = self::stringConfig('app.name', 'laravel');
+        $appEnv = self::stringConfig('app.env', 'production');
+        $basePath = function_exists('base_path') ? base_path() : getcwd();
+        $hash = substr(sha1($basePath.'|'.$appName.'|'.$appEnv), 0, 12);
+
+        return Str::slug($appName, '-').'-'.$appEnv.'-'.$hash;
+    }
+
     public static function isEnabled(): bool
     {
         return (bool) config('queue-autoscale.enabled', true);
@@ -13,17 +25,135 @@ final readonly class AutoscaleConfiguration
 
     public static function managerId(): string
     {
-        return (string) config('queue-autoscale.manager_id', gethostname());
+        $configured = config('queue-autoscale.manager_id');
+
+        if (is_string($configured) && trim($configured) !== '') {
+            return trim($configured);
+        }
+
+        $host = self::hostLabel();
+        $source = self::managerIdentitySource();
+
+        return sprintf(
+            '%s-%s',
+            Str::slug($host, '-'),
+            substr(sha1($source), 0, 12),
+        );
+    }
+
+    public static function hostLabel(): string
+    {
+        $host = gethostname();
+
+        return is_string($host) && $host !== '' ? $host : 'unknown-host';
+    }
+
+    public static function clusterAppId(): string
+    {
+        $appName = self::stringConfig('app.name', 'laravel');
+        $appEnv = self::stringConfig('app.env', 'production');
+        $queueDefault = self::stringConfig('queue.default', 'default');
+        $queueConfig = config("queue.connections.{$queueDefault}", []);
+
+        $signature = json_encode([
+            'app' => $appName,
+            'env' => $appEnv,
+            'queue_default' => $queueDefault,
+            'queue_connection' => $queueConfig,
+        ]);
+
+        $hash = substr(sha1($signature ?: $appName.'|'.$appEnv.'|'.$queueDefault), 0, 12);
+
+        return Str::slug($appName, '-').'-'.$appEnv.'-'.$hash;
+    }
+
+    public static function pickupTimeStore(): string
+    {
+        $configured = config('queue-autoscale.pickup_time.store', 'auto');
+
+        return is_string($configured) ? trim($configured) : 'auto';
+    }
+
+    public static function spawnLatencyTracker(): string
+    {
+        $configured = config('queue-autoscale.spawn_latency.tracker', 'auto');
+
+        return is_string($configured) ? trim($configured) : 'auto';
+    }
+
+    public static function clusterEnabled(): bool
+    {
+        return (bool) config('queue-autoscale.cluster.enabled', false);
+    }
+
+    public static function clusterHeartbeatTtlSeconds(): int
+    {
+        return self::intConfig('queue-autoscale.cluster.heartbeat_ttl_seconds', 15);
+    }
+
+    public static function clusterLeaderLeaseSeconds(): int
+    {
+        return self::intConfig('queue-autoscale.cluster.leader_lease_seconds', 15);
+    }
+
+    public static function clusterRecommendationTtlSeconds(): int
+    {
+        return self::intConfig('queue-autoscale.cluster.recommendation_ttl_seconds', 30);
+    }
+
+    public static function clusterSummaryTtlSeconds(): int
+    {
+        return self::intConfig('queue-autoscale.cluster.summary_ttl_seconds', 30);
+    }
+
+    private static function managerIdentitySource(): string
+    {
+        $parts = [];
+        $envCandidates = [
+            'k8s_pod_uid' => env('K8S_POD_UID'),
+            'pod_uid' => env('POD_UID'),
+            'ecs_task_arn' => env('ECS_TASK_ARN'),
+            'container_id' => env('CONTAINER_ID'),
+            'hostname_env' => env('HOSTNAME'),
+        ];
+
+        foreach ($envCandidates as $label => $candidate) {
+            if (is_string($candidate) && trim($candidate) !== '') {
+                $parts[] = "{$label}=".trim($candidate);
+            }
+        }
+
+        $machineIds = [
+            '/etc/machine-id',
+            '/var/lib/dbus/machine-id',
+        ];
+
+        foreach ($machineIds as $path) {
+            if (! is_file($path)) {
+                continue;
+            }
+
+            $value = @file_get_contents($path);
+
+            if (is_string($value) && trim($value) !== '') {
+                $parts[] = basename($path).'='.trim($value);
+            }
+        }
+
+        $parts[] = 'host='.self::hostLabel();
+        $parts[] = 'ip='.(string) gethostbyname(self::hostLabel());
+
+        return implode('|', array_unique(array_filter($parts, static fn (string $value): bool => trim($value) !== '')));
     }
 
     public static function evaluationIntervalSeconds(): int
     {
-        return (int) config('queue-autoscale.manager.evaluation_interval_seconds', 5);
+        return self::intConfig('queue-autoscale.manager.evaluation_interval_seconds', 5);
     }
 
     public static function logChannel(): string
     {
-        return (string) config('queue-autoscale.manager.log_channel', 'stack');
+        return self::stringConfig('queue-autoscale.manager.log_channel', 'stack');
     }
 
     /**
@@ -39,17 +169,17 @@ final readonly class AutoscaleConfiguration
 
     public static function trendWindowSeconds(): int
     {
-        return (int) self::scalingConfig('trend_window_seconds', 300);
+        return self::intValue(self::scalingConfig('trend_window_seconds', 300), 300);
     }
 
     public static function forecastHorizonSeconds(): int
     {
-        return (int) self::scalingConfig('forecast_horizon_seconds', 60);
+        return self::intValue(self::scalingConfig('forecast_horizon_seconds', 60), 60);
     }
 
     public static function breachThreshold(): float
     {
-        return (float) self::scalingConfig('breach_threshold', 0.5);
+        return self::floatValue(self::scalingConfig('breach_threshold', 0.5), 0.5);
     }
 
     /**
@@ -60,7 +190,7 @@ final readonly class AutoscaleConfiguration
      */
     public static function fallbackJobTimeSeconds(): float
     {
-        return (float) self::scalingConfig('fallback_job_time_seconds', 2.0);
+        return self::floatValue(self::scalingConfig('fallback_job_time_seconds', 2.0), 2.0);
     }
 
     /**
@@ -70,63 +200,105 @@ final readonly class AutoscaleConfiguration
      */
     public static function minArrivalRateConfidence(): float
     {
-        return (float) self::scalingConfig('min_arrival_rate_confidence', 0.5);
+        return self::floatValue(self::scalingConfig('min_arrival_rate_confidence', 0.5), 0.5);
     }
 
     public static function maxCpuPercent(): int
     {
-        return (int) config('queue-autoscale.limits.max_cpu_percent', 85);
+        return self::intConfig('queue-autoscale.limits.max_cpu_percent', 85);
     }
 
     public static function maxMemoryPercent(): int
     {
-        return (int) config('queue-autoscale.limits.max_memory_percent', 85);
+        return self::intConfig('queue-autoscale.limits.max_memory_percent', 85);
     }
 
     public static function workerMemoryMbEstimate(): int
     {
-        return (int) config('queue-autoscale.limits.worker_memory_mb_estimate', 128);
+        return self::intConfig('queue-autoscale.limits.worker_memory_mb_estimate', 128);
     }
 
     public static function reserveCpuCores(): int
     {
-        return (int) config('queue-autoscale.limits.reserve_cpu_cores', 1);
+        return self::intConfig('queue-autoscale.limits.reserve_cpu_cores', 1);
     }
 
     public static function workerTimeoutSeconds(): int
     {
-        return (int) config('queue-autoscale.workers.timeout_seconds', 3600);
+        return self::intConfig('queue-autoscale.workers.timeout_seconds', 3600);
     }
 
     public static function workerTries(): int
     {
-        return (int) config('queue-autoscale.workers.tries', 3);
+        return self::intConfig('queue-autoscale.workers.tries', 3);
     }
 
     public static function workerSleepSeconds(): int
     {
-        return (int) config('queue-autoscale.workers.sleep_seconds', 3);
+        return self::intConfig('queue-autoscale.workers.sleep_seconds', 3);
     }
 
     public static function shutdownTimeoutSeconds(): int
     {
-        return (int) config('queue-autoscale.workers.shutdown_timeout_seconds', 30);
+        return self::intConfig('queue-autoscale.workers.shutdown_timeout_seconds', 30);
     }
 
     public static function healthCheckIntervalSeconds(): int
     {
-        return (int) config('queue-autoscale.workers.health_check_interval_seconds', 10);
+        return self::intConfig('queue-autoscale.workers.health_check_interval_seconds', 10);
     }
 
     public static function strategyClass(): string
     {
-        return (string) config('queue-autoscale.strategy');
+        return self::stringConfig('queue-autoscale.strategy');
     }
 
     /** @return array<int, class-string> */
     public static function policyClasses(): array
     {
-        return (array) config('queue-autoscale.policies', []);
+        $policies = config('queue-autoscale.policies', []);
+
+        if (! is_array($policies)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            array_map(static fn (mixed $policy): string => is_string($policy) ? $policy : '', $policies),
+            static fn (string $policy): bool => $policy !== '' && class_exists($policy),
+        ));
+    }
+
+    /**
+     * Queue name patterns that should be skipped entirely by the autoscaler.
+     *
+     * Supports fnmatch-style globs (e.g. "legacy-*", "test-?"). Excluded queues
+     * are never managed, regardless of whether metrics are observed for them.
+     *
+     * @return array<int, string>
+     */
+    public static function excludedPatterns(): array
+    {
+        /** @var array<int, mixed> $patterns */
+        $patterns = (array) config('queue-autoscale.excluded', []);
+
+        return array_values(array_filter(
+            array_map(static fn (mixed $p): string => is_string($p) ? $p : '', $patterns),
+            static fn (string $p): bool => $p !== '',
+        ));
+    }
+
+    /**
+     * Test whether a queue name matches any configured exclusion pattern.
+     */
+    public static function isExcluded(string $queue): bool
+    {
+        foreach (self::excludedPatterns() as $pattern) {
+            if (fnmatch($pattern, $queue)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -142,7 +314,7 @@ final readonly class AutoscaleConfiguration
 
         foreach ($queuesConfig as $queueName => $config) {
             $connection = isset($config['connection'])
-                ? (string) $config['connection']
+                ? self::stringValue($config['connection'], 'default')
                 : 'default';
 
             $result["{$connection}:{$queueName}"] = [
@@ -154,10 +326,36 @@ final readonly class AutoscaleConfiguration
         return $result;
     }
 
-    public static function trendScalingPolicy(): TrendScalingPolicy
+    private static function intConfig(string $key, int $default): int
     {
-        $policy = (string) self::scalingConfig('trend_policy', 'moderate');
+        return self::intValue(config($key, $default), $default);
+    }
 
-        return TrendScalingPolicy::tryFrom($policy) ?? TrendScalingPolicy::MODERATE;
+    private static function stringConfig(string $key, string $default = ''): string
+    {
+        return self::stringValue(config($key, $default), $default);
+    }
+
+    private static function intValue(mixed $value, int $default): int
+    {
+        return is_numeric($value) ? (int) $value : $default;
+    }
+
+    private static function floatValue(mixed $value, float $default): float
+    {
+        return is_numeric($value) ? (float) $value : $default;
+    }
+
+    private static function stringValue(mixed $value, string $default = ''): string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value) || is_bool($value)) {
+            return (string) $value;
+        }
+
+        return $default;
     }
 }

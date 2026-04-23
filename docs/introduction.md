@@ -21,7 +21,7 @@ supervisord config: numprocs=10
 **Queue Autoscale for Laravel approach:**
 ```php
 // SLA-based: "Jobs should start processing within 30 seconds"
-'max_pickup_time_seconds' => 30
+'sla' => ['target_seconds' => 30]
 ```
 
 The package calculates and maintains the worker count needed to meet your SLA target automatically.

@@ -10,16 +10,18 @@ use Cbox\LaravelQueueAutoscale\Output\Contracts\OutputRendererContract;
 use Cbox\LaravelQueueAutoscale\Output\Renderers\DefaultOutputRenderer;
 use Cbox\LaravelQueueAutoscale\Output\Renderers\QuietOutputRenderer;
 use Cbox\LaravelQueueAutoscale\Output\Renderers\VerboseOutputRenderer;
+use Cbox\LaravelQueueAutoscale\Support\ManagerProcessLock;
 use Illuminate\Console\Command;
 
 class LaravelQueueAutoscaleCommand extends Command
 {
     public $signature = 'queue:autoscale
-                        {--interval=5 : Evaluation interval in seconds}';
+                        {--interval=5 : Evaluation interval in seconds}
+                        {--replace : Stop the existing local manager and take over its host lock}';
 
     public $description = 'Intelligent queue autoscaling daemon with predictive SLA-based scaling';
 
-    public function handle(AutoscaleManager $manager): int
+    public function handle(AutoscaleManager $manager, ManagerProcessLock $lock): int
     {
         if (! AutoscaleConfiguration::isEnabled()) {
             $this->error('Queue autoscale is disabled in config');
@@ -31,15 +33,26 @@ class LaravelQueueAutoscaleCommand extends Command
 
         $this->info('Starting Queue Autoscale Manager');
         $this->info('   Manager ID: '.AutoscaleConfiguration::managerId());
+        $this->info('   Mode: '.(AutoscaleConfiguration::clusterEnabled() ? 'cluster' : 'single-host'));
+        if (AutoscaleConfiguration::clusterEnabled()) {
+            $this->info('   Cluster ID: '.AutoscaleConfiguration::clusterAppId());
+        }
         $interval = $this->getInterval();
         $this->info('   Evaluation interval: '.$interval.'s');
         $this->line('');
+
+        $replace = $this->option('replace') === true;
+        $heldLock = $lock->acquire($replace);
 
         $manager->configure($this->getInterval());
         $manager->setOutput($this->output);
         $manager->setRenderer($renderer);
 
-        return $manager->run();
+        try {
+            return $manager->run();
+        } finally {
+            $heldLock->release();
+        }
     }
 
     private function createRenderer(): OutputRendererContract
