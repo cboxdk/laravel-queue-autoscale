@@ -6,7 +6,10 @@ weight: 4
 
 # Docker / Compose
 
-Run the autoscaler in its own container, alongside your web and scheduler containers. **Exactly one autoscaler container per app** — running multiple replicas will double-spawn workers.
+Run the autoscaler in its own container, alongside your web and scheduler containers.
+
+- Single-host mode: exactly one autoscaler container per app.
+- Cluster mode: one autoscaler replica per host/pod is supported, provided Redis-backed cluster mode is enabled.
 
 ## docker-compose.yml
 
@@ -46,7 +49,7 @@ CMD ["php", "artisan", "queue:autoscale"]
 
 Avoid shell form (`CMD php artisan queue:autoscale`) because it spawns a shell that swallows signals.
 
-## One replica, always
+## Replica count
 
 For Docker Swarm:
 
@@ -55,12 +58,12 @@ services:
   queue-autoscale:
     # ...
     deploy:
-      replicas: 1
+      replicas: 1 # single-host mode
       restart_policy:
         condition: any
 ```
 
-For Kubernetes (if you use Compose-style deployment via Kompose), a `Deployment` with `replicas: 1` plus `strategy.type: Recreate` avoids two autoscalers running simultaneously during rollouts:
+For Kubernetes single-host mode, a `Deployment` with `replicas: 1` plus `strategy.type: Recreate` avoids two autoscalers running simultaneously during rollouts:
 
 ```yaml
 spec:
@@ -74,6 +77,10 @@ spec:
           command: ["php", "artisan", "queue:autoscale"]
           terminationGracePeriodSeconds: 60
 ```
+
+For cluster mode, multiple replicas are valid. Each replica still runs exactly one local `queue:autoscale` process, and cluster coordination happens through Redis.
+
+For cluster mode, multiple replicas are valid. Each replica still runs exactly one local `queue:autoscale` process, and cluster coordination happens through Redis.
 
 ## Zero-downtime deploys
 

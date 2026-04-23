@@ -141,13 +141,17 @@ If you're on Forge/Ploi, the zero-downtime deploy flow restarts the daemon autom
 
 **Symptoms:** Worker counts bouncing wildly, `queue:autoscale:debug` shows more workers than you configured, logs on two different servers each claim to have spawned/killed the same PID.
 
-**Cause:** Two manager processes are running against the same Redis/database backend. Common causes:
+**Cause:** Either:
 
-- Running `queue:autoscale` on multiple web nodes instead of a dedicated worker node.
+- Two managers are running on the same host/app, which now fails fast unless you explicitly use `queue:autoscale --replace`.
+- Multiple hosts are running autoscale without cluster mode enabled.
+- Cluster mode is enabled, but two nodes collided onto the same configured `manager_id`.
+
+- Running `queue:autoscale` on multiple web nodes instead of enabling cluster mode.
 - A stale manager from a previous deploy that wasn't terminated.
-- Docker Swarm/Kubernetes with `replicas: 2` instead of `replicas: 1`.
+- Docker Swarm/Kubernetes with `replicas: 2` while cluster mode is still disabled.
 
-**Fix:** There must be exactly **one** manager per app. Use the `manager_id` config to tag each manager distinctly — if you see two different IDs in the log, you have two managers. Stop one.
+**Fix:** In single-host mode, run exactly one manager per app. In cluster mode, run exactly one manager per host and let Redis-backed coordination handle the rest. Only set `QUEUE_AUTOSCALE_MANAGER_ID` manually if you need to override the auto-generated node identity.
 
 ---
 

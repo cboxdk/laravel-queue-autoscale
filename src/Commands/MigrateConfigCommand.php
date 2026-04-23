@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Commands;
 
 use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
-use Cbox\LaravelQueueAutoscale\Pickup\RedisPickupTimeStore;
 use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
 use Illuminate\Console\Command;
@@ -188,15 +187,18 @@ final class MigrateConfigCommand extends Command
 
         return [
             'enabled' => $v1['enabled'] ?? true,
-            'manager_id' => $v1['manager_id'] ?? gethostname(),
+            'manager_id' => $v1['manager_id'] ?? null,
             'sla_defaults' => $slaDefaults,
             'queues' => $v2Queues,
             'excluded' => is_array($v1['excluded'] ?? null) ? $v1['excluded'] : [],
             'groups' => is_array($v1['groups'] ?? null) ? $v1['groups'] : [],
             'pickup_time' => [
-                'store' => RedisPickupTimeStore::class,
+                'store' => 'auto',
                 'percentile_calculator' => SortBasedPercentileCalculator::class,
                 'max_samples_per_queue' => 1000,
+            ],
+            'spawn_latency' => [
+                'tracker' => 'auto',
             ],
             'scaling' => [
                 'fallback_job_time_seconds' => $oldScaling['fallback_job_time_seconds'] ?? 2.0,

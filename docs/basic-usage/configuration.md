@@ -433,8 +433,19 @@ A small set of environment variables is wired into the shipped config file. Anyt
 # Enable/disable the manager
 QUEUE_AUTOSCALE_ENABLED=true
 
-# Identify this manager process in logs and events (default: gethostname())
+# Optional explicit manager/node ID override.
+# Leave unset to use the built-in auto-generated node identity.
 QUEUE_AUTOSCALE_MANAGER_ID=web-01
+
+# Optional signal backends.
+# auto => null/no-op on single host, Redis-backed in cluster mode
+# redis => force Redis-backed signal storage
+# null => force fallback/no-op signal storage
+QUEUE_AUTOSCALE_PICKUP_TIME_STORE=auto
+QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=auto
+
+# Enable only when multiple managers run against the same queues
+QUEUE_AUTOSCALE_CLUSTER_ENABLED=false
 
 # Fallback job time when metrics aren't available yet (seconds)
 QUEUE_AUTOSCALE_FALLBACK_JOB_TIME=2.0
@@ -447,6 +458,13 @@ QUEUE_AUTOSCALE_LOG_CHANNEL=stack
 ```
 
 Per-queue SLA targets are **not** env-driven — they live in profile classes or queue-level override arrays. If you need per-queue env configuration, author a custom Profile class that reads env inside `resolve()`.
+
+### Signal backend modes
+
+- `QUEUE_AUTOSCALE_PICKUP_TIME_STORE=auto` keeps single-host mode Redis-free and switches to Redis automatically in cluster mode.
+- `QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=auto` follows the same rule for spawn-latency compensation.
+- Set either key to `redis` if you want Redis-backed predictive signals on a single host.
+- Set either key to `null` if you want to force fallback behaviour even when Redis exists.
 
 ## Configuration Patterns
 

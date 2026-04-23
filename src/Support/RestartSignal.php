@@ -27,7 +27,7 @@ final class RestartSignal
 
     public function cacheKey(): string
     {
-        return 'queue-autoscale:restart:'.AutoscaleConfiguration::managerId();
+        return 'queue-autoscale:restart:'.AutoscaleConfiguration::applicationScopeId().':'.AutoscaleConfiguration::managerId();
     }
 
     private function currentTimestamp(): int

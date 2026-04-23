@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Manager;
 
+use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
+use Cbox\LaravelQueueAutoscale\Cluster\ClusterRecommendation;
+use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Events\ClusterScalingSignalUpdated;
 use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 use Cbox\LaravelQueueAutoscale\Events\SlaBreached;
 use Cbox\LaravelQueueAutoscale\Events\SlaBreachPredicted;
@@ -17,6 +21,7 @@ use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\OutputData;
 use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\QueueStats;
 use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\WorkerStatus;
 use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
@@ -85,6 +90,8 @@ final class AutoscaleManager
         private readonly PolicyExecutor $policies,
         private readonly SignalHandler $signals,
         private readonly RestartSignal $restartSignal,
+        private readonly ClusterStore $clusterStore,
+        private readonly CapacityCalculator $capacity,
     ) {
         $this->pool = new WorkerPool;
         $this->outputBuffer = new WorkerOutputBuffer;
@@ -140,6 +147,14 @@ final class AutoscaleManager
     {
         $this->startedAt = (int) round(microtime(true) * 1000);
 
+        if (AutoscaleConfiguration::clusterEnabled()) {
+            $this->assertClusterReady();
+        }
+
+        if (AutoscaleConfiguration::clusterEnabled()) {
+            $this->assertClusterReady();
+        }
+
         Log::channel(AutoscaleConfiguration::logChannel())->info(
             'Autoscale manager started',
             [
@@ -183,8 +198,14 @@ final class AutoscaleManager
 
             try {
                 $this->processWorkerOutput();
-                $this->evaluateAndScale();
                 $this->cleanupDeadWorkers();
+
+                if (AutoscaleConfiguration::clusterEnabled()) {
+                    $this->runClusterCycle();
+                } else {
+                    $this->evaluateAndScale();
+                }
+
                 $this->renderOutput();
             } catch (\Throwable $e) {
                 Log::channel(AutoscaleConfiguration::logChannel())->error(
@@ -204,6 +225,533 @@ final class AutoscaleManager
                 usleep((int) ($sleepTime * 1_000_000));
             }
         }
+    }
+
+    private function runClusterCycle(): void
+    {
+        $capacity = $this->capacity->calculateMaxWorkers($this->pool->totalCount());
+        $capacityDetails = $capacity->details;
+        $cpuDetails = is_array($capacityDetails['cpu_details'] ?? null) ? $capacityDetails['cpu_details'] : [];
+        $memoryDetails = is_array($capacityDetails['memory_details'] ?? null) ? $capacityDetails['memory_details'] : [];
+        $state = new ClusterManagerState(
+            managerId: AutoscaleConfiguration::managerId(),
+            host: AutoscaleConfiguration::hostLabel(),
+            lastSeenAt: $this->currentTimestamp(),
+            totalWorkers: $this->pool->totalCount(),
+            maxWorkers: $capacity->finalMaxWorkers,
+            availableWorkerCapacity: max($capacity->finalMaxWorkers - $this->pool->totalCount(), 0),
+            cpuPercent: $this->clusterFloat($cpuDetails['current_cpu_percent'] ?? 0.0),
+            memoryPercent: $this->clusterFloat($memoryDetails['current_memory_percent'] ?? 0.0),
+            queueWorkers: $this->pool->queueCounts(),
+            groupWorkers: $this->pool->groupCounts(),
+        );
+
+        $this->clusterStore->heartbeat($state);
+
+        $isLeader = $this->clusterStore->isLeader($state->managerId);
+
+        if ($isLeader) {
+            $this->verbose('Cluster leader lease active on this manager', 'debug');
+            $this->evaluateAndPublishClusterRecommendations();
+        } else {
+            $leaderId = $this->clusterStore->leaderId();
+            $leaderText = $leaderId !== null ? $leaderId : 'none';
+            $this->verbose("Cluster follower mode; current leader={$leaderText}", 'debug');
+        }
+
+        $recommendation = $this->clusterStore->recommendationFor($state->managerId);
+
+        if ($recommendation === null) {
+            $this->verbose('No cluster recommendation available yet for this manager', 'debug');
+
+            return;
+        }
+
+        $this->applyClusterRecommendation($recommendation);
+    }
+
+    private function evaluateAndPublishClusterRecommendations(): void
+    {
+        app(CalculateQueueMetricsAction::class)->executeForAllQueues();
+
+        $allQueues = QueueMetrics::getAllQueuesWithMetrics();
+
+        $configuredQueues = AutoscaleConfiguration::configuredQueues();
+        foreach ($configuredQueues as $queueKey => $queueInfo) {
+            if (! isset($allQueues[$queueKey])) {
+                $allQueues[$queueKey] = $this->getMetricsForQueue($queueInfo['connection'], $queueInfo['queue']);
+            }
+        }
+
+        $groups = GroupConfiguration::allFromConfig();
+
+        foreach ($groups as $group) {
+            foreach ($group->queues as $memberQueue) {
+                $queueKey = "{$group->connection}:{$memberQueue}";
+
+                if (! isset($allQueues[$queueKey])) {
+                    $allQueues[$queueKey] = $this->getMetricsForQueue($group->connection, $memberQueue);
+                }
+            }
+        }
+
+        if ($groups !== [] && $this->groupsValid === null) {
+            try {
+                GroupConfiguration::assertNoQueueConflicts($groups);
+                $this->groupsValid = true;
+            } catch (\Throwable $e) {
+                $this->groupsValid = false;
+                Log::channel(AutoscaleConfiguration::logChannel())->critical(
+                    'Group configuration is invalid — groups disabled until manager restart',
+                    ['error' => $e->getMessage()]
+                );
+            }
+        }
+
+        if ($this->groupsValid === false) {
+            $groups = [];
+        }
+
+        $groupedQueueKeys = $this->groupedQueueKeys($groups);
+        $metricsByKey = [];
+
+        foreach ($allQueues as $metricsArray) {
+            $mappedData = $this->mapMetricsFields($metricsArray);
+            $metrics = QueueMetricsData::fromArray($mappedData);
+            $metricsByKey["{$metrics->connection}:{$metrics->queue}"] = $metrics;
+        }
+
+        $activeManagers = $this->clusterStore->activeManagers();
+        $managerIds = array_map(static fn (ClusterManagerState $state): string => $state->managerId, $activeManagers);
+        $assignedTotals = array_fill_keys($managerIds, 0);
+        $assignments = array_fill_keys($managerIds, []);
+        $clusterTotalWorkers = array_sum(array_map(static fn (ClusterManagerState $state): int => $state->totalWorkers, $activeManagers));
+        $workloads = [];
+
+        foreach ($metricsByKey as $queueKey => $metrics) {
+            if (AutoscaleConfiguration::isExcluded($metrics->queue) || isset($groupedQueueKeys[$queueKey])) {
+                continue;
+            }
+
+            $config = QueueConfiguration::fromConfig($metrics->connection, $metrics->queue);
+            $workloadKey = ClusterRecommendation::queueWorkloadKey($metrics->connection, $metrics->queue);
+            $currentWorkers = $this->clusterCurrentWorkers($activeManagers, $workloadKey);
+
+            $targetWorkers = $this->clusterTargetWorkers($config, $metrics, $currentWorkers, $clusterTotalWorkers);
+            $workloadAssignments = $this->distributeClusterTarget($activeManagers, $workloadKey, $targetWorkers, $assignedTotals);
+
+            foreach ($workloadAssignments as $managerId => $target) {
+                $assignments[$managerId][$workloadKey] = $target;
+            }
+
+            $workloads[] = [
+                'type' => 'queue',
+                'connection' => $metrics->connection,
+                'name' => $metrics->queue,
+                'current_workers' => $currentWorkers,
+                'target_workers' => $targetWorkers,
+                'pending' => $metrics->pending,
+                'oldest_job_age' => $metrics->oldestJobAge,
+                'throughput_per_minute' => $metrics->throughputPerMinute,
+                'action' => $targetWorkers <=> $currentWorkers,
+            ];
+        }
+
+        foreach ($groups as $group) {
+            $aggregated = $this->aggregateGroupMetrics($group, $metricsByKey);
+            $config = $group->toScalingConfiguration();
+            $workloadKey = ClusterRecommendation::groupWorkloadKey($group->connection, $group->name);
+            $currentWorkers = $this->clusterCurrentWorkers($activeManagers, $workloadKey);
+            $targetWorkers = $this->clusterTargetWorkers($config, $aggregated, $currentWorkers, $clusterTotalWorkers);
+            $workloadAssignments = $this->distributeClusterTarget($activeManagers, $workloadKey, $targetWorkers, $assignedTotals);
+
+            foreach ($workloadAssignments as $managerId => $target) {
+                $assignments[$managerId][$workloadKey] = $target;
+            }
+
+            $workloads[] = [
+                'type' => 'group',
+                'connection' => $group->connection,
+                'name' => $group->name,
+                'current_workers' => $currentWorkers,
+                'target_workers' => $targetWorkers,
+                'pending' => $aggregated->pending,
+                'oldest_job_age' => $aggregated->oldestJobAge,
+                'throughput_per_minute' => $aggregated->throughputPerMinute,
+                'action' => $targetWorkers <=> $currentWorkers,
+            ];
+        }
+
+        $issuedAt = $this->currentTimestamp();
+
+        foreach ($managerIds as $managerId) {
+            $this->clusterStore->publishRecommendation(
+                new ClusterRecommendation(
+                    managerId: $managerId,
+                    issuedAt: $issuedAt,
+                    workloads: $assignments[$managerId],
+                )
+            );
+        }
+
+        $summary = $this->buildClusterSummary($activeManagers, $workloads);
+        $this->clusterStore->publishSummary($summary);
+        $scaleSignal = is_array($summary['scale_signal'] ?? null) ? $summary['scale_signal'] : [];
+
+        event(new ClusterScalingSignalUpdated(
+            clusterId: $this->clusterString($summary['cluster_id'] ?? null),
+            leaderId: $this->clusterString($summary['leader_id'] ?? null),
+            currentHosts: $this->clusterInt($scaleSignal['current_hosts'] ?? 0),
+            recommendedHosts: $this->clusterInt($scaleSignal['recommended_hosts'] ?? 0),
+            currentCapacity: $this->clusterInt($summary['total_worker_capacity'] ?? 0),
+            requiredWorkers: $this->clusterInt($summary['required_workers'] ?? 0),
+            action: $this->clusterString($scaleSignal['action'] ?? null, 'hold'),
+            reason: $this->clusterString($scaleSignal['reason'] ?? null),
+        ));
+    }
+
+    private function applyClusterRecommendation(ClusterRecommendation $recommendation): void
+    {
+        $groups = GroupConfiguration::allFromConfig();
+        $groupedQueueKeys = $this->groupedQueueKeys($groups);
+
+        foreach (AutoscaleConfiguration::configuredQueues() as $queueKey => $queueInfo) {
+            if (isset($groupedQueueKeys[$queueKey])) {
+                continue;
+            }
+
+            $connection = $queueInfo['connection'];
+            $queue = $queueInfo['queue'];
+
+            if (AutoscaleConfiguration::isExcluded($queue)) {
+                continue;
+            }
+
+            $config = QueueConfiguration::fromConfig($connection, $queue);
+            $target = $recommendation->targetForQueue($connection, $queue);
+            $this->reconcileQueueTarget($config, $target);
+        }
+
+        foreach ($groups as $group) {
+            $target = $recommendation->targetForGroup($group->connection, $group->name);
+            $this->reconcileGroupTarget($group, $target);
+        }
+    }
+
+    private function clusterTargetWorkers(
+        QueueConfiguration $config,
+        QueueMetricsData $metrics,
+        int $currentWorkers,
+        int $clusterTotalWorkers,
+    ): int {
+        if (! $config->workers->scalable) {
+            return $config->workers->pinnedCount();
+        }
+
+        $decision = $this->engine->evaluate($metrics, $config, $currentWorkers, $clusterTotalWorkers);
+        $decision = $this->policies->beforeScaling($decision);
+
+        return $decision->targetWorkers;
+    }
+
+    /**
+     * @param  array<int, ClusterManagerState>  $activeManagers
+     */
+    private function clusterCurrentWorkers(array $activeManagers, string $workloadKey): int
+    {
+        $total = 0;
+        [$type, $connection, $name] = explode(':', $workloadKey, 3);
+
+        foreach ($activeManagers as $state) {
+            $counts = $type === 'group' ? $state->groupWorkers : $state->queueWorkers;
+            $total += (int) ($counts["{$connection}:{$name}"] ?? 0);
+        }
+
+        return $total;
+    }
+
+    /**
+     * @param  array<int, ClusterManagerState>  $activeManagers
+     * @param  array<string, int>  $assignedTotals
+     * @return array<string, int>
+     */
+    private function distributeClusterTarget(
+        array $activeManagers,
+        string $workloadKey,
+        int $targetWorkers,
+        array &$assignedTotals,
+    ): array {
+        $targets = [];
+
+        foreach ($activeManagers as $state) {
+            $targets[$state->managerId] = 0;
+        }
+
+        if ($targetWorkers <= 0 || $activeManagers === []) {
+            return $targets;
+        }
+
+        [$type, $connection, $name] = explode(':', $workloadKey, 3);
+        $currentCounts = [];
+
+        foreach ($activeManagers as $state) {
+            $counts = $type === 'group' ? $state->groupWorkers : $state->queueWorkers;
+            $currentCounts[$state->managerId] = (int) ($counts["{$connection}:{$name}"] ?? 0);
+        }
+
+        $preserveOrder = $activeManagers;
+        usort(
+            $preserveOrder,
+            fn (ClusterManagerState $a, ClusterManagerState $b): int => ($currentCounts[$b->managerId] <=> $currentCounts[$a->managerId])
+                ?: strcmp($a->managerId, $b->managerId),
+        );
+
+        $remaining = $targetWorkers;
+
+        foreach ($preserveOrder as $state) {
+            if ($remaining <= 0) {
+                break;
+            }
+
+            $keep = min($currentCounts[$state->managerId], $remaining);
+            $targets[$state->managerId] = $keep;
+            $assignedTotals[$state->managerId] += $keep;
+            $remaining -= $keep;
+        }
+
+        while ($remaining > 0) {
+            $candidates = $activeManagers;
+            usort(
+                $candidates,
+                fn (ClusterManagerState $a, ClusterManagerState $b): int => ($assignedTotals[$a->managerId] <=> $assignedTotals[$b->managerId])
+                    ?: ($a->totalWorkers <=> $b->totalWorkers)
+                    ?: strcmp($a->managerId, $b->managerId),
+            );
+
+            $chosen = $candidates[0];
+
+            $targets[$chosen->managerId]++;
+            $assignedTotals[$chosen->managerId]++;
+            $remaining--;
+        }
+
+        return $targets;
+    }
+
+    private function reconcileQueueTarget(QueueConfiguration $config, int $targetWorkers): void
+    {
+        $currentWorkers = $this->pool->count($config->connection, $config->queue);
+        $targetWorkers = max(0, $targetWorkers);
+
+        if ($currentWorkers === $targetWorkers) {
+            return;
+        }
+
+        $decision = new ScalingDecision(
+            connection: $config->connection,
+            queue: $config->queue,
+            currentWorkers: $currentWorkers,
+            targetWorkers: $targetWorkers,
+            reason: 'cluster:recommendation',
+            spawnCompensation: $config->spawnCompensation,
+        );
+
+        if ($decision->shouldScaleUp()) {
+            $this->scaleUp($decision);
+        } elseif ($decision->shouldScaleDown()) {
+            $this->scaleDown($decision);
+        }
+    }
+
+    private function reconcileGroupTarget(GroupConfiguration $group, int $targetWorkers): void
+    {
+        $currentWorkers = $this->pool->countGroup($group->connection, $group->name);
+        $targetWorkers = max(0, $targetWorkers);
+
+        if ($currentWorkers === $targetWorkers) {
+            return;
+        }
+
+        $decision = new ScalingDecision(
+            connection: $group->connection,
+            queue: $group->name,
+            currentWorkers: $currentWorkers,
+            targetWorkers: $targetWorkers,
+            reason: 'cluster:recommendation',
+            spawnCompensation: $group->spawnCompensation,
+        );
+
+        if ($decision->shouldScaleUp()) {
+            $this->scaleUpGroup($group, $decision);
+        } elseif ($decision->shouldScaleDown()) {
+            $this->scaleDownGroup($group, $decision);
+        }
+    }
+
+    private function currentTimestamp(): int
+    {
+        return (int) round(microtime(true) * 1000);
+    }
+
+    private function assertClusterReady(): void
+    {
+        try {
+            $this->clusterStore->ping();
+        } catch (\Throwable $e) {
+            throw new \RuntimeException(
+                'Cluster mode requires a working Redis connection for coordination. '.$e->getMessage(),
+                previous: $e,
+            );
+        }
+    }
+
+    /**
+     * @param  array<int, ClusterManagerState>  $activeManagers
+     * @param  array<int, array<string, int|float|string>>  $workloads
+     * @return array<string, mixed>
+     */
+    private function buildClusterSummary(array $activeManagers, array $workloads): array
+    {
+        usort(
+            $workloads,
+            static fn (array $a, array $b): int => strcmp((string) $a['type'].':'.(string) $a['connection'].':'.(string) $a['name'], (string) $b['type'].':'.(string) $b['connection'].':'.(string) $b['name']),
+        );
+
+        $currentHosts = count($activeManagers);
+        $totalWorkerCapacity = array_sum(array_map(static fn (ClusterManagerState $state): int => $state->maxWorkers, $activeManagers));
+        $requiredWorkers = array_sum(array_map(static fn (array $workload): int => (int) $workload['target_workers'], $workloads));
+        $totalWorkers = array_sum(array_map(static fn (ClusterManagerState $state): int => $state->totalWorkers, $activeManagers));
+        $recommendedHosts = $this->recommendedHostCount($activeManagers, $requiredWorkers);
+        $signal = $this->clusterScaleSignal($currentHosts, $recommendedHosts, $requiredWorkers, $totalWorkerCapacity);
+
+        $managers = array_map(function (ClusterManagerState $state): array {
+            return [
+                'manager_id' => $state->managerId,
+                'host' => $state->host,
+                'is_leader' => $state->managerId === AutoscaleConfiguration::managerId(),
+                'last_seen_at' => $state->lastSeenAt,
+                'last_seen_human' => now()->setTimestamp((int) floor($state->lastSeenAt / 1000))->diffForHumans(),
+                'total_workers' => $state->totalWorkers,
+                'max_workers' => $state->maxWorkers,
+                'available_worker_capacity' => $state->availableWorkerCapacity,
+                'cpu_percent' => round($state->cpuPercent, 1),
+                'memory_percent' => round($state->memoryPercent, 1),
+                'queue_workers' => $state->queueWorkers,
+                'group_workers' => $state->groupWorkers,
+            ];
+        }, $activeManagers);
+
+        return [
+            'cluster_id' => AutoscaleConfiguration::clusterAppId(),
+            'generated_at' => now()->toIso8601String(),
+            'leader_id' => AutoscaleConfiguration::managerId(),
+            'manager_count' => $currentHosts,
+            'total_workers' => $totalWorkers,
+            'required_workers' => $requiredWorkers,
+            'total_worker_capacity' => $totalWorkerCapacity,
+            'utilization_percent' => $totalWorkerCapacity > 0 ? round(($requiredWorkers / $totalWorkerCapacity) * 100, 1) : 0.0,
+            'scale_signal' => $signal,
+            'managers' => $managers,
+            'workloads' => array_map(function (array $workload): array {
+                $workload['action'] = match ((int) $workload['action']) {
+                    1 => 'scale_up',
+                    -1 => 'scale_down',
+                    default => 'hold',
+                };
+
+                return $workload;
+            }, $workloads),
+        ];
+    }
+
+    /**
+     * @param  array<int, ClusterManagerState>  $activeManagers
+     */
+    private function recommendedHostCount(array $activeManagers, int $requiredWorkers): int
+    {
+        if ($activeManagers === []) {
+            return 0;
+        }
+
+        if ($requiredWorkers <= 0) {
+            return 1;
+        }
+
+        $capacities = array_map(static fn (ClusterManagerState $state): int => max($state->maxWorkers, 1), $activeManagers);
+        rsort($capacities);
+
+        $accumulated = 0;
+        foreach ($capacities as $index => $capacity) {
+            $accumulated += $capacity;
+
+            if ($accumulated >= $requiredWorkers) {
+                return $index + 1;
+            }
+        }
+
+        $currentHosts = count($capacities);
+        $averageCapacity = max((int) floor(array_sum($capacities) / max($currentHosts, 1)), 1);
+        $remaining = max($requiredWorkers - $accumulated, 0);
+
+        return $currentHosts + (int) ceil($remaining / $averageCapacity);
+    }
+
+    /**
+     * @return array<string, int|string>
+     */
+    private function clusterScaleSignal(
+        int $currentHosts,
+        int $recommendedHosts,
+        int $requiredWorkers,
+        int $totalWorkerCapacity,
+    ): array {
+        if ($requiredWorkers > $totalWorkerCapacity) {
+            return [
+                'action' => 'scale_up',
+                'reason' => 'required workers exceed observed cluster capacity',
+                'current_hosts' => $currentHosts,
+                'recommended_hosts' => max($recommendedHosts, $currentHosts + 1),
+            ];
+        }
+
+        if ($recommendedHosts < $currentHosts) {
+            return [
+                'action' => 'scale_down',
+                'reason' => 'required workers fit on fewer hosts',
+                'current_hosts' => $currentHosts,
+                'recommended_hosts' => max($recommendedHosts, 1),
+            ];
+        }
+
+        return [
+            'action' => 'hold',
+            'reason' => 'current host count matches required worker capacity',
+            'current_hosts' => $currentHosts,
+            'recommended_hosts' => max($recommendedHosts, 1),
+        ];
+    }
+
+    private function clusterFloat(mixed $value): float
+    {
+        return is_numeric($value) ? (float) $value : 0.0;
+    }
+
+    private function clusterInt(mixed $value): int
+    {
+        return is_numeric($value) ? (int) $value : 0;
+    }
+
+    private function clusterString(mixed $value, string $default = ''): string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value) || is_bool($value)) {
+            return (string) $value;
+        }
+
+        return $default;
     }
 
     private function evaluateAndScale(): void
@@ -368,7 +916,7 @@ final class AutoscaleManager
         return [
             'connection' => $connection,
             'queue' => $queue,
-            'driver' => (string) config("queue.connections.{$connection}.driver", 'unknown'),
+            'driver' => $this->clusterString(config("queue.connections.{$connection}.driver", 'unknown'), 'unknown'),
             'depth' => [
                 'total' => $total,
                 'pending' => $depth->pendingJobs,
@@ -420,44 +968,44 @@ final class AutoscaleManager
         // Extract nested depth data
         /** @var array<string, mixed>|int $depthData */
         $depthData = $data['depth'] ?? [];
-        $depth = is_array($depthData) ? (int) ($depthData['total'] ?? 0) : (int) $depthData;
-        $pending = is_array($depthData) ? (int) ($depthData['pending'] ?? 0) : 0;
-        $scheduled = is_array($depthData) ? (int) ($depthData['scheduled'] ?? 0) : 0;
-        $reserved = is_array($depthData) ? (int) ($depthData['reserved'] ?? 0) : 0;
-        $oldestJobAge = is_array($depthData) ? (int) ($depthData['oldest_job_age_seconds'] ?? 0) : 0;
+        $depth = is_array($depthData) ? $this->clusterInt($depthData['total'] ?? 0) : $this->clusterInt($depthData);
+        $pending = is_array($depthData) ? $this->clusterInt($depthData['pending'] ?? 0) : 0;
+        $scheduled = is_array($depthData) ? $this->clusterInt($depthData['scheduled'] ?? 0) : 0;
+        $reserved = is_array($depthData) ? $this->clusterInt($depthData['reserved'] ?? 0) : 0;
+        $oldestJobAge = is_array($depthData) ? $this->clusterInt($depthData['oldest_job_age_seconds'] ?? 0) : 0;
 
         // Extract nested performance data
         /** @var array<string, mixed> $perfData */
         $perfData = is_array($data['performance_60s'] ?? null) ? $data['performance_60s'] : [];
-        $throughput = (float) ($perfData['throughput_per_minute'] ?? 0.0);
-        $avgDurationMs = (float) ($perfData['avg_duration_ms'] ?? 0.0);
+        $throughput = $this->clusterFloat($perfData['throughput_per_minute'] ?? 0.0);
+        $avgDurationMs = $this->clusterFloat($perfData['avg_duration_ms'] ?? 0.0);
 
         // Extract nested lifetime data
         /** @var array<string, mixed> $lifetimeData */
         $lifetimeData = is_array($data['lifetime'] ?? null) ? $data['lifetime'] : [];
-        $failureRate = (float) ($lifetimeData['failure_rate_percent'] ?? 0.0);
+        $failureRate = $this->clusterFloat($lifetimeData['failure_rate_percent'] ?? 0.0);
 
         // Extract nested workers data
         /** @var array<string, mixed> $workersData */
         $workersData = is_array($data['workers'] ?? null) ? $data['workers'] : [];
-        $activeWorkers = (int) ($workersData['active_count'] ?? 0);
-        $utilizationRate = (float) ($workersData['current_busy_percent'] ?? 0.0);
+        $activeWorkers = $this->clusterInt($workersData['active_count'] ?? 0);
+        $utilizationRate = $this->clusterFloat($workersData['current_busy_percent'] ?? 0.0);
 
         return [
-            'connection' => $data['connection'] ?? 'default',
-            'queue' => $data['queue'] ?? 'default',
+            'connection' => $this->clusterString($data['connection'] ?? null, 'default'),
+            'queue' => $this->clusterString($data['queue'] ?? null, 'default'),
             'depth' => $depth,
             'pending' => $pending,
             'scheduled' => $scheduled,
             'reserved' => $reserved,
             'oldest_job_age' => $oldestJobAge,
-            'age_status' => $data['oldest_job_age_status'] ?? 'normal',
+            'age_status' => $this->clusterString($data['oldest_job_age_status'] ?? null, 'normal'),
             'throughput_per_minute' => $throughput,
             'avg_duration' => $avgDurationMs / 1000.0, // Convert ms to seconds
             'failure_rate' => $failureRate,
             'utilization_rate' => $utilizationRate,
             'active_workers' => $activeWorkers,
-            'driver' => $data['driver'] ?? 'unknown',
+            'driver' => $this->clusterString($data['driver'] ?? null, 'unknown'),
             'health' => $healthData,
             'calculated_at' => $data['timestamp'] ?? now()->toIso8601String(),
         ];
@@ -509,7 +1057,7 @@ final class AutoscaleManager
         // Clear stale direction: once cooldown has fully elapsed, the last direction
         // is no longer relevant. This prevents HOLD→HOLD→...→DOWN from being blocked
         // by an UP that happened minutes ago.
-        $scaleCooldownSeconds = (int) config('queue-autoscale.scaling.cooldown_seconds', 60);
+        $scaleCooldownSeconds = $this->clusterInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
         if ($lastDirection !== null && ! $this->inCooldown($key, $scaleCooldownSeconds)) {
             unset($this->lastScaleDirection[$key]);
             $lastDirection = null;
@@ -678,7 +1226,7 @@ final class AutoscaleManager
         // Anti-flapping check (same semantics as per-queue).
         $currentDirection = $decision->shouldScaleUp() ? 'up' : ($decision->shouldScaleDown() ? 'down' : 'hold');
         $lastDirection = $this->lastScaleDirection[$key] ?? null;
-        $scaleCooldownSeconds = (int) config('queue-autoscale.scaling.cooldown_seconds', 60);
+        $scaleCooldownSeconds = $this->clusterInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
 
         if ($lastDirection !== null && ! $this->inCooldown($key, $scaleCooldownSeconds)) {
             unset($this->lastScaleDirection[$key]);

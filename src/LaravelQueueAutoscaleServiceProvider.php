@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale;
 
 use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
+use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
+use Cbox\LaravelQueueAutoscale\Commands\ClusterAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Commands\DebugQueueCommand;
+use Cbox\LaravelQueueAutoscale\Commands\InstallCommand;
 use Cbox\LaravelQueueAutoscale\Commands\LaravelQueueAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Commands\MigrateConfigCommand;
 use Cbox\LaravelQueueAutoscale\Commands\RestartAutoscaleCommand;
@@ -18,6 +21,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Manager\SignalHandler;
+use Cbox\LaravelQueueAutoscale\Pickup\NullPickupTimeStore;
 use Cbox\LaravelQueueAutoscale\Pickup\PickupTimeRecorder;
 use Cbox\LaravelQueueAutoscale\Pickup\RedisPickupTimeStore;
 use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
@@ -29,8 +33,10 @@ use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\ModerateForecastPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
+use Cbox\LaravelQueueAutoscale\Support\ManagerProcessLock;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
 use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\EmaSpawnLatencyTracker;
+use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\NullSpawnLatencyTracker;
 use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\SpawnLatencyRecorder;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
@@ -64,20 +70,27 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
         $this->app->singleton(ArrivalRateEstimator::class);
 
         // Register v2 contracts with their default implementations
-        $this->app->singleton(SpawnLatencyTrackerContract::class, EmaSpawnLatencyTracker::class);
+        $this->app->singleton(SpawnLatencyTrackerContract::class, function () {
+            $trackerClass = $this->resolveSpawnLatencyTrackerClass();
+
+            if (! class_exists($trackerClass) || ! is_subclass_of($trackerClass, SpawnLatencyTrackerContract::class)) {
+                throw new \RuntimeException("queue-autoscale.spawn_latency.tracker must be a class that implements SpawnLatencyTrackerContract, got: {$trackerClass}");
+            }
+
+            return new $trackerClass;
+        });
 
         $this->app->bind(ForecasterContract::class, LinearRegressionForecaster::class);
 
         $this->app->bind(ForecastPolicyContract::class, ModerateForecastPolicy::class);
 
         $this->app->singleton(PickupTimeStoreContract::class, function () {
-            $rawClass = config('queue-autoscale.pickup_time.store', RedisPickupTimeStore::class);
+            $rawClass = $this->resolvePickupTimeStoreClass();
             $rawSamples = config('queue-autoscale.pickup_time.max_samples_per_queue', 1000);
             $maxSamples = is_numeric($rawSamples) ? (int) $rawSamples : 1000;
 
-            if (! is_string($rawClass) || ! class_exists($rawClass) || ! is_subclass_of($rawClass, PickupTimeStoreContract::class)) {
-                $got = is_string($rawClass) ? $rawClass : gettype($rawClass);
-                throw new \RuntimeException("queue-autoscale.pickup_time.store must be a class that implements PickupTimeStoreContract, got: {$got}");
+            if (! class_exists($rawClass) || ! is_subclass_of($rawClass, PickupTimeStoreContract::class)) {
+                throw new \RuntimeException("queue-autoscale.pickup_time.store must be a class that implements PickupTimeStoreContract, got: {$rawClass}");
             }
 
             if ($rawClass === RedisPickupTimeStore::class) {
@@ -116,6 +129,9 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
         $this->app->singleton(PolicyExecutor::class);
 
         // Register manager
+        $this->app->singleton(LaravelQueueAutoscale::class);
+        $this->app->singleton(ClusterStore::class);
+        $this->app->singleton(ManagerProcessLock::class);
         $this->app->singleton(RestartSignal::class);
         $this->app->singleton(SignalHandler::class);
         $this->app->singleton(AutoscaleManager::class);
@@ -130,7 +146,9 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
 
             $this->commands([
                 LaravelQueueAutoscaleCommand::class,
+                InstallCommand::class,
                 RestartAutoscaleCommand::class,
+                ClusterAutoscaleCommand::class,
                 DebugQueueCommand::class,
                 MigrateConfigCommand::class,
             ]);
@@ -147,5 +165,33 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
             JobProcessing::class,
             SpawnLatencyRecorder::class,
         );
+    }
+
+    private function resolvePickupTimeStoreClass(): string
+    {
+        $configured = AutoscaleConfiguration::pickupTimeStore();
+
+        return match ($configured) {
+            '', 'auto' => AutoscaleConfiguration::clusterEnabled()
+                ? RedisPickupTimeStore::class
+                : NullPickupTimeStore::class,
+            'redis' => RedisPickupTimeStore::class,
+            'null' => NullPickupTimeStore::class,
+            default => $configured,
+        };
+    }
+
+    private function resolveSpawnLatencyTrackerClass(): string
+    {
+        $configured = AutoscaleConfiguration::spawnLatencyTracker();
+
+        return match ($configured) {
+            '', 'auto' => AutoscaleConfiguration::clusterEnabled()
+                ? EmaSpawnLatencyTracker::class
+                : NullSpawnLatencyTracker::class,
+            'redis' => EmaSpawnLatencyTracker::class,
+            'null' => NullSpawnLatencyTracker::class,
+            default => $configured,
+        };
     }
 }

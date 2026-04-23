@@ -120,6 +120,48 @@ final class WorkerPool
         )->count();
     }
 
+    /**
+     * @return array<string, int>
+     */
+    public function queueCounts(): array
+    {
+        $counts = [];
+
+        foreach ($this->workers as $worker) {
+            if (! $worker->isRunning() || $worker->isGroupWorker()) {
+                continue;
+            }
+
+            $key = "{$worker->connection}:{$worker->queue}";
+            $counts[$key] = ($counts[$key] ?? 0) + 1;
+        }
+
+        ksort($counts);
+
+        return $counts;
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    public function groupCounts(): array
+    {
+        $counts = [];
+
+        foreach ($this->workers as $worker) {
+            if (! $worker->isRunning() || ! $worker->isGroupWorker() || $worker->group === null) {
+                continue;
+            }
+
+            $key = "{$worker->connection}:{$worker->group}";
+            $counts[$key] = ($counts[$key] ?? 0) + 1;
+        }
+
+        ksort($counts);
+
+        return $counts;
+    }
+
     /** @return Collection<int, WorkerProcess> */
     public function all(): Collection
     {

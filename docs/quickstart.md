@@ -11,17 +11,17 @@ Zero to a working autoscaled queue in about 5 minutes. Every command and file pa
 ## Prerequisites
 
 - PHP 8.3+ and Laravel 11+
-- Redis (recommended) configured in `config/queue.php`
+- Redis configured in `config/database.php` only if you plan to use the Redis or cluster presets
 - `cboxdk/laravel-queue-metrics` already set up — see [Installation](installation.md)
 
 ## Step 1 — Install and publish config
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
-php artisan vendor:publish --tag=queue-autoscale-config
+php artisan queue:autoscale:install
 ```
 
-You now have `config/queue-autoscale.php`. The defaults work out of the box: one queue (`default`) on your default connection, using the `BalancedProfile` (30s SLA, 1–10 workers).
+You now have `config/queue-autoscale.php`, `config/queue-metrics.php`, and a matching env setup for the preset you chose. The defaults work out of the box: one queue (`default`) on your default connection, using the `BalancedProfile` (30s SLA, 1–10 workers).
 
 ## Step 2 — Start the daemon
 

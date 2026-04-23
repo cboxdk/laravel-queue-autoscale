@@ -12,7 +12,7 @@ This guide walks you through installing and configuring Queue Autoscale for Lara
 
 Before installing, ensure your environment meets these requirements:
 
-- **PHP**: 8.3 or 8.4
+- **PHP**: 8.3, 8.4, or 8.5
 - **Laravel**: 11.0 or higher
 - **Composer**: Latest version recommended
 
@@ -28,7 +28,21 @@ The package will automatically register its service provider using Laravel's aut
 
 ## Step 2: Publish Configuration
 
-Publish the configuration file to customize settings:
+The fastest path is the interactive installer:
+
+```bash
+php artisan queue:autoscale:install
+```
+
+It will:
+
+- publish `queue-autoscale` and `queue-metrics` config files
+- guide you to the right preset for single-host vs cluster mode
+- recommend the correct `QUEUE_METRICS_*` and `QUEUE_AUTOSCALE_*` env values
+- optionally write those values into `.env`
+- publish queue-metrics database migrations when you choose the low-traffic database preset
+
+If you prefer the manual path, publish the configuration file yourself:
 
 ```bash
 php artisan vendor:publish --tag=queue-autoscale-config
@@ -39,6 +53,79 @@ This creates `config/queue-autoscale.php` with sensible defaults.
 ## Step 3: Setup Metrics Package
 
 Queue Autoscale for Laravel requires `cboxdk/laravel-queue-metrics` for queue discovery and metrics collection. This package is automatically installed as a dependency.
+
+## Cluster mode
+
+Cluster mode is optional, but when enabled it requires Redis for manager coordination. No cluster ID or host list is needed in config: managers auto-join the cluster from shared app and queue configuration.
+
+If you run a single autoscale manager, Redis is **not** required for this package. Single-host autoscaling continues to work with non-Redis queue backends such as `database` and `sqs`.
+
+The package now uses safe signal defaults:
+
+- In single-host mode, `QUEUE_AUTOSCALE_PICKUP_TIME_STORE=auto` and `QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=auto` resolve to null/no-op backends, so the manager stays Redis-free.
+- In cluster mode, those same `auto` settings resolve to Redis-backed implementations automatically.
+- If you want Redis-backed pickup-time and spawn-latency signals on a single host too, set both values explicitly to `redis`.
+
+```php
+'cluster' => [
+    'enabled' => env('QUEUE_AUTOSCALE_CLUSTER_ENABLED', false),
+]
+```
+
+Use this when you run multiple `queue:autoscale` processes across replicas or hosts against the same queues.
+
+### Choose your deployment shape
+
+`php artisan queue:autoscale:install` maps directly to these presets and prevents invalid combinations.
+
+#### Option A: Single host, no Redis
+
+Good for low-traffic environments, database-backed metrics, and queues on `database` / `sqs` / similar backends.
+
+```env
+QUEUE_METRICS_STORAGE=database
+QUEUE_AUTOSCALE_CLUSTER_ENABLED=false
+QUEUE_AUTOSCALE_PICKUP_TIME_STORE=auto
+QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=auto
+```
+
+#### Option B: Single host, Redis-backed predictive signals
+
+Use this when you want pickup-time percentiles and shared spawn-latency tracking even though you only run one manager.
+
+```env
+QUEUE_METRICS_STORAGE=redis
+QUEUE_METRICS_CONNECTION=default
+QUEUE_AUTOSCALE_CLUSTER_ENABLED=false
+QUEUE_AUTOSCALE_PICKUP_TIME_STORE=redis
+QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=redis
+```
+
+#### Option C: Cluster mode
+
+Required when you run multiple `queue:autoscale` managers against the same queues.
+
+```env
+QUEUE_METRICS_STORAGE=redis
+QUEUE_METRICS_CONNECTION=default
+QUEUE_AUTOSCALE_CLUSTER_ENABLED=true
+QUEUE_AUTOSCALE_PICKUP_TIME_STORE=auto
+QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=auto
+```
+
+## Cluster mode
+
+Cluster mode is optional, but when enabled it requires Redis for manager coordination. No cluster ID or host list is needed in config: managers auto-join the cluster from shared app and queue configuration.
+
+If you run a single autoscale manager, Redis is **not** required for this package. Single-host autoscaling continues to work with non-Redis queue backends such as `database` and `sqs`.
+
+```php
+'cluster' => [
+    'enabled' => env('QUEUE_AUTOSCALE_CLUSTER_ENABLED', false),
+]
+```
+
+Use this when you run multiple `queue:autoscale` processes across replicas or hosts against the same queues.
 
 ### Publish Metrics Configuration
 

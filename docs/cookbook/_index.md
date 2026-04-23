@@ -16,6 +16,14 @@ The autoscaler emits a handful of events your app can listen to. These recipes h
 - [Alert via Slack](alert-via-slack.md) — one webhook URL, done
 - [Alert via Email](alert-via-email.md) — via Laravel Notifications
 
+## Cluster Monitoring
+
+- [Export Cluster Metrics](cluster-metrics-export.md) — expose `clusterMetrics()` and `ClusterScalingSignalUpdated` to Prometheus, dashboards, or `cboxdk/laravel-queue-monitor`
+
+## Cluster Monitoring
+
+- [Export Cluster Metrics](cluster-metrics-export.md) — expose `clusterMetrics()` and `ClusterScalingSignalUpdated` to Prometheus, dashboards, or `cboxdk/laravel-queue-monitor`
+
 All three use the built-in `AlertRateLimiter` so you don't get 50 Slack pings for one breach.
 
 ## Events the autoscaler emits

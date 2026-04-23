@@ -6,7 +6,7 @@ weight: 12
 
 # Deployment
 
-The autoscaler manager (`php artisan queue:autoscale`) is a long-running daemon. Run exactly one instance per app, let your platform handle restarts on deploy.
+The autoscaler manager (`php artisan queue:autoscale`) is a long-running daemon. In single-host mode, run exactly one instance per app. In cluster mode, run exactly one instance per host for that app and let the leader coordinate the cluster.
 
 ## Pick your platform
 
@@ -17,7 +17,7 @@ The autoscaler manager (`php artisan queue:autoscale`) is a long-running daemon.
 
 ## What they all have in common
 
-- **One instance.** Running two autoscalers against the same queues will double-spawn workers. If you horizontally scale your web layer, the autoscaler belongs on one dedicated node or a leader-elected container, not every web node.
+- **Single-node or cluster mode.** By default, run one autoscaler. If you enable `queue-autoscale.cluster.enabled`, multiple managers can safely run against the same queues: they auto-join via Redis, elect a leader, and receive per-host worker recommendations.
 - **Graceful shutdown.** The manager catches `SIGTERM` and cleanly stops all spawned workers. Your platform should send SIGTERM, wait for `shutdown_timeout_seconds` (default 30), then SIGKILL.
 - **Don't double-configure workers.** If your platform has a "queue workers" section (Forge, Ploi) **do not** add entries for queues the autoscaler manages. The autoscaler IS your queue worker supervisor — the platform UI is for `queue:work` daemons that the autoscaler would fight with.
 - **Restart on deploy.** When your code changes, the manager must restart to pick up new config. All supported platforms do this automatically as part of the zero-downtime deploy flow, or you can signal a graceful restart with `php artisan queue:autoscale:restart`.

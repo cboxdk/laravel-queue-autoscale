@@ -1,48 +1,6 @@
 parameters:
 	ignoreErrors:
 		-
-			message: '#^Cannot cast mixed to float\.$#'
-			identifier: cast.double
-			count: 3
-			path: src/Configuration/AutoscaleConfiguration.php
-
-		-
-			message: '#^Cannot cast mixed to int\.$#'
-			identifier: cast.int
-			count: 12
-			path: src/Configuration/AutoscaleConfiguration.php
-
-		-
-			message: '#^Cannot cast mixed to string\.$#'
-			identifier: cast.string
-			count: 4
-			path: src/Configuration/AutoscaleConfiguration.php
-
-		-
-			message: '#^Method Cbox\\LaravelQueueAutoscale\\Configuration\\AutoscaleConfiguration\:\:policyClasses\(\) should return array\<int, class\-string\> but returns array\<mixed, mixed\>\.$#'
-			identifier: return.type
-			count: 1
-			path: src/Configuration/AutoscaleConfiguration.php
-
-		-
-			message: '#^Cannot cast mixed to float\.$#'
-			identifier: cast.double
-			count: 4
-			path: src/Manager/AutoscaleManager.php
-
-		-
-			message: '#^Cannot cast mixed to int\.$#'
-			identifier: cast.int
-			count: 8
-			path: src/Manager/AutoscaleManager.php
-
-		-
-			message: '#^Cannot cast mixed to string\.$#'
-			identifier: cast.string
-			count: 1
-			path: src/Manager/AutoscaleManager.php
-
-		-
 			message: '#^If condition is always true\.$#'
 			identifier: if.alwaysTrue
 			count: 1

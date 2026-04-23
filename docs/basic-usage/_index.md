@@ -25,6 +25,7 @@ Day-to-day usage of Queue Autoscale for Laravel, from install to alerting.
 
 - [Deployment](../deployment/_index.md) — platform-specific guides (self-hosted VPS, Forge, Ploi, Docker)
 - [Monitoring](monitoring.md) — what to watch, what's normal
+- [Cluster Scaling](cluster-scaling.md) — run multiple autoscale managers with Redis-backed coordination
 - [Troubleshooting](troubleshooting.md) — symptom → diagnosis → fix
 - [Performance](performance.md) — tuning knobs that matter
 

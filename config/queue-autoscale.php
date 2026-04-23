@@ -11,7 +11,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
 
 return [
     'enabled' => env('QUEUE_AUTOSCALE_ENABLED', true),
-    'manager_id' => env('QUEUE_AUTOSCALE_MANAGER_ID', gethostname()),
+    'manager_id' => env('QUEUE_AUTOSCALE_MANAGER_ID'),
 
     /*
     |--------------------------------------------------------------------------
@@ -91,11 +91,38 @@ return [
     |--------------------------------------------------------------------------
     | Pickup time storage (global)
     |--------------------------------------------------------------------------
+    |
+    | Controls the optional shared store used for p95 pickup-time forecasting.
+    |
+    | Supported values:
+    | - 'auto'  => Redis in cluster mode, null/no-op in single-host mode
+    | - 'redis' => force RedisPickupTimeStore
+    | - 'null'  => disable shared pickup-time persistence
+    | - FQCN    => custom PickupTimeStoreContract implementation
+    |
     */
     'pickup_time' => [
-        'store' => RedisPickupTimeStore::class,
+        'store' => env('QUEUE_AUTOSCALE_PICKUP_TIME_STORE', 'auto'),
         'percentile_calculator' => SortBasedPercentileCalculator::class,
         'max_samples_per_queue' => 1000,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Spawn latency tracker (global)
+    |--------------------------------------------------------------------------
+    |
+    | Controls the optional cross-process tracker used for spawn compensation.
+    |
+    | Supported values:
+    | - 'auto'  => Redis in cluster mode, null/fallback in single-host mode
+    | - 'redis' => force EMA latency tracking in Redis
+    | - 'null'  => disable shared spawn-latency tracking
+    | - FQCN    => custom SpawnLatencyTrackerContract implementation
+    |
+    */
+    'spawn_latency' => [
+        'tracker' => env('QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER', 'auto'),
     ],
 
     /*
@@ -146,6 +173,30 @@ return [
     'manager' => [
         'evaluation_interval_seconds' => 5,
         'log_channel' => env('QUEUE_AUTOSCALE_LOG_CHANNEL', 'stack'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Cluster coordination
+    |--------------------------------------------------------------------------
+    |
+    | Single-host mode does NOT require Redis and continues to work with any
+    | supported queue driver (database, redis, SQS, etc.).
+    |
+    | Enable this when you run the autoscale manager on multiple hosts against
+    | the same queues. Managers auto-join the cluster via Redis, elect a
+    | leader, publish local host capacity/state, and receive per-host worker
+    | recommendations from the leader.
+    |
+    | Redis is required for cluster mode.
+    |
+    */
+    'cluster' => [
+        'enabled' => env('QUEUE_AUTOSCALE_CLUSTER_ENABLED', false),
+        'heartbeat_ttl_seconds' => env('QUEUE_AUTOSCALE_CLUSTER_HEARTBEAT_TTL', 15),
+        'leader_lease_seconds' => env('QUEUE_AUTOSCALE_CLUSTER_LEADER_LEASE', 15),
+        'recommendation_ttl_seconds' => env('QUEUE_AUTOSCALE_CLUSTER_RECOMMENDATION_TTL', 30),
+        'summary_ttl_seconds' => env('QUEUE_AUTOSCALE_CLUSTER_SUMMARY_TTL', 30),
     ],
 
     'strategy' => HybridStrategy::class,
