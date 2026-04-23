@@ -33,6 +33,10 @@ class LaravelQueueAutoscaleCommand extends Command
 
         $this->info('Starting Queue Autoscale Manager');
         $this->info('   Manager ID: '.AutoscaleConfiguration::managerId());
+        $this->info('   Mode: '.(AutoscaleConfiguration::clusterEnabled() ? 'cluster' : 'single-host'));
+        if (AutoscaleConfiguration::clusterEnabled()) {
+            $this->info('   Cluster ID: '.AutoscaleConfiguration::clusterAppId());
+        }
         $interval = $this->getInterval();
         $this->info('   Evaluation interval: '.$interval.'s');
         $this->line('');

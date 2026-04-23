@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Commands;
 
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\LaravelQueueAutoscale;
 use Illuminate\Console\Command;
 
@@ -16,6 +17,12 @@ class ClusterAutoscaleCommand extends Command
 
     public function handle(LaravelQueueAutoscale $autoscale): int
     {
+        if (! AutoscaleConfiguration::clusterEnabled()) {
+            $this->warn('Cluster mode is disabled. Set QUEUE_AUTOSCALE_CLUSTER_ENABLED=true and restart queue:autoscale.');
+
+            return self::SUCCESS;
+        }
+
         $summary = $autoscale->cluster();
 
         if ($summary === []) {

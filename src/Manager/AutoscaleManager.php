@@ -151,10 +151,6 @@ final class AutoscaleManager
             $this->assertClusterReady();
         }
 
-        if (AutoscaleConfiguration::clusterEnabled()) {
-            $this->assertClusterReady();
-        }
-
         Log::channel(AutoscaleConfiguration::logChannel())->info(
             'Autoscale manager started',
             [
