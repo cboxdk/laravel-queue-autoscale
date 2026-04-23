@@ -10,7 +10,12 @@ use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Events\AutoscaleManagerStarted;
+use Cbox\LaravelQueueAutoscale\Events\AutoscaleManagerStopped;
+use Cbox\LaravelQueueAutoscale\Events\ClusterLeaderChanged;
+use Cbox\LaravelQueueAutoscale\Events\ClusterManagerPresenceChanged;
 use Cbox\LaravelQueueAutoscale\Events\ClusterScalingSignalUpdated;
+use Cbox\LaravelQueueAutoscale\Events\ClusterSummaryPublished;
 use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 use Cbox\LaravelQueueAutoscale\Events\SlaBreached;
 use Cbox\LaravelQueueAutoscale\Events\SlaBreachPredicted;
@@ -32,6 +37,7 @@ use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
 use Cbox\LaravelQueueMetrics\Actions\CalculateQueueMetricsAction;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
+use Composer\InstalledVersions;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -82,6 +88,13 @@ final class AutoscaleManager
 
     /** @var array<int, string> */
     private array $scalingLog = [];
+
+    private ?string $stopReason = null;
+
+    private ?string $lastObservedLeaderId = null;
+
+    /** @var list<string> */
+    private array $lastObservedManagerIds = [];
 
     public function __construct(
         private readonly ScalingEngine $engine,
@@ -159,7 +172,19 @@ final class AutoscaleManager
             ]
         );
 
+        event(new AutoscaleManagerStarted(
+            managerId: AutoscaleConfiguration::managerId(),
+            host: AutoscaleConfiguration::hostLabel(),
+            clusterEnabled: AutoscaleConfiguration::clusterEnabled(),
+            clusterId: AutoscaleConfiguration::clusterEnabled() ? AutoscaleConfiguration::clusterAppId() : '',
+            intervalSeconds: $this->interval,
+            startedAt: $this->startedAt,
+            packageVersion: $this->packageVersion(),
+        ));
+
         $this->signals->register(function () {
+            $this->stopReason = 'signal';
+
             Log::channel(AutoscaleConfiguration::logChannel())->info(
                 'Shutdown signal received'
             );
@@ -179,6 +204,7 @@ final class AutoscaleManager
         while (! $this->signals->shouldStop()) {
             if ($this->restartSignal->requestedAfter($this->startedAt)) {
                 $this->verbose('Restart signal detected; shutting down manager for supervised restart.', 'info');
+                $this->stopReason = 'restart_signal';
 
                 Log::channel(AutoscaleConfiguration::logChannel())->info(
                     'Restart signal detected; shutting down manager for supervised restart'
@@ -229,6 +255,11 @@ final class AutoscaleManager
         $capacityDetails = $capacity->details;
         $cpuDetails = is_array($capacityDetails['cpu_details'] ?? null) ? $capacityDetails['cpu_details'] : [];
         $memoryDetails = is_array($capacityDetails['memory_details'] ?? null) ? $capacityDetails['memory_details'] : [];
+        $memoryTotalMb = $this->clusterFloat($memoryDetails['total_memory_mb'] ?? 0.0);
+        $memoryUsedMb = round($memoryTotalMb * ($this->clusterFloat($memoryDetails['current_memory_percent'] ?? 0.0) / 100), 1);
+        $memoryFreeMb = round(max($memoryTotalMb - $memoryUsedMb, 0.0), 1);
+        $queueCounts = $this->pool->queueCounts();
+        $groupCounts = $this->pool->groupCounts();
         $state = new ClusterManagerState(
             managerId: AutoscaleConfiguration::managerId(),
             host: AutoscaleConfiguration::hostLabel(),
@@ -236,22 +267,33 @@ final class AutoscaleManager
             totalWorkers: $this->pool->totalCount(),
             maxWorkers: $capacity->finalMaxWorkers,
             availableWorkerCapacity: max($capacity->finalMaxWorkers - $this->pool->totalCount(), 0),
+            capacityLimiter: $this->clusterString($capacity->limitingFactor, 'unknown'),
             cpuPercent: $this->clusterFloat($cpuDetails['current_cpu_percent'] ?? 0.0),
             memoryPercent: $this->clusterFloat($memoryDetails['current_memory_percent'] ?? 0.0),
-            queueWorkers: $this->pool->queueCounts(),
-            groupWorkers: $this->pool->groupCounts(),
+            memoryTotalMb: $memoryTotalMb,
+            memoryUsedMb: $memoryUsedMb,
+            memoryFreeMb: $memoryFreeMb,
+            queueCount: count($queueCounts),
+            groupCount: count($groupCounts),
+            packageVersion: $this->packageVersion(),
+            queueWorkers: $queueCounts,
+            groupWorkers: $groupCounts,
         );
 
         $this->clusterStore->heartbeat($state);
 
+        $currentLeaderId = $this->clusterStore->leaderId();
         $isLeader = $this->clusterStore->isLeader($state->managerId);
 
         if ($isLeader) {
+            $currentLeaderId = $state->managerId;
+            $this->dispatchLeaderChanged($currentLeaderId);
             $this->verbose('Cluster leader lease active on this manager', 'debug');
             $this->evaluateAndPublishClusterRecommendations();
         } else {
-            $leaderId = $this->clusterStore->leaderId();
-            $leaderText = $leaderId !== null ? $leaderId : 'none';
+            $currentLeaderId = $this->clusterStore->leaderId();
+            $this->dispatchLeaderChanged($currentLeaderId);
+            $leaderText = $currentLeaderId !== null ? $currentLeaderId : 'none';
             $this->verbose("Cluster follower mode; current leader={$leaderText}", 'debug');
         }
 
@@ -318,6 +360,7 @@ final class AutoscaleManager
         }
 
         $activeManagers = $this->clusterStore->activeManagers();
+        $this->dispatchManagerPresenceChanged($activeManagers);
         $managerIds = array_map(static fn (ClusterManagerState $state): string => $state->managerId, $activeManagers);
         $assignedTotals = array_fill_keys($managerIds, 0);
         $assignments = array_fill_keys($managerIds, []);
@@ -344,11 +387,19 @@ final class AutoscaleManager
                 'type' => 'queue',
                 'connection' => $metrics->connection,
                 'name' => $metrics->queue,
+                'driver' => $metrics->driver,
                 'current_workers' => $currentWorkers,
                 'target_workers' => $targetWorkers,
+                'worker_min' => $config->workers->min,
+                'worker_max' => $config->workers->max,
+                'sla_target_seconds' => $config->sla->targetSeconds,
                 'pending' => $metrics->pending,
                 'oldest_job_age' => $metrics->oldestJobAge,
+                'oldest_job_age_status' => $metrics->ageStatus,
                 'throughput_per_minute' => $metrics->throughputPerMinute,
+                'active_workers' => $metrics->activeWorkers,
+                'utilization_percent' => round($metrics->utilizationRate, 1),
+                'member_queues' => [$metrics->queue],
                 'action' => $targetWorkers <=> $currentWorkers,
             ];
         }
@@ -369,11 +420,19 @@ final class AutoscaleManager
                 'type' => 'group',
                 'connection' => $group->connection,
                 'name' => $group->name,
+                'driver' => $aggregated->driver,
                 'current_workers' => $currentWorkers,
                 'target_workers' => $targetWorkers,
+                'worker_min' => $config->workers->min,
+                'worker_max' => $config->workers->max,
+                'sla_target_seconds' => $config->sla->targetSeconds,
                 'pending' => $aggregated->pending,
                 'oldest_job_age' => $aggregated->oldestJobAge,
+                'oldest_job_age_status' => $aggregated->ageStatus,
                 'throughput_per_minute' => $aggregated->throughputPerMinute,
+                'active_workers' => $aggregated->activeWorkers,
+                'utilization_percent' => round($aggregated->utilizationRate, 1),
+                'member_queues' => array_values($group->queues),
                 'action' => $targetWorkers <=> $currentWorkers,
             ];
         }
@@ -392,6 +451,12 @@ final class AutoscaleManager
 
         $summary = $this->buildClusterSummary($activeManagers, $workloads);
         $this->clusterStore->publishSummary($summary);
+        event(new ClusterSummaryPublished(
+            clusterId: $this->clusterString($summary['cluster_id'] ?? null),
+            leaderId: $this->clusterString($summary['leader_id'] ?? null),
+            summary: $summary,
+            publishedAt: $this->currentTimestamp(),
+        ));
         $scaleSignal = is_array($summary['scale_signal'] ?? null) ? $summary['scale_signal'] : [];
 
         event(new ClusterScalingSignalUpdated(
@@ -603,14 +668,22 @@ final class AutoscaleManager
 
     /**
      * @param  array<int, ClusterManagerState>  $activeManagers
-     * @param  array<int, array<string, int|float|string>>  $workloads
+     * @param  array<int, array<string, int|float|string|list<string>>>  $workloads
      * @return array<string, mixed>
      */
     private function buildClusterSummary(array $activeManagers, array $workloads): array
     {
+        $workloadSortKey = static function (array $workload): string {
+            $type = is_string($workload['type'] ?? null) ? $workload['type'] : '';
+            $connection = is_string($workload['connection'] ?? null) ? $workload['connection'] : '';
+            $name = is_string($workload['name'] ?? null) ? $workload['name'] : '';
+
+            return "{$type}:{$connection}:{$name}";
+        };
+
         usort(
             $workloads,
-            static fn (array $a, array $b): int => strcmp((string) $a['type'].':'.(string) $a['connection'].':'.(string) $a['name'], (string) $b['type'].':'.(string) $b['connection'].':'.(string) $b['name']),
+            static fn (array $a, array $b): int => strcmp($workloadSortKey($a), $workloadSortKey($b)),
         );
 
         $currentHosts = count($activeManagers);
@@ -619,6 +692,10 @@ final class AutoscaleManager
         $totalWorkers = array_sum(array_map(static fn (ClusterManagerState $state): int => $state->totalWorkers, $activeManagers));
         $recommendedHosts = $this->recommendedHostCount($activeManagers, $requiredWorkers);
         $signal = $this->clusterScaleSignal($currentHosts, $recommendedHosts, $requiredWorkers, $totalWorkerCapacity);
+        $generatedAt = now();
+        $generatedAtMs = $this->currentTimestamp();
+        $leaderLeaseTtlSeconds = AutoscaleConfiguration::clusterLeaderLeaseSeconds();
+        $leaderExpiresAt = $generatedAt->copy()->addSeconds($leaderLeaseTtlSeconds);
 
         $managers = array_map(function (ClusterManagerState $state): array {
             return [
@@ -630,8 +707,15 @@ final class AutoscaleManager
                 'total_workers' => $state->totalWorkers,
                 'max_workers' => $state->maxWorkers,
                 'available_worker_capacity' => $state->availableWorkerCapacity,
+                'capacity_limiter' => $state->capacityLimiter,
                 'cpu_percent' => round($state->cpuPercent, 1),
                 'memory_percent' => round($state->memoryPercent, 1),
+                'memory_total_mb' => round($state->memoryTotalMb, 1),
+                'memory_used_mb' => round($state->memoryUsedMb, 1),
+                'memory_free_mb' => round($state->memoryFreeMb, 1),
+                'queue_count' => $state->queueCount,
+                'group_count' => $state->groupCount,
+                'package_version' => $state->packageVersion,
                 'queue_workers' => $state->queueWorkers,
                 'group_workers' => $state->groupWorkers,
             ];
@@ -639,8 +723,13 @@ final class AutoscaleManager
 
         return [
             'cluster_id' => AutoscaleConfiguration::clusterAppId(),
-            'generated_at' => now()->toIso8601String(),
+            'generated_at' => $generatedAt->toIso8601String(),
+            'generated_at_unix_ms' => $generatedAtMs,
             'leader_id' => AutoscaleConfiguration::managerId(),
+            'leader_renewed_at' => $generatedAt->toIso8601String(),
+            'leader_renewed_at_unix_ms' => $generatedAtMs,
+            'leader_lease_ttl_seconds' => $leaderLeaseTtlSeconds,
+            'leader_expires_at' => $leaderExpiresAt->toIso8601String(),
             'manager_count' => $currentHosts,
             'total_workers' => $totalWorkers,
             'required_workers' => $requiredWorkers,
@@ -748,6 +837,19 @@ final class AutoscaleManager
         }
 
         return $default;
+    }
+
+    private function packageVersion(): string
+    {
+        if (! class_exists(InstalledVersions::class)) {
+            return 'unknown';
+        }
+
+        if (! InstalledVersions::isInstalled('cboxdk/laravel-queue-autoscale')) {
+            return 'unknown';
+        }
+
+        return InstalledVersions::getPrettyVersion('cboxdk/laravel-queue-autoscale') ?? 'unknown';
     }
 
     private function evaluateAndScale(): void
@@ -1817,7 +1919,66 @@ final class AutoscaleManager
 
         $this->renderer?->shutdown();
 
+        event(new AutoscaleManagerStopped(
+            managerId: AutoscaleConfiguration::managerId(),
+            host: AutoscaleConfiguration::hostLabel(),
+            clusterEnabled: AutoscaleConfiguration::clusterEnabled(),
+            clusterId: AutoscaleConfiguration::clusterEnabled() ? AutoscaleConfiguration::clusterAppId() : '',
+            startedAt: $this->startedAt,
+            stoppedAt: $this->currentTimestamp(),
+            reason: $this->stopReason ?? 'shutdown',
+            workerCount: $workerCount,
+            packageVersion: $this->packageVersion(),
+        ));
+
         $this->verbose('✓ Shutdown complete', 'info');
+    }
+
+    private function dispatchLeaderChanged(?string $currentLeaderId): void
+    {
+        if ($currentLeaderId === $this->lastObservedLeaderId) {
+            return;
+        }
+
+        event(new ClusterLeaderChanged(
+            clusterId: AutoscaleConfiguration::clusterAppId(),
+            previousLeaderId: $this->lastObservedLeaderId,
+            currentLeaderId: $currentLeaderId,
+            observedByManagerId: AutoscaleConfiguration::managerId(),
+            changedAt: $this->currentTimestamp(),
+        ));
+
+        $this->lastObservedLeaderId = $currentLeaderId;
+    }
+
+    /**
+     * @param  array<int, ClusterManagerState>  $activeManagers
+     */
+    private function dispatchManagerPresenceChanged(array $activeManagers): void
+    {
+        $managerIds = array_values(array_map(static fn (ClusterManagerState $state): string => $state->managerId, $activeManagers));
+        sort($managerIds);
+
+        if ($managerIds === $this->lastObservedManagerIds) {
+            return;
+        }
+
+        $addedManagerIds = array_values(array_diff($managerIds, $this->lastObservedManagerIds));
+        $removedManagerIds = array_values(array_diff($this->lastObservedManagerIds, $managerIds));
+        sort($addedManagerIds);
+        sort($removedManagerIds);
+
+        event(new ClusterManagerPresenceChanged(
+            clusterId: AutoscaleConfiguration::clusterAppId(),
+            managerIds: $managerIds,
+            addedManagerIds: $addedManagerIds,
+            removedManagerIds: $removedManagerIds,
+            leaderId: AutoscaleConfiguration::managerId(),
+            observedByManagerId: AutoscaleConfiguration::managerId(),
+            observedAt: $this->currentTimestamp(),
+        ));
+
+        $this->lastObservedManagerIds = $managerIds;
     }
 
     private function inCooldown(string $key, int $cooldownSeconds): bool

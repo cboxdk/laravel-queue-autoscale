@@ -42,7 +42,7 @@ Use **Policies** when:
 
 ## Available Events
 
-The package emits exactly these five events. Nothing else. Anything else referenced in older guides was never shipped.
+Queue Autoscale emits workload events, cluster events, and manager lifecycle events. This page focuses on the most commonly consumed workload events; for the complete integration surface see [Integrations & Developer Hooks](../advanced-usage/integrations.md).
 
 ### `ScalingDecisionMade`
 

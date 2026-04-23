@@ -64,13 +64,19 @@ class ClusterAutoscaleCommand extends Command
                 $this->stringValue($manager['max_workers'] ?? null, '0'),
                 sprintf('%.1f', $this->floatValue($manager['cpu_percent'] ?? 0.0)),
                 sprintf('%.1f', $this->floatValue($manager['memory_percent'] ?? 0.0)),
+                sprintf(
+                    '%.0f/%.0f/%.0f',
+                    $this->floatValue($manager['memory_used_mb'] ?? 0.0),
+                    $this->floatValue($manager['memory_free_mb'] ?? 0.0),
+                    $this->floatValue($manager['memory_total_mb'] ?? 0.0),
+                ),
                 $this->stringValue($manager['last_seen_human'] ?? null),
             ];
         }
 
         if ($managerRows !== []) {
             $this->table(
-                ['Manager', 'Host', 'Leader', 'Workers', 'Capacity', 'CPU%', 'Mem%', 'Seen'],
+                ['Manager', 'Host', 'Leader', 'Workers', 'Capacity', 'CPU%', 'Mem%', 'Mem MB', 'Seen'],
                 $managerRows,
             );
         }

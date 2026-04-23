@@ -14,6 +14,7 @@ Implement custom business logic and scaling strategies:
 
 - **[Custom Strategies](custom-strategies.md)** - Write your own scaling algorithms
 - **[Scaling Policies](scaling-policies.md)** - Add cross-cutting concerns and hooks
+- **[Integrations & Developer Hooks](integrations.md)** - Use `cluster()`, JSON snapshots, and Laravel events in monitor packages and internal tooling
 
 ## Production
 

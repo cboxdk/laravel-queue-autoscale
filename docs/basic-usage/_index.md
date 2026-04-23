@@ -32,6 +32,7 @@ Day-to-day usage of Queue Autoscale for Laravel, from install to alerting.
 ## Going deeper
 
 - [How It Works](how-it-works.md) — the hybrid predictive algorithm explained
+- [Integrations & Developer Hooks](../advanced-usage/integrations.md) — facade APIs, cluster JSON, and lifecycle events for monitor packages
 - [Custom Strategies](../advanced-usage/custom-strategies.md) — replace any algorithm with your own
 - [Scaling Policies](../advanced-usage/scaling-policies.md) — cross-cutting concerns
 - [Algorithms](../algorithms/_index.md) — the math behind Little's Law, backlog drain, forecasting
