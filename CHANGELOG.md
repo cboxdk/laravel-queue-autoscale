@@ -5,6 +5,65 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.0.0 — Predictive Autoscaling, Worker Topology & Cluster Orchestration - 2026-04-26
+
+### Breaking Changes
+
+- `PredictiveStrategy` removed — replaced by `HybridStrategy`
+- `ProfilePresets` static methods removed — replaced by `ProfileContract` implementations
+- `QueueConfiguration` properties restructured (`sla->targetSeconds`, `workers->min/max`)
+- Config file shape rewritten — run `php artisan queue-autoscale:migrate-config`
+- `TrendScalingPolicy` enum replaced by `ForecastPolicyContract` classes
+
+### Added
+
+#### Predictive Scaling Core
+
+- `HybridStrategy` combining Little's Law, backlog drain, and arrival-rate forecasting
+- `LinearRegressionForecaster` (OLS + R² confidence blending)
+- Spawn latency compensation via `EmaSpawnLatencyTracker` (Redis-backed EMA)
+- p95 pickup time SLA signal via `RedisPickupTimeStore` + `SortBasedPercentileCalculator`
+- Six workload profiles: Balanced, Critical, HighVolume, Bursty, Background, Exclusive
+
+#### Worker Topology
+
+- **Excluded queues** — fnmatch-style globs to prevent discovery/spawning
+- **ExclusiveProfile** — pinned single-threaded queues with supervisor respawn
+- **Groups** — multi-queue workers with priority polling and aggregated scaling
+
+#### Multihost Cluster Orchestration
+
+- Redis-backed leader election with lease renewal
+- Per-host heartbeat tracking (CPU, memory, workers, capacity)
+- Cluster-wide scaling decisions distributed across managers
+- Five cluster lifecycle events
+
+#### Operational Tooling
+
+- `queue:autoscale:restart` — graceful restart
+- `AlertRateLimiter` — rate-limited SLA breach alerts
+- `queue-autoscale:install` — interactive installer
+- Cookbook recipes (Slack, Email, Log) and deployment guides (Forge, Ploi, Docker)
+
+### Fixed
+
+- `avgDuration` double-division in three strategies (1000x worker overprovisioning)
+- Cluster mode now routes non-scalable queues through `superviseQueue()`
+- `age_status` reads from correct nested key path
+- `BacklogDrainCalculator` PHPDoc matches actual quadratic formula
+
+### Testing
+
+- 435 tests, 1070 assertions
+- PHP 8.3 / 8.4 / 8.5, Laravel 11 / 12 / 13
+- PHPStan clean, Pint clean
+
+### Migration
+
+See `docs/upgrade-guide-v2.md` for step-by-step migration from v2.
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v2.1.0...v3.0.0
+
 ## [3.0.0] - 2026-04-26
 
 ### BREAKING CHANGES
@@ -15,12 +74,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `maxPickupTimeSeconds` → `$config->sla->targetSeconds`
   - `minWorkers` / `maxWorkers` → `$config->workers->min` / `->max`
   - `scaleCooldownSeconds` → global `config('queue-autoscale.scaling.cooldown_seconds')`
+  
 - Config file shape rewritten. Run `php artisan queue-autoscale:migrate-config` to produce a v3 file from an older config.
 - `TrendScalingPolicy` enum replaced by `ForecastPolicyContract` with four classes: `DisabledForecastPolicy`, `HintForecastPolicy`, `ModerateForecastPolicy`, `AggressiveForecastPolicy`.
 
 ### Added
 
 #### Predictive Scaling Core
+
 - `HybridStrategy` combining Little's Law, backlog drain, and arrival-rate forecasting.
 - Genuine forecasting via `LinearRegressionForecaster` (OLS + R² confidence blending).
 - Worker spawn latency compensation via `EmaSpawnLatencyTracker` (Redis-backed EMA).
@@ -29,11 +90,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Contracts/` namespace — every algorithm and backend is replaceable via Laravel container binding.
 
 #### Worker Topology
+
 - **Excluded queues**: fnmatch-style globs to prevent discovery, evaluation, or spawning.
 - **ExclusiveProfile**: Pinned single-threaded queues (`min=max=1`) with supervisor respawn, for strict job ordering.
 - **Groups**: Multi-queue workers with strict priority polling and aggregated scaling metrics.
 
 #### Multihost Cluster Orchestration
+
 - Redis-backed leader election with lease renewal.
 - Per-host heartbeat tracking (CPU, memory, worker counts, capacity).
 - Cluster-wide scaling decisions distributed across active managers.
@@ -41,6 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Five cluster lifecycle events: `ClusterLeaderElected`, `ClusterLeaderLost`, `ClusterRecommendationPublished`, `ClusterHeartbeatSent`, `ClusterHostJoined`.
 
 #### Operational Tooling
+
 - `queue:autoscale:restart` — graceful restart command.
 - `AlertRateLimiter` — cache-lock-based dedup for SLA breach and utilization alerts (300s default cooldown).
 - `php artisan queue-autoscale:install` — interactive configuration installer.
@@ -161,6 +225,7 @@ composer require php-tui/php-tui --dev
 
 
 
+
 ```
 ### Usage
 
@@ -173,6 +238,7 @@ php artisan queue:autoscale:debug
 
 # Dispatch test jobs
 php artisan queue:autoscale:test --jobs=10 --queue=default
+
 
 
 
@@ -205,6 +271,7 @@ First stable release of Queue Autoscale for Laravel with intelligent, predictive
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
+
 
 
 
