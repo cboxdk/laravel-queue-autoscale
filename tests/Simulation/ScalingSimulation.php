@@ -4,13 +4,23 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Tests\Simulation;
 
+use Cbox\LaravelQueueAutoscale\Configuration\ForecastConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\SlaConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
+// SpawnCompensationConfiguration is used in the inline stub's method signatures
+use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
+use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
+use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\ModerateForecastPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
-use Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy;
+use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
 
 /**
  * Runs end-to-end scaling simulations
@@ -45,25 +55,75 @@ final class ScalingSimulation
     public function __construct(
         ?WorkloadSimulator $simulator = null,
         ?QueueConfiguration $config = null,
+        ?ArrivalRateEstimator $arrivalEstimator = null,
+        ?SpawnLatencyTrackerContract $spawnTracker = null,
     ) {
         $this->simulator = $simulator ?? new WorkloadSimulator;
 
         $this->config = $config ?? new QueueConfiguration(
             connection: 'redis',
             queue: 'default',
-            maxPickupTimeSeconds: 30,
-            minWorkers: 1,
-            maxWorkers: 20,
-            scaleCooldownSeconds: 0, // No cooldown in simulation
+            sla: new SlaConfiguration(
+                targetSeconds: 30,
+                percentile: 95,
+                windowSeconds: 300,
+                minSamples: 20,
+            ),
+            forecast: new ForecastConfiguration(
+                forecasterClass: LinearRegressionForecaster::class,
+                policyClass: ModerateForecastPolicy::class,
+                horizonSeconds: 60,
+                historySeconds: 300,
+            ),
+            spawnCompensation: new SpawnCompensationConfiguration(
+                enabled: true,
+                fallbackSeconds: 2.0,
+                minSamples: 5,
+                emaAlpha: 0.2,
+            ),
+            workers: new WorkerConfiguration(
+                min: 1,
+                max: 20,
+                tries: 3,
+                timeoutSeconds: 3600,
+                sleepSeconds: 3,
+                shutdownTimeoutSeconds: 30,
+            ),
         );
 
-        // Create fresh arrival rate estimator for each simulation
-        $this->arrivalEstimator = new ArrivalRateEstimator;
+        // Use provided estimator or create a fresh one for this simulation
+        $this->arrivalEstimator = $arrivalEstimator ?? new ArrivalRateEstimator;
 
-        $strategy = new PredictiveStrategy(
-            new LittlesLawCalculator,
-            new BacklogDrainCalculator,
-            $this->arrivalEstimator,
+        // Use provided spawn tracker or fall back to a zero-latency stub for backward compat
+        $spawnTracker = $spawnTracker ?? new class implements SpawnLatencyTrackerContract
+        {
+            public function recordSpawn(string $workerId, string $connection, string $queue, SpawnCompensationConfiguration $config): void {}
+
+            public function recordFirstPickup(string $workerId, float $pickupTimestamp): void {}
+
+            public function currentLatency(string $connection, string $queue, SpawnCompensationConfiguration $config): float
+            {
+                return 0.0;
+            }
+        };
+
+        $pickupStore = new class implements PickupTimeStoreContract
+        {
+            public function record(string $connection, string $queue, float $timestamp, float $pickupSeconds): void {}
+
+            public function recentSamples(string $connection, string $queue, int $windowSeconds): array
+            {
+                return [];
+            }
+        };
+
+        $strategy = new HybridStrategy(
+            littles: new LittlesLawCalculator,
+            backlog: new BacklogDrainCalculator,
+            arrivalEstimator: $this->arrivalEstimator,
+            spawnTracker: $spawnTracker,
+            pickupStore: $pickupStore,
+            percentileCalc: new SortBasedPercentileCalculator,
         );
 
         $this->engine = new ScalingEngine($strategy, new UnlimitedCapacityCalculator);
@@ -123,13 +183,13 @@ final class ScalingSimulation
         $this->arrivalEstimator->reset();
 
         // Set initial workers to minimum
-        $this->simulator->setWorkers($this->config->minWorkers);
+        $this->simulator->setWorkers($this->config->workers->min);
 
         for ($tick = 1; $tick <= $durationTicks; $tick++) {
             // Apply pending worker changes
             if ($this->pendingWorkerChange !== 0 && $tick >= $this->pendingChangeAtTick) {
                 $currentWorkers = $this->simulator->getActiveWorkers();
-                $newWorkers = max($this->config->minWorkers, min($this->config->maxWorkers, $currentWorkers + $this->pendingWorkerChange));
+                $newWorkers = max($this->config->workers->min, min($this->config->workers->max, $currentWorkers + $this->pendingWorkerChange));
                 $this->simulator->setWorkers($newWorkers);
                 $this->pendingWorkerChange = 0;
             }

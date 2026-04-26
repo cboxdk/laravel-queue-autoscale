@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Scaling;
 
+use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
 
 final readonly class ScalingDecision
@@ -17,6 +18,7 @@ final readonly class ScalingDecision
         public ?float $predictedPickupTime = null,
         public int $slaTarget = 30,
         public ?CapacityCalculationResult $capacity = null,
+        public ?SpawnCompensationConfiguration $spawnCompensation = null,
     ) {}
 
     public function shouldScaleUp(): bool

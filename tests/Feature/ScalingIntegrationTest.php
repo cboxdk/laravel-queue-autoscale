@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
@@ -25,14 +24,7 @@ beforeEach(function () {
 
     $this->engine = app(ScalingEngine::class);
 
-    $this->config = new QueueConfiguration(
-        connection: 'redis',
-        queue: 'default',
-        maxPickupTimeSeconds: 30,
-        minWorkers: 1,
-        maxWorkers: 10,
-        scaleCooldownSeconds: 60,
-    );
+    $this->config = makeQueueConfig();
 });
 
 it('completes full scaling evaluation successfully', function () {
@@ -103,9 +95,9 @@ it('enforces all constraints in correct order', function () {
     $decision = $this->engine->evaluate($highDemandMetrics, $this->config, 5);
 
     // Should be constrained by config maxWorkers (10)
-    expect($decision->targetWorkers)->toBeLessThanOrEqual($this->config->maxWorkers)
+    expect($decision->targetWorkers)->toBeLessThanOrEqual($this->config->workers->max)
         // And at least config minWorkers (1)
-        ->and($decision->targetWorkers)->toBeGreaterThanOrEqual($this->config->minWorkers);
+        ->and($decision->targetWorkers)->toBeGreaterThanOrEqual($this->config->workers->min);
 });
 
 it('scales based on hybrid algorithm correctly', function () {
@@ -152,23 +144,19 @@ it('scales based on hybrid algorithm correctly', function () {
 });
 
 it('handles configuration overrides per queue', function () {
-    $criticalConfig = new QueueConfiguration(
-        connection: 'redis',
-        queue: 'critical',
-        maxPickupTimeSeconds: 10, // Stricter SLA
-        minWorkers: 5,
-        maxWorkers: 20,
-        scaleCooldownSeconds: 30,
-    );
+    $criticalConfig = makeQueueConfig([
+        'queue' => 'critical',
+        'slaTarget' => 10,
+        'minWorkers' => 5,
+        'maxWorkers' => 20,
+    ]);
 
-    $defaultConfig = new QueueConfiguration(
-        connection: 'redis',
-        queue: 'default',
-        maxPickupTimeSeconds: 60, // Relaxed SLA
-        minWorkers: 0,
-        maxWorkers: 10,
-        scaleCooldownSeconds: 120,
-    );
+    $defaultConfig = makeQueueConfig([
+        'queue' => 'default',
+        'slaTarget' => 60,
+        'minWorkers' => 0,
+        'maxWorkers' => 10,
+    ]);
 
     $sameMetrics = createMetrics([
         'throughput_per_minute' => 0.0,

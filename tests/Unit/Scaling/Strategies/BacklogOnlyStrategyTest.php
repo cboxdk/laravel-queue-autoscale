@@ -2,27 +2,19 @@
 
 declare(strict_types=1);
 
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\Strategies\BacklogOnlyStrategy;
 use Tests\Helpers\MetricsHelper;
 
 beforeEach(function () {
     $this->strategy = app(BacklogOnlyStrategy::class);
-    $this->config = new QueueConfiguration(
-        connection: 'redis',
-        queue: 'default',
-        maxPickupTimeSeconds: 30,
-        minWorkers: 0,
-        maxWorkers: 10,
-        scaleCooldownSeconds: 60,
-    );
+    $this->config = makeQueueConfig(['minWorkers' => 0]);
 });
 
 test('scales based on backlog only', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 100,
         'throughputPerMinute' => 60.0, // Ignored by this strategy
-        'avgDuration' => 1000, // 1 second per job
+        'avgDuration' => 1.0,
         'oldestJobAge' => 15, // Half SLA age
         'activeWorkers' => 2,
     ]);
@@ -45,7 +37,7 @@ test('scales aggressively for old backlog', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 50,
         'throughputPerMinute' => 30.0,
-        'avgDuration' => 2000, // 2 seconds per job
+        'avgDuration' => 2.0,
         'oldestJobAge' => 25, // Close to SLA breach (30s)
         'activeWorkers' => 1,
     ]);
@@ -60,7 +52,7 @@ test('provides descriptive reason', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 100,
         'throughputPerMinute' => 60.0,
-        'avgDuration' => 1000,
+        'avgDuration' => 1.0,
         'oldestJobAge' => 10,
         'activeWorkers' => 2,
     ]);
@@ -78,7 +70,7 @@ test('provides pickup time prediction', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 100,
         'throughputPerMinute' => 60.0,
-        'avgDuration' => 1000, // 1 second per job
+        'avgDuration' => 1.0,
         'oldestJobAge' => 25, // 83% of SLA - above breach threshold
         'activeWorkers' => 2,
     ]);
@@ -95,7 +87,7 @@ test('handles large backlogs efficiently', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 10000, // Large backlog
         'throughputPerMinute' => 300.0,
-        'avgDuration' => 500, // 0.5 seconds
+        'avgDuration' => 0.5,
         'oldestJobAge' => 20,
         'activeWorkers' => 10,
     ]);

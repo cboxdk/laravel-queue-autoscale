@@ -2,27 +2,19 @@
 
 declare(strict_types=1);
 
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\Strategies\SimpleRateStrategy;
 use Tests\Helpers\MetricsHelper;
 
 beforeEach(function () {
     $this->strategy = app(SimpleRateStrategy::class);
-    $this->config = new QueueConfiguration(
-        connection: 'redis',
-        queue: 'default',
-        maxPickupTimeSeconds: 30,
-        minWorkers: 0,
-        maxWorkers: 10,
-        scaleCooldownSeconds: 60,
-    );
+    $this->config = makeQueueConfig(['minWorkers' => 0]);
 });
 
 test('calculates workers using little\'s law', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 100,
         'throughputPerMinute' => 60.0, // 1 job/sec
-        'avgDuration' => 2000, // 2 seconds
+        'avgDuration' => 2.0,
         'oldestJobAge' => 10,
         'activeWorkers' => 2,
     ]);
@@ -60,7 +52,7 @@ test('provides descriptive reason', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 100,
         'throughputPerMinute' => 120.0, // 2 jobs/sec
-        'avgDuration' => 1500, // 1.5 seconds
+        'avgDuration' => 1.5,
         'oldestJobAge' => 10,
         'activeWorkers' => 3,
     ]);
@@ -79,7 +71,7 @@ test('returns null prediction for simple strategy', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 50,
         'throughputPerMinute' => 60.0,
-        'avgDuration' => 2000,
+        'avgDuration' => 2.0,
         'oldestJobAge' => 5,
         'activeWorkers' => 2,
     ]);
@@ -95,7 +87,7 @@ test('handles high throughput scenarios', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 1000,
         'throughputPerMinute' => 6000.0, // 100 jobs/sec
-        'avgDuration' => 500, // 0.5 seconds
+        'avgDuration' => 0.5,
         'oldestJobAge' => 2,
         'activeWorkers' => 50,
     ]);

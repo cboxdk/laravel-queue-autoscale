@@ -289,7 +289,7 @@ public function calculateConfidence(array $historical, float $prediction): float
 ## Integration with Hybrid Strategy
 
 ```php
-class HybridPredictiveStrategy
+class HybridStrategy
 {
     public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
     {

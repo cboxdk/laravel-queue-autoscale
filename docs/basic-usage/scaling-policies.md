@@ -100,7 +100,7 @@ Result: Smooth, gradual scale-down
 
 ```php
 'queues' => [
-    'emails' => array_merge(ProfilePresets::highVolume(), [
+    'emails' => array_merge(HighVolumeProfile::class, [
         // Profile handles scale-up
     ]),
 ],
@@ -164,13 +164,13 @@ use Cbox\LaravelQueueAutoscale\Policies\AggressiveScaleDownPolicy;
 
 **Without Policy (or with Conservative):**
 ```
-Workers: 20 → 19 → 18 → 17 → ... → 3 (min_workers)
+Workers: 20 → 19 → 18 → 17 → ... → 3 (workers.min)
 Time to scale down: 17 cycles × 60s = 17 minutes
 ```
 
 **With AggressiveScaleDownPolicy:**
 ```
-Workers: 20 → 3 (min_workers) immediately
+Workers: 20 → 3 (workers.min) immediately
 Time to scale down: 1 cycle = 60s
 ```
 
@@ -196,7 +196,7 @@ The policy doesn't prevent the strategy's decision - it simply allows the full s
 
 ```php
 'queues' => [
-    'analytics' => ProfilePresets::background(),
+    'analytics' => BackgroundProfile::class,
 ],
 
 'policies' => [
@@ -211,7 +211,7 @@ The policy doesn't prevent the strategy's decision - it simply allows the full s
   → Processes tasks
 
 23:30 - All tasks complete, queue empty
-  → Strategy: scale to 0 workers (min_workers = 0)
+  → Strategy: scale to 0 workers (workers.min = 0)
   → Policy: Allows full scale-down
   → Result: 5 → 0 workers immediately
 
@@ -288,7 +288,7 @@ The policy intercepts any scale-down decision and replaces it with a "hold" deci
 
 ```php
 'queues' => [
-    'payments' => ProfilePresets::critical(),
+    'payments' => CriticalProfile::class,
 ],
 
 'policies' => [
@@ -327,7 +327,7 @@ This policy trades cost efficiency for maximum reliability:
 
 **Example Queue:**
 ```php
-ProfilePresets::critical() + NoScaleDownPolicy
+CriticalProfile::class + NoScaleDownPolicy
 ```
 
 - Scales up during spikes ✅
@@ -406,7 +406,7 @@ The policy monitors two conditions:
 
 ```php
 'queues' => [
-    'default' => ProfilePresets::balanced(),
+    'default' => BalancedProfile::class,
 ],
 
 'policies' => [

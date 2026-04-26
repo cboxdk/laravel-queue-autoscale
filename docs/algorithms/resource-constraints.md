@@ -25,25 +25,25 @@ Resource constraints ensure autoscaling doesn't:
 Prevent resource exhaustion:
 
 ```php
-'resource_limits' => [
-    'max_total_workers' => 100,          // Global worker limit
-    'max_memory_percent' => 80,          // Max 80% memory usage
-    'max_cpu_percent' => 90,             // Max 90% CPU usage
-    'reserved_memory_mb' => 1024,        // Reserve 1GB for system
-    'max_workers_per_queue' => 50,       // Per-queue limit
+'limits' => [
+    'max_cpu_percent' => 85,            // Skip spawning when host CPU ≥ this
+    'max_memory_percent' => 85,         // Same for memory
+    'worker_memory_mb_estimate' => 128, // Used in the per-worker memory ceiling
+    'reserve_cpu_cores' => 1,           // Cores reserved for OS / other services
 ],
 ```
 
 ### 2. Configuration Constraints
 
-User-defined limits:
+Per-queue bounds live under the `workers` section of a queue's config (or inside the profile class):
 
 ```php
 'queues' => [
-    [
-        'min_workers' => 1,              // Never scale below
-        'max_workers' => 20,             // Never scale above
-        'max_worker_memory' => 512,      // MB per worker
+    'payments' => [
+        'workers' => [
+            'min' => 1,           // Never scale below
+            'max' => 20,          // Never scale above
+        ],
     ],
 ],
 ```
@@ -413,7 +413,7 @@ public function applyConstraintPriorities(ScalingDecision $decision, QueueConfig
 ## Integration with Hybrid Strategy
 
 ```php
-class HybridPredictiveStrategy
+class HybridStrategy
 {
     public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
     {

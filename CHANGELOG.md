@@ -5,6 +5,31 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-XX-XX
+
+### BREAKING CHANGES
+
+- `PredictiveStrategy` removed. Replaced by `HybridStrategy`. Update `config('queue-autoscale.strategy')` references.
+- `ProfilePresets` static methods removed. Replaced by `ProfileContract` implementations: `BalancedProfile`, `CriticalProfile`, `HighVolumeProfile`, `BurstyProfile`, `BackgroundProfile`.
+- `QueueConfiguration` properties restructured:
+  - `maxPickupTimeSeconds` → `$config->sla->targetSeconds`
+  - `minWorkers` / `maxWorkers` → `$config->workers->min` / `->max`
+  - `scaleCooldownSeconds` → global `config('queue-autoscale.scaling.cooldown_seconds')`
+- Config file shape rewritten. Run `php artisan queue-autoscale:migrate-config` to produce a v2 file from a v1 file.
+- `TrendScalingPolicy` enum replaced by `ForecastPolicyContract` with four classes: `DisabledForecastPolicy`, `HintForecastPolicy`, `ModerateForecastPolicy`, `AggressiveForecastPolicy`.
+
+### Added
+
+- Genuine forecasting via `LinearRegressionForecaster` (OLS + R² confidence blending).
+- Worker spawn latency compensation via `EmaSpawnLatencyTracker`.
+- p95 pickup time SLA signal via `RedisPickupTimeStore` + `SortBasedPercentileCalculator`.
+- `Contracts/` namespace — every algorithm and backend is replaceable via Laravel container binding.
+- `queue-autoscale:migrate-config` Artisan command.
+
+### See also
+
+`docs/upgrade-guide-v2.md` for step-by-step migration.
+
 ## v2.1.0 - 2026-04-05
 
 ### What's Changed

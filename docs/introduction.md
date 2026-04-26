@@ -21,7 +21,7 @@ supervisord config: numprocs=10
 **Queue Autoscale for Laravel approach:**
 ```php
 // SLA-based: "Jobs should start processing within 30 seconds"
-'max_pickup_time_seconds' => 30
+'sla' => ['target_seconds' => 30]
 ```
 
 The package calculates and maintains the worker count needed to meet your SLA target automatically.
@@ -101,11 +101,11 @@ Systems requiring guaranteed processing times for critical operations.
 
 ## Requirements
 
-- **PHP**: 8.3 or 8.4
-- **Laravel**: 11.0+
-- **Dependencies**:
-  - `cboxdk/laravel-queue-metrics` ^1.0.0
-  - `cboxdk/system-metrics` ^1.2
+- **PHP**: 8.3, 8.4, or 8.5
+- **Laravel**: 11.0+, 12.0+, or 13.0+
+- **Redis**: Optional (required for cluster mode)
+
+For the full list of dependencies, infrastructure requirements, and SLA timing constraints, see the [Requirements](requirements.md) page.
 
 ## Package Architecture
 

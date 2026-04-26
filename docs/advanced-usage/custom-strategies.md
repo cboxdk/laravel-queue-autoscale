@@ -19,7 +19,7 @@ Guide to implementing custom scaling strategies in Queue Autoscale for Laravel.
 
 ## Overview
 
-Scaling strategies determine **how many workers** are needed based on queue metrics. The package provides a default `HybridPredictiveStrategy`, but you can implement custom strategies for specific needs.
+Scaling strategies determine **how many workers** are needed based on queue metrics. The package provides a default `HybridStrategy`, but you can implement custom strategies for specific needs.
 
 ### When to Create Custom Strategies
 
@@ -706,8 +706,8 @@ public function calculateTargetWorkers(object $metrics, QueueConfiguration $conf
     $pendingJobs = max(0, $metrics->depth->pending ?? 0);
 
     // Validate configuration
-    if ($config->maxPickupTimeSeconds <= 0) {
-        throw new \InvalidArgumentException('Invalid max_pickup_time_seconds');
+    if ($config->sla->targetSeconds <= 0) {
+        throw new \InvalidArgumentException('Invalid sla.target_seconds');
     }
 
     // Your logic here

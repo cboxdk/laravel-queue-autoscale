@@ -73,7 +73,7 @@ public function calculate(float $arrivalRate, float $avgProcessingTime): float
 Instead of targeting worker counts, we target **service level objectives**:
 
 ```
-SLA: Jobs must be picked up within max_pickup_time_seconds
+SLA: Jobs must be picked up within sla.target_seconds
 ```
 
 This transforms the scaling problem from:
@@ -99,8 +99,8 @@ target_workers = max(
 
 final_workers = constrain(
     target_workers,
-    min: config.min_workers,
-    max: min(config.max_workers, system_capacity)
+    min: config.workers.min,
+    max: min(config.workers.max, system_capacity)
 )
 ```
 
@@ -288,10 +288,10 @@ $targetWorkers = max(
 - Creates ScalingDecision DTOs
 - Delegates to strategy
 
-#### PredictiveStrategy
-- Implements hybrid algorithm
-- Calls all three calculators
-- Takes maximum of results
+#### HybridStrategy
+- Implements the hybrid algorithm (v2 default)
+- Calls Little's Law, arrival-rate forecasting, and backlog-drain calculators
+- Takes the maximum of their results
 - Provides human-readable reasons
 - Estimates pickup time predictions
 
@@ -387,7 +387,7 @@ For each queue metrics:
     ↓
 ScalingEngine::evaluate(metrics, config, currentWorkers)
     ↓
-PredictiveStrategy::calculateTargetWorkers(metrics, config)
+HybridStrategy::calculateTargetWorkers(metrics, config)
     ↓
 ┌──────────────────────────────┐
 │ Run 3 Calculators:           │
@@ -579,7 +579,7 @@ interface ScalingStrategyContract
 **Examples:**
 - **TimeOfDayStrategy:** Scale based on time patterns
 - **BudgetAwareStrategy:** Cap workers based on cost constraints
-- **MLPredictiveStrategy:** Use machine learning for forecasting
+- **MLStrategy:** Use machine learning for forecasting
 - **ConservativeStrategy:** Always maintain buffer capacity
 
 ### Scaling Policies
