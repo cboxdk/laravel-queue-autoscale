@@ -5,26 +5,55 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0] - 2026-XX-XX
+## [3.0.0] - 2026-04-26
 
 ### BREAKING CHANGES
 
 - `PredictiveStrategy` removed. Replaced by `HybridStrategy`. Update `config('queue-autoscale.strategy')` references.
-- `ProfilePresets` static methods removed. Replaced by `ProfileContract` implementations: `BalancedProfile`, `CriticalProfile`, `HighVolumeProfile`, `BurstyProfile`, `BackgroundProfile`.
+- `ProfilePresets` static methods removed. Replaced by `ProfileContract` implementations: `BalancedProfile`, `CriticalProfile`, `HighVolumeProfile`, `BurstyProfile`, `BackgroundProfile`, `ExclusiveProfile`.
 - `QueueConfiguration` properties restructured:
   - `maxPickupTimeSeconds` → `$config->sla->targetSeconds`
   - `minWorkers` / `maxWorkers` → `$config->workers->min` / `->max`
   - `scaleCooldownSeconds` → global `config('queue-autoscale.scaling.cooldown_seconds')`
-- Config file shape rewritten. Run `php artisan queue-autoscale:migrate-config` to produce a v2 file from a v1 file.
+- Config file shape rewritten. Run `php artisan queue-autoscale:migrate-config` to produce a v3 file from an older config.
 - `TrendScalingPolicy` enum replaced by `ForecastPolicyContract` with four classes: `DisabledForecastPolicy`, `HintForecastPolicy`, `ModerateForecastPolicy`, `AggressiveForecastPolicy`.
 
 ### Added
 
+#### Predictive Scaling Core
+- `HybridStrategy` combining Little's Law, backlog drain, and arrival-rate forecasting.
 - Genuine forecasting via `LinearRegressionForecaster` (OLS + R² confidence blending).
-- Worker spawn latency compensation via `EmaSpawnLatencyTracker`.
+- Worker spawn latency compensation via `EmaSpawnLatencyTracker` (Redis-backed EMA).
 - p95 pickup time SLA signal via `RedisPickupTimeStore` + `SortBasedPercentileCalculator`.
+- Six workload profiles: `BalancedProfile`, `CriticalProfile`, `HighVolumeProfile`, `BurstyProfile`, `BackgroundProfile`, `ExclusiveProfile`.
 - `Contracts/` namespace — every algorithm and backend is replaceable via Laravel container binding.
-- `queue-autoscale:migrate-config` Artisan command.
+
+#### Worker Topology
+- **Excluded queues**: fnmatch-style globs to prevent discovery, evaluation, or spawning.
+- **ExclusiveProfile**: Pinned single-threaded queues (`min=max=1`) with supervisor respawn, for strict job ordering.
+- **Groups**: Multi-queue workers with strict priority polling and aggregated scaling metrics.
+
+#### Multihost Cluster Orchestration
+- Redis-backed leader election with lease renewal.
+- Per-host heartbeat tracking (CPU, memory, worker counts, capacity).
+- Cluster-wide scaling decisions distributed across active managers.
+- Host scaling signal (`scale_up`/`scale_down`/`hold`) for infrastructure orchestrators.
+- Five cluster lifecycle events: `ClusterLeaderElected`, `ClusterLeaderLost`, `ClusterRecommendationPublished`, `ClusterHeartbeatSent`, `ClusterHostJoined`.
+
+#### Operational Tooling
+- `queue:autoscale:restart` — graceful restart command.
+- `AlertRateLimiter` — cache-lock-based dedup for SLA breach and utilization alerts (300s default cooldown).
+- `php artisan queue-autoscale:install` — interactive configuration installer.
+- `queue-autoscale:migrate-config` Artisan command for v2 → v3 migration.
+- Cookbook recipes for alert integrations (Log, Slack, Email, Cluster metrics export).
+- Platform deployment guides (VPS, Laravel Forge, Ploi, Docker).
+
+### Fixed
+
+- `avgDuration` double-division in `BacklogOnlyStrategy`, `ConservativeStrategy`, and `SimpleRateStrategy` (1000x worker overprovisioning).
+- Cluster mode now correctly routes non-scalable queues through `superviseQueue()` (restores SLA events and respawn-on-death for `ExclusiveProfile`).
+- `age_status` field in `mapMetricsFields()` now reads from the correct nested `depth` key path.
+- `BacklogDrainCalculator` PHPDoc updated to match the actual quadratic aggressiveness formula.
 
 ### See also
 
