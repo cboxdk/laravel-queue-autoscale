@@ -8,6 +8,16 @@ weight: 16
 
 A profile is a PHP class whose `resolve()` method returns a pre-tuned bundle of SLA, forecast, worker, and spawn-compensation settings. Point a queue at a profile class and get a reasonable default without tuning individual keys.
 
+## SLA Timing Floor
+
+All SLA targets are subject to a hard floor imposed by Laravel's queue worker internals. The `queue:work` command's sleep/poll loop means **pickup time can never be faster than ~3-5 seconds**, even with idle workers running. SLA targets below 5 seconds will always produce flaky breach events.
+
+Profiles with `workers.min = 0` (`BurstyProfile`, `BackgroundProfile`) have an additional **~5-7 seconds** of scale-from-zero overhead (evaluation interval + worker spawn latency) on top of the poll floor. This is a conscious cost-vs-responsiveness trade-off built into those profiles.
+
+See [Understanding SLA Timing](how-it-works.md#understanding-sla-timing) for the full explanation.
+
+## Shipped Profiles
+
 Six profiles ship with the package:
 
 | Profile | SLA | Min | Max | Percentile | Forecast policy | Intended use |

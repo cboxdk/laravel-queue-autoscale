@@ -1,7 +1,7 @@
 ---
 title: "Installation"
 description: "Step-by-step guide to install and configure Queue Autoscale for Laravel in your application"
-weight: 2
+weight: 3
 ---
 
 # Installation

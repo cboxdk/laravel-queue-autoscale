@@ -166,7 +166,7 @@ A fully-resolved queue configuration has four sections. You rarely need to see a
 
 **The keys most operators touch:**
 
-- `sla.target_seconds` — your SLA pickup target.
+- `sla.target_seconds` — your SLA pickup target. **Do not set below 5 seconds.** The worker poll loop and job pickup overhead impose a hard floor of ~3-5s on pickup time, and targets below this will produce flaky breach events. Profiles with `workers.min = 0` have an additional ~5-7s scale-from-zero overhead. See [Understanding SLA Timing](how-it-works.md#understanding-sla-timing).
 - `workers.min` / `workers.max` — floor and ceiling on concurrency.
 - `workers.scalable = false` — pin the queue and bypass the scaling engine (see [ExclusiveProfile](#exclusiveprofile--pinned-single-worker-queues)).
 

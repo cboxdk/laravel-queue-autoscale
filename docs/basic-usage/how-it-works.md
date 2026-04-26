@@ -257,6 +257,67 @@ use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BackgroundProfile;
 ],
 ```
 
+## Understanding SLA Timing
+
+SLA targets define the **maximum acceptable pickup time** — the time between a job being dispatched and a worker starting to process it. In practice, most jobs are picked up far faster than the SLA target. A 30-second SLA does not mean jobs take 30 seconds — it means the autoscaler guarantees they start within 30 seconds, with the vast majority processing near-instantly.
+
+However, there are hard timing floors imposed by Laravel's queue worker internals that every operator should understand.
+
+### Floor 1: Worker Poll Loop (~3-5 seconds)
+
+Even with a running, idle worker, job pickup is not instant. Laravel's `queue:work` command operates on a sleep/poll cycle:
+
+```
+Worker idle loop:
+├─ Poll queue for next job
+├─ No job found
+├─ Sleep for sleep_seconds (default: 3s)
+├─ Poll again
+└─ Job found → start processing
+```
+
+The worst-case pickup time for an idle worker is roughly `sleep_seconds` plus a small overhead for the poll itself. With the default `sleep_seconds: 3`, this means **~3-5 seconds** in the worst case.
+
+**This means SLA targets below 5 seconds will always produce flaky breach events**, regardless of how many workers are running. This is expected behaviour — it reflects the fundamental polling model of Laravel's queue worker, not a limitation of the autoscaler.
+
+> **Tip:** `CriticalProfile` sets `sleep_seconds: 1` to minimize this floor, but even then sub-5s SLA targets are unreliable due to poll overhead and job deserialization time.
+
+### Floor 2: Scale-from-Zero Latency (~8-12 seconds)
+
+Profiles with `workers.min = 0` (`BurstyProfile`, `BackgroundProfile`) can scale the queue to zero workers during idle periods. When a new job arrives, the autoscaler must:
+
+```
+Scale-from-zero timeline:
+├─ Job dispatched to empty queue
+├─ Wait for next evaluation cycle (up to evaluation_interval: 5s)
+├─ Autoscaler detects pending job
+├─ Spawn worker process (1-2s startup)
+├─ Worker enters poll loop
+├─ Worker picks up job (up to sleep_seconds: 3s)
+└─ Total: ~8-12 seconds typical
+```
+
+This is a conscious trade-off: zero idle cost in exchange for slower first-job pickup after an idle period. If this latency is unacceptable for a queue, set `workers.min >= 1`.
+
+### Practical Guidelines
+
+| SLA Target | Recommendation |
+|---|---|
+| **< 5 seconds** | Not recommended. Will produce flaky breaches regardless of configuration. Requires infrastructure outside this package's scope (e.g. synchronous processing, always-on consumers). |
+| **5-10 seconds** | Requires `workers.min >= 1` and low `sleep_seconds` (1-2). Use `CriticalProfile` or a custom profile. Scale-from-zero is not viable at this SLA. |
+| **10-30 seconds** | The sweet spot for most user-facing queues. `workers.min >= 1` recommended. Outliers may approach the SLA target; the vast majority of jobs process near-instantly. |
+| **30-300 seconds** | Comfortable range. Scale-from-zero (`workers.min = 0`) is viable. The occasional 8-12s cold start is well within budget. |
+
+### Why This Matters for Profiles
+
+The shipped profiles are designed with these floors in mind:
+
+- **CriticalProfile** (10s SLA, min=5): `sleep_seconds: 1` minimizes poll latency. Five always-on workers eliminate scale-from-zero entirely.
+- **BurstyProfile** (60s SLA, min=0): 60-second SLA comfortably absorbs the ~8-12s scale-from-zero floor.
+- **BackgroundProfile** (300s SLA, min=0): 5-minute SLA makes the cold start negligible.
+
+If you create a custom profile with both a tight SLA (< 10s) and `workers.min = 0`, the autoscaler will honour it — but expect frequent breach events during scale-from-zero transitions.
+
 ## Worker Lifecycle
 
 ### Spawning Workers
