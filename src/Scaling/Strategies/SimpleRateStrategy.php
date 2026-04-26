@@ -89,13 +89,9 @@ final class SimpleRateStrategy implements ScalingStrategyContract
         float $processingRate,
         int $activeWorkers
     ): float {
-        // Use metrics average duration if available (convert ms to seconds)
         if ($metrics->avgDuration > 0) {
-            $avgDurationSeconds = $metrics->avgDuration / 1000.0;
-
-            // Sanity check: reject unreasonably low values
-            if ($avgDurationSeconds >= 0.01) {
-                return $avgDurationSeconds;
+            if ($metrics->avgDuration >= 0.01) {
+                return $metrics->avgDuration;
             }
         }
 

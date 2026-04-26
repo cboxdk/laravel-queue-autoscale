@@ -14,7 +14,7 @@ test('adds safety buffer to calculated workers', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 100,
         'throughputPerMinute' => 120.0, // 2 jobs/sec
-        'avgDuration' => 2000, // 2 seconds
+        'avgDuration' => 2.0, // 2 seconds (already converted from ms by mapMetricsFields)
         'oldestJobAge' => 5,
         'activeWorkers' => 4,
     ]);
@@ -38,7 +38,7 @@ test('scales more aggressively than simple strategy', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 50,
         'throughputPerMinute' => 60.0, // 1 job/sec
-        'avgDuration' => 1000, // 1 second
+        'avgDuration' => 1.0,
         'oldestJobAge' => 10,
         'activeWorkers' => 2,
     ]);
@@ -54,7 +54,7 @@ test('provides reason with buffer information', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 100,
         'throughputPerMinute' => 90.0,
-        'avgDuration' => 2000,
+        'avgDuration' => 2.0,
         'oldestJobAge' => 8,
         'activeWorkers' => 3,
     ]);
@@ -72,7 +72,7 @@ test('prioritizes backlog drain when present', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 200,
         'throughputPerMinute' => 60.0,
-        'avgDuration' => 1000,
+        'avgDuration' => 1.0,
         'oldestJobAge' => 25, // 83% of SLA - above breach threshold
         'activeWorkers' => 2,
     ]);
@@ -87,7 +87,7 @@ test('provides pickup time prediction', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 100,
         'throughputPerMinute' => 60.0,
-        'avgDuration' => 1000,
+        'avgDuration' => 1.0,
         'oldestJobAge' => 5,
         'activeWorkers' => 2,
     ]);
@@ -104,7 +104,7 @@ test('handles high-volume scenarios conservatively', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 1000,
         'throughputPerMinute' => 4800.0, // 80 jobs/sec
-        'avgDuration' => 500, // 0.5 seconds
+        'avgDuration' => 0.5,
         'oldestJobAge' => 3,
         'activeWorkers' => 40,
     ]);
@@ -120,7 +120,7 @@ test('reason includes both steady state and buffer', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 50,
         'throughputPerMinute' => 120.0,
-        'avgDuration' => 1000,
+        'avgDuration' => 1.0,
         'oldestJobAge' => 5,
         'activeWorkers' => 2,
     ]);

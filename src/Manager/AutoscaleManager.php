@@ -489,6 +489,15 @@ final class AutoscaleManager
             }
 
             $config = QueueConfiguration::fromConfig($connection, $queue);
+
+            if (! $config->workers->scalable) {
+                $rawMetrics = $this->getMetricsForQueue($connection, $queue);
+                $metrics = QueueMetricsData::fromArray($this->mapMetricsFields($rawMetrics));
+                $this->superviseQueue($config, $metrics);
+
+                continue;
+            }
+
             $target = $recommendation->targetForQueue($connection, $queue);
             $this->reconcileQueueTarget($config, $target);
         }
@@ -1097,7 +1106,7 @@ final class AutoscaleManager
             'scheduled' => $scheduled,
             'reserved' => $reserved,
             'oldest_job_age' => $oldestJobAge,
-            'age_status' => $this->clusterString($data['oldest_job_age_status'] ?? null, 'normal'),
+            'age_status' => $this->clusterString($depthData['oldest_job_age_status'] ?? null, 'normal'),
             'throughput_per_minute' => $throughput,
             'avg_duration' => $avgDurationMs / 1000.0, // Convert ms to seconds
             'failure_rate' => $failureRate,

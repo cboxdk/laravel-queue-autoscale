@@ -9,11 +9,11 @@ final readonly class BacklogDrainCalculator
     /**
      * Calculate workers needed to drain backlog before SLA breach
      *
-     * Progressive aggressiveness approach:
-     * - 50%-80% of SLA: Start preparing (1.2x multiplier)
-     * - 80%-90% of SLA: Scale aggressively (1.5x multiplier)
-     * - 90%-100% of SLA: Emergency scaling (2.0x multiplier)
-     * - 100%+ of SLA: Maximum aggression (3.0x multiplier)
+     * Progressive aggressiveness via continuous quadratic curve:
+     * - At 50% of SLA (threshold): 1.0x (start responding)
+     * - At 80% of SLA: ~1.7x
+     * - At 100% of SLA: 3.0x
+     * - At 150%+ of SLA: capped at 5.0x
      *
      * @param  int  $backlog  Number of pending jobs
      * @param  int  $oldestJobAge  Age of oldest job in seconds
@@ -75,12 +75,12 @@ final readonly class BacklogDrainCalculator
      * Uses a continuous exponential function to avoid discrete jumps that
      * could cause scaling instability.
      *
-     * Formula: multiplier = 1.0 + k * (slaProgress - threshold)^2
-     * where k is calibrated so that:
-     * - At 50% (threshold): 1.0x (start responding)
-     * - At 80%: ~1.5x
-     * - At 100%: ~2.5x
-     * - At 150% (cap): ~5.0x
+     * Formula: multiplier = 1.0 + k * (slaProgress - 0.5)^2
+     * where k = 8.0, producing:
+     * - At 50% (threshold): 1.0x
+     * - At 80%: ~1.72x
+     * - At 100%: 3.0x
+     * - Beyond 100%: continues rising, capped at 5.0x
      *
      * The quadratic curve provides smooth acceleration as urgency increases.
      */
@@ -93,7 +93,7 @@ final readonly class BacklogDrainCalculator
 
         // Continuous quadratic function starting at threshold
         // f(x) = 1 + k(x - 0.5)² where x is slaProgress
-        // Calibrated: k = 8.0 gives us ~2.5x at 100% and ~5.0x at 150%
+        // k = 8.0 gives 3.0x at 100%, capped at 5.0x
         $k = 8.0;
         $progressAboveThreshold = $slaProgress - 0.5;
         $multiplier = 1.0 + $k * ($progressAboveThreshold * $progressAboveThreshold);
