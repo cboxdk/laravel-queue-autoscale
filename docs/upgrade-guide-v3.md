@@ -1,17 +1,17 @@
 ---
-title: "Upgrading from v1 to v2"
-description: "Step-by-step migration guide for the breaking v2.0 release"
+title: "Upgrading from v2 to v3"
+description: "Step-by-step migration guide for the breaking v3.0 release"
 weight: 5
 ---
 
-# Upgrading from v1 to v2
+# Upgrading from v2 to v3
 
-Version 2 is a ground-up redesign that introduces genuine forecasting, spawn-latency compensation, and p95-based SLA signals. This guide walks through the upgrade.
+Version 3 is a ground-up redesign that introduces genuine forecasting, spawn-latency compensation, and p95-based SLA signals. This guide walks through the upgrade.
 
 ## Step 1 — Update the package
 
 ```bash
-composer require cboxdk/laravel-queue-autoscale:^2.0
+composer require cboxdk/laravel-queue-autoscale:^3.0
 ```
 
 ## Step 2 — Migrate the config file
@@ -20,11 +20,11 @@ composer require cboxdk/laravel-queue-autoscale:^2.0
 php artisan queue-autoscale:migrate-config
 ```
 
-This writes `config/queue-autoscale.v2.php` next to your current file. Review and replace.
+This writes `config/queue-autoscale.v3.php` next to your current file. Review and replace.
 
 ## Step 3 — Update code references
 
-| v1                                     | v2                                                |
+| v2                                     | v3                                                |
 |----------------------------------------|---------------------------------------------------|
 | `$config->maxPickupTimeSeconds`        | `$config->sla->targetSeconds`                     |
 | `$config->minWorkers`                  | `$config->workers->min`                           |
@@ -38,7 +38,7 @@ This writes `config/queue-autoscale.v2.php` next to your current file. Review an
 
 Run your test suite. The package now uses p95 pickup time over a sliding window, compensated for measured worker spawn latency. You do not need to do anything to benefit from forecasting — it activates automatically when your arrival rate history has 5+ samples and a high enough R² under the configured policy.
 
-## What's New in v2
+## What's New in v3
 
 Three new topology capabilities, each additive and optional:
 
@@ -75,7 +75,7 @@ For queues that must process jobs sequentially (customer integrations, non-threa
 ],
 ```
 
-See [Queue Topology](basic-usage/queue-topology.md) for the conceptual model and decision guidance, and [Configuration](basic-usage/configuration.md#worker-topology-v2) for the config reference.
+See [Queue Topology](basic-usage/queue-topology.md) for the conceptual model and decision guidance, and [Configuration](basic-usage/configuration.md#worker-topology-v3) for the config reference.
 
 ## Customising the pipeline
 

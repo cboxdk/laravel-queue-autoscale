@@ -19,8 +19,8 @@ return [
     |--------------------------------------------------------------------------
     |
     | Provide a ProfileContract class OR a literal array matching the shape
-    | returned by BalancedProfile::resolve(). See docs/upgrade-guide-v2.md
-    | for migration details from v1.
+    | returned by BalancedProfile::resolve(). See docs/upgrade-guide-v3.md
+    | for migration details from v2.
     |
     */
     'sla_defaults' => BalancedProfile::class,

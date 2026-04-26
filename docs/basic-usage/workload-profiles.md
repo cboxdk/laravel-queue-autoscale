@@ -27,7 +27,7 @@ Six profiles ship with the package:
 | **BalancedProfile** ⭐ | 30s | 1 | 10 | p95 | Moderate | General purpose default |
 | **BurstyProfile** | 60s | 0 | 100 | p90 | Aggressive | Webhook storms, campaign fanouts |
 | **BackgroundProfile** | 300s | 0 | 5 | p95 | Hint-only | Cleanup, analytics |
-| **ExclusiveProfile** (v2) | 60s | 1 (pinned) | 1 (pinned) | p95 | Disabled | Sequential integrations |
+| **ExclusiveProfile** (v3) | 60s | 1 (pinned) | 1 (pinned) | p95 | Disabled | Sequential integrations |
 
 `BalancedProfile` is the default `sla_defaults`. Change it only if your typical queue has a tighter or looser SLA than 30 seconds.
 

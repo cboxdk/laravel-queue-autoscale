@@ -60,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Migration
 
-See `docs/upgrade-guide-v2.md` for step-by-step migration from v1.
+See `docs/upgrade-guide-v3.md` for step-by-step migration from v2.
 
 **Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v2.1.0...v3.0.0
 

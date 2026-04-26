@@ -385,7 +385,7 @@ Collection wrapper over `WorkerProcess` with add/remove/filter helpers. Internal
 | `queue:autoscale:debug` | Dump queue state and metrics for diagnosis. `--queue=X --connection=Y`. |
 | `queue:autoscale:cluster` | Show cluster leader, active managers, host capacity, workload targets, and host scale signal. Add `--json` for machine-readable output. |
 | `queue:autoscale:cluster` | Show cluster leader, active managers, host capacity, workload targets, and host scale signal. Add `--json` for machine-readable output. |
-| `queue-autoscale:migrate-config` | Translate a v1 config file to v2 shape. `--source` and `--destination` options. |
+| `queue-autoscale:migrate-config` | Translate a v2 config file to v3 shape. `--source` and `--destination` options. |
 
 ## Service Provider Bindings
 

@@ -12,7 +12,7 @@ Complete Queue Autoscale for Laravel configuration reference.
 - [Prerequisites: Metrics Package Setup](#prerequisites-metrics-package-setup)
 - [Basic Configuration](#basic-configuration)
 - [Queue Configuration](#queue-configuration)
-- [Worker Topology (v2)](#worker-topology-v2)
+- [Worker Topology (v3)](#worker-topology-v3)
 - [Strategy Configuration](#strategy-configuration)
 - [Policy Configuration](#policy-configuration)
 - [Manager Configuration](#manager-configuration)
@@ -172,9 +172,9 @@ A fully-resolved queue configuration has four sections. You rarely need to see a
 
 Global scaling keys (cooldown, breach threshold, fallback job time) live under `scaling.*` at the top level — see the published config file.
 
-## Worker Topology (v2)
+## Worker Topology (v3)
 
-v2 introduces three new capabilities on top of per-queue autoscaling. Each is expressed as its own top-level config key. See [Queue Topology](queue-topology.md) for the conceptual explanation; this section is the config reference.
+v3 introduces three new capabilities on top of per-queue autoscaling. Each is expressed as its own top-level config key. See [Queue Topology](queue-topology.md) for the conceptual explanation; this section is the config reference.
 
 ### `excluded` — queues this package ignores
 
