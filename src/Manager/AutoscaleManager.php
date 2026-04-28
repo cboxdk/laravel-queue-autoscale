@@ -501,7 +501,7 @@ final class AutoscaleManager
             if (! $config->workers->scalable) {
                 $rawMetrics = $this->getMetricsForQueue($connection, $queue);
                 $metrics = QueueMetricsData::fromArray($this->mapMetricsFields($rawMetrics));
-                $this->superviseQueue($config, $metrics);
+                $this->superviseQueue($config, $metrics, $target);
 
                 continue;
             }
@@ -1604,16 +1604,20 @@ final class AutoscaleManager
     }
 
     /**
-     * Supervise a non-scalable (pinned) queue: maintain exactly the pinned
-     * worker count. Respawn on death, terminate excess. Never evaluate
-     * scaling. Still tracks SLA breach state for observability parity.
+     * Supervise a non-scalable (pinned) queue: maintain the target worker
+     * count. In non-cluster mode the target is always pinnedCount(). In
+     * cluster mode the leader distributes the pinned count across managers,
+     * so the local target may be 0 (not assigned) or pinnedCount() (assigned).
+     *
+     * Respawns on death, terminates excess. Never evaluates scaling.
+     * Still tracks SLA breach state for observability parity.
      */
-    private function superviseQueue(QueueConfiguration $config, QueueMetricsData $metrics): void
+    private function superviseQueue(QueueConfiguration $config, QueueMetricsData $metrics, ?int $clusterTarget = null): void
     {
         $connection = $config->connection;
         $queue = $config->queue;
         $key = "{$connection}:{$queue}";
-        $target = $config->workers->pinnedCount();
+        $target = $clusterTarget ?? $config->workers->pinnedCount();
         $current = $this->pool->count($connection, $queue);
 
         $this->verbose("  🔒 Exclusive/pinned queue: enforcing {$target} worker(s), current={$current}", 'debug');
