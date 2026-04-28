@@ -12,7 +12,7 @@ class DebugQueueCommand extends Command
 {
     public $signature = 'queue:autoscale:debug
                         {--queue=default : Queue name}
-                        {--connection=database : Queue connection}';
+                        {--connection= : Queue connection (defaults to queue.default config)}';
 
     public $description = 'Debug queue state by showing raw database/redis contents';
 
@@ -22,7 +22,9 @@ class DebugQueueCommand extends Command
         $queue = is_string($queueOpt) ? $queueOpt : 'default';
 
         $connectionOpt = $this->option('connection');
-        $connection = is_string($connectionOpt) ? $connectionOpt : 'database';
+        $defaultConnection = config('queue.default');
+        $fallback = is_string($defaultConnection) ? $defaultConnection : 'database';
+        $connection = is_string($connectionOpt) && $connectionOpt !== '' ? $connectionOpt : $fallback;
 
         $this->info("Debugging queue: {$connection}:{$queue}");
         $this->line('');

@@ -476,13 +476,21 @@ final class AutoscaleManager
         $groups = GroupConfiguration::allFromConfig();
         $groupedQueueKeys = $this->groupedQueueKeys($groups);
 
-        foreach (AutoscaleConfiguration::configuredQueues() as $queueKey => $queueInfo) {
-            if (isset($groupedQueueKeys[$queueKey])) {
+        foreach ($recommendation->workloads as $workloadKey => $target) {
+            if (! str_starts_with($workloadKey, 'queue:')) {
                 continue;
             }
 
-            $connection = $queueInfo['connection'];
-            $queue = $queueInfo['queue'];
+            $parts = explode(':', $workloadKey, 3);
+            if (count($parts) !== 3) {
+                continue;
+            }
+
+            [, $connection, $queue] = $parts;
+
+            if (isset($groupedQueueKeys["{$connection}:{$queue}"])) {
+                continue;
+            }
 
             if (AutoscaleConfiguration::isExcluded($queue)) {
                 continue;
@@ -498,7 +506,6 @@ final class AutoscaleManager
                 continue;
             }
 
-            $target = $recommendation->targetForQueue($connection, $queue);
             $this->reconcileQueueTarget($config, $target);
         }
 
