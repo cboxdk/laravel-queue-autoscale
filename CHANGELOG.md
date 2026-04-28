@@ -5,6 +5,23 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.0.2 — Cluster Fixes - 2026-04-28
+
+### Fixed
+
+- **ExclusiveProfile spawned one worker per manager in cluster mode** — Non-scalable queues supervised via `superviseQueue()` ignored cluster recommendations, causing each manager to spawn its own worker instead of one globally. Now accepts an optional `clusterTarget` parameter so cluster recommendations are respected.
+- **Process lock collisions on shared storage volumes** — `ManagerProcessLock` used an app-only fingerprint for the lock file name, causing containers sharing a storage volume to block each other via `flock()`. In cluster mode, the lock file now includes a host fingerprint so each container gets its own lock while Redis leader election handles cross-node coordination.
+
+### Documentation
+
+- Added scale-to-zero guide covering wakeup latency trade-offs and SLA implications for queues with `workers.min = 0`.
+
+### Testing
+
+- 454 tests, 1103 assertions
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.0.1...v3.0.2
+
 ## v3.0.1 — Bugfixes - 2026-04-28
 
 ### Fixed
