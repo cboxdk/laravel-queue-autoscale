@@ -308,12 +308,20 @@ final readonly class AutoscaleConfiguration
      */
     public static function configuredQueues(): array
     {
-        /** @var array<string, array<string, mixed>> $queuesConfig */
+        /** @var array<int|string, mixed> $queuesConfig */
         $queuesConfig = config('queue-autoscale.queues', []);
         $result = [];
 
         foreach ($queuesConfig as $queueName => $config) {
-            $connection = isset($config['connection'])
+            if (! is_string($queueName)) {
+                throw new \InvalidArgumentException(
+                    'Invalid queue-autoscale.queues config: keys must be queue names (strings), not numeric indices. '
+                    ."Expected 'queues' => ['default' => ['connection' => 'redis']], "
+                    .'got a numerically-indexed array instead.'
+                );
+            }
+
+            $connection = is_array($config) && isset($config['connection'])
                 ? self::stringValue($config['connection'], 'default')
                 : 'default';
 
