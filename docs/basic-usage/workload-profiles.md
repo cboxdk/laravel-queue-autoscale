@@ -176,6 +176,68 @@ Longer forecast horizon (120s) so the aggressive forecast catches ramps earlier.
 
 See [Queue Topology → Exclusive Queues](queue-topology.md#exclusive-sequential-queues) for the full behaviour model.
 
+## Scale-to-Zero
+
+Any scalable profile can scale down to zero workers by setting `workers.min = 0`. Two shipped profiles already do this: `BurstyProfile` and `BackgroundProfile`.
+
+### When to use
+
+Scale-to-zero is appropriate for queues with **sporadic or unpredictable traffic** where it is acceptable that jobs are not processed immediately. Examples:
+
+- Webhook receivers that only fire during external events
+- Nightly report generation
+- Cleanup and maintenance jobs
+- Campaign or batch notification queues
+
+### Wakeup latency
+
+When a queue scales from 0 to 1 worker, there is a **cold-start delay** before the first job is picked up:
+
+| Component | Typical duration |
+|-----------|-----------------|
+| Evaluation interval (polling) | 5 seconds (configurable) |
+| Worker process spawn | 1–3 seconds |
+| Worker poll/sleep loop | 1–3 seconds |
+| **Total wakeup latency** | **~7–11 seconds** |
+
+This delay is inherent to the polling-based architecture: the autoscaler must first observe pending jobs, then spawn a worker, which then polls the queue.
+
+### SLA implications
+
+An SLA target should be **at least 2–3x the wakeup latency** to avoid false breach events on every cold start. For a default 5-second evaluation interval:
+
+- **SLA < 15 seconds:** Will breach on nearly every cold start. Not compatible with scale-to-zero.
+- **SLA 30–60 seconds:** Comfortable buffer. Recommended minimum.
+- **SLA 300+ seconds:** Ideal for background work.
+
+`BurstyProfile` (SLA 60s) and `BackgroundProfile` (SLA 300s) are both designed with this trade-off in mind.
+
+### Configuration
+
+Override `workers.min` on any scalable profile:
+
+```php
+'queues' => [
+    'webhooks' => [
+        'profile' => BalancedProfile::class,
+        'overrides' => ['workers' => ['min' => 0]],
+    ],
+],
+```
+
+Or set it directly:
+
+```php
+'queues' => [
+    'webhooks' => [
+        'sla' => ['target_seconds' => 60],
+        'workers' => ['min' => 0, 'max' => 20],
+    ],
+],
+```
+
+Scale-to-zero is **not compatible** with `ExclusiveProfile` or any non-scalable configuration (`scalable = false`), which requires at least one worker at all times.
+
 ## Custom profiles
 
 If none of the shipped profiles matches your workload, write your own. It's a small class:
