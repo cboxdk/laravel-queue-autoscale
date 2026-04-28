@@ -5,6 +5,20 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.0.1 — Bugfixes - 2026-04-28
+
+### Fixed
+
+- **Debug command hardcoded `database` connection** — `queue:autoscale:debug` ignored `config('queue.default')` and always fell back to the `database` driver. Now reads the app's configured default connection when `--connection` is omitted.
+- **Cluster spawn loop ignored auto-discovered queues** — `applyClusterRecommendation()` only iterated explicitly configured queues, while the leader's calculation used auto-discovered queues. With `queues => []`, the leader computed correct worker targets but no manager spawned them. Now iterates the recommendation's own workloads.
+- **`configuredQueues()` silently accepted list-of-dicts config** — Passing a numerically-indexed array instead of the expected `['queue_name' => [...]]` map caused a cryptic type error downstream. Now throws a clear `InvalidArgumentException` on the first numeric key.
+
+### Testing
+
+- 443 tests, 1082 assertions
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.0.0...v3.0.1
+
 ## v3.0.0 — Predictive Autoscaling, Worker Topology & Cluster Orchestration - 2026-04-26
 
 ### Breaking Changes
