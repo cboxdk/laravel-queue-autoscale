@@ -159,6 +159,12 @@ final class ManagerProcessLock
 
         $appFingerprint = substr(sha1(AutoscaleConfiguration::applicationScopeId()), 0, 16);
 
+        if (AutoscaleConfiguration::clusterEnabled()) {
+            $hostFingerprint = substr(sha1(AutoscaleConfiguration::hostLabel()), 0, 12);
+
+            return $storagePath.DIRECTORY_SEPARATOR."manager-{$appFingerprint}-{$hostFingerprint}.lock";
+        }
+
         return $storagePath.DIRECTORY_SEPARATOR."manager-{$appFingerprint}.lock";
     }
 }
