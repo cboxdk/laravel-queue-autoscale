@@ -5,6 +5,18 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.2.0 — CPU Core Fields in Heartbeat - 2026-04-29
+
+### Added
+
+- `cpu_cores`, `cpu_usable_cores`, and `cpu_reserved_cores` fields in `ClusterManagerState` heartbeat and cluster summary (#10, #11)
+- Enables the queue-monitor dashboard to display CPU core count alongside CPU percentage in the Hosts panel
+
+### Notes
+
+- CPU cores are reported as integers matching the current `cboxdk/system-metrics` return type
+- Fractional core support for containerized environments (e.g. Kubernetes millicores) is tracked in cboxdk/system-metrics#6
+
 ## v3.1.0 — Measured CPU Capacity - 2026-04-29
 
 ### Added
@@ -220,6 +232,7 @@ composer require php-tui/php-tui --dev
 
 
 
+
 ```
 ### Usage
 
@@ -232,6 +245,7 @@ php artisan queue:autoscale:debug
 
 # Dispatch test jobs
 php artisan queue:autoscale:test --jobs=10 --queue=default
+
 
 
 
@@ -265,6 +279,7 @@ First stable release of Queue Autoscale for Laravel with intelligent, predictive
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
+
 
 
 
