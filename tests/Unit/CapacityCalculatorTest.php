@@ -131,6 +131,8 @@ it('includes worker_cpu_core_estimate in cpu_details', function () {
 });
 
 it('allows more workers with lower worker_cpu_core_estimate', function () {
+    // Allow up to 100% CPU so even busy CI runners have available headroom.
+    config()->set('queue-autoscale.limits.max_cpu_percent', 100);
     config()->set('queue-autoscale.limits.worker_cpu_core_estimate', 1.0);
     $calculator = new CapacityCalculator;
     $highEstimate = $calculator->calculateMaxWorkers();
@@ -153,15 +155,14 @@ it('uses default worker_cpu_core_estimate of 0.2 when not configured', function 
 });
 
 it('uses measured CPU estimate when set, overriding config', function () {
+    // Allow up to 100% CPU so even busy CI runners have available headroom.
+    config()->set('queue-autoscale.limits.max_cpu_percent', 100);
     config()->set('queue-autoscale.limits.worker_cpu_core_estimate', 1.0);
     $calculator = new CapacityCalculator;
 
     $configResult = $calculator->calculateMaxWorkers();
 
-    // Do NOT invalidate cache — both calls must use the same CPU/memory
-    // snapshot so only the estimate changes. Invalidating would trigger a
-    // fresh 1-second CPU measurement that can return a wildly different
-    // value on small CI runners, making the comparison flaky.
+    // Reuse cached metrics — only the estimate changes.
     $calculator->setMeasuredWorkerCpuCoreEstimate(0.1);
     $measuredResult = $calculator->calculateMaxWorkers();
 
