@@ -27,7 +27,7 @@ If you explicitly force `QUEUE_AUTOSCALE_PICKUP_TIME_STORE=redis` or `QUEUE_AUTO
 
 Every manager:
 
-- Publishes a Redis heartbeat with its host name, current worker counts, CPU, memory, and local worker capacity.
+- Publishes a Redis heartbeat with its host name, current worker counts, CPU (including fractional core counts from cgroup limits), memory, and local worker capacity.
 - Reads the latest per-host worker recommendation from Redis.
 - Reconciles only its own local workers to that recommendation.
 

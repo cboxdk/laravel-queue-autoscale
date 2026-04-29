@@ -269,7 +269,7 @@ final class AutoscaleManager
             availableWorkerCapacity: max($capacity->finalMaxWorkers - $this->pool->totalCount(), 0),
             capacityLimiter: $this->clusterString($capacity->limitingFactor, 'unknown'),
             cpuPercent: $this->clusterFloat($cpuDetails['current_cpu_percent'] ?? 0.0),
-            cpuCores: is_numeric($cpuDetails['total_cores'] ?? null) ? (int) $cpuDetails['total_cores'] : 0,
+            cpuCores: is_numeric($cpuDetails['total_cores'] ?? null) ? (float) $cpuDetails['total_cores'] : 0.0,
             cpuUsableCores: is_numeric($cpuDetails['usable_cores'] ?? null) ? (int) $cpuDetails['usable_cores'] : 0,
             cpuReservedCores: is_numeric($cpuDetails['reserve_cores'] ?? null) ? (int) $cpuDetails['reserve_cores'] : 0,
             memoryPercent: $this->clusterFloat($memoryDetails['current_memory_percent'] ?? 0.0),

@@ -15,7 +15,7 @@ it('serializes cluster manager state payloads', function () {
         availableWorkerCapacity: 7,
         capacityLimiter: 'memory',
         cpuPercent: 42.5,
-        cpuCores: 8,
+        cpuCores: 8.0,
         cpuUsableCores: 7,
         cpuReservedCores: 1,
         memoryPercent: 63.1,
@@ -35,7 +35,7 @@ it('serializes cluster manager state payloads', function () {
         ->and($decoded->host)->toBe('orderscale-0')
         ->and($decoded->maxWorkers)->toBe(10)
         ->and($decoded->capacityLimiter)->toBe('memory')
-        ->and($decoded->cpuCores)->toBe(8)
+        ->and($decoded->cpuCores)->toBe(8.0)
         ->and($decoded->cpuUsableCores)->toBe(7)
         ->and($decoded->cpuReservedCores)->toBe(1)
         ->and($decoded->memoryTotalMb)->toBe(8192.0)
@@ -47,6 +47,36 @@ it('serializes cluster manager state payloads', function () {
         ->and($decoded->queueWorkers)->toBe(['redis:default' => 2])
         ->and($decoded->groupWorkers)->toBe(['redis:mailers' => 1]);
 });
+
+it('round-trips fractional cpu core values through serialization', function (float $cpuCores) {
+    $state = new ClusterManagerState(
+        managerId: 'cgroup-manager',
+        host: 'container-0',
+        lastSeenAt: 5000,
+        totalWorkers: 1,
+        maxWorkers: 5,
+        availableWorkerCapacity: 4,
+        capacityLimiter: 'cpu',
+        cpuPercent: 25.0,
+        cpuCores: $cpuCores,
+        cpuUsableCores: 1,
+        cpuReservedCores: 0,
+        memoryPercent: 40.0,
+        memoryTotalMb: 512.0,
+        memoryUsedMb: 204.8,
+        memoryFreeMb: 307.2,
+        queueCount: 1,
+        groupCount: 0,
+        packageVersion: '3.2.0',
+        queueWorkers: ['redis:default' => 1],
+        groupWorkers: [],
+    );
+
+    $decoded = ClusterManagerState::fromArray($state->toArray());
+
+    expect($decoded->cpuCores)->toBe($cpuCores)
+        ->and($decoded->cpuCores)->toBeFloat();
+})->with([0.2, 0.5, 1.5, 2.0, 4.0]);
 
 it('resolves recommendation targets for queues and groups', function () {
     $recommendation = new ClusterRecommendation(

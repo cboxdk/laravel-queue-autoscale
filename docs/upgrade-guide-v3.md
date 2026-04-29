@@ -8,6 +8,12 @@ weight: 5
 
 Version 3 is a ground-up redesign that introduces genuine forecasting, spawn-latency compensation, and p95-based SLA signals. This guide walks through the upgrade.
 
+## v3.2.0 — fractional CPU cores
+
+v3.2.0 bumps `cboxdk/laravel-queue-metrics` to `^3.0` (which pulls `cboxdk/system-metrics` v3). The only breaking surface is `ClusterManagerState::$cpuCores` changing from `int` to `float`. If you read this field directly (e.g. in a custom dashboard or event listener), update your type expectations. The cluster summary payload field `cpu_cores` may now contain values like `0.5` in cgroup-constrained environments.
+
+No config changes, no migration step.
+
 ## Step 1 — Update the package
 
 ```bash

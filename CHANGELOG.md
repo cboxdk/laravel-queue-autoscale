@@ -5,17 +5,25 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v3.2.0 — CPU Core Fields in Heartbeat - 2026-04-29
+## v3.2.0 — system-metrics v3 / queue-metrics v3 chain - 2026-04-29
 
-### Added
+### Changed
 
-- `cpu_cores`, `cpu_usable_cores`, and `cpu_reserved_cores` fields in `ClusterManagerState` heartbeat and cluster summary (#10, #11)
-- Enables the queue-monitor dashboard to display CPU core count alongside CPU percentage in the Hosts panel
+- **`cboxdk/laravel-queue-metrics` constraint bumped to `^3.0`** — pulls in `cboxdk/system-metrics` v3 which returns fractional CPU core counts from cgroup limits (e.g. 0.5 cores in a Docker container with `--cpus=0.5`)
+- **`ClusterManagerState::$cpuCores` widened from `int` to `float`** — heartbeats and cluster summaries now carry the fractional value reported by the system-metrics package
+- **`CapacityCalculator::$cachedAvailableCores` widened from `int` to `float`** — capacity math uses the fractional core count directly, producing more accurate worker limits in cgroup-constrained environments
 
-### Notes
+### Breaking Changes
 
-- CPU cores are reported as integers matching the current `cboxdk/system-metrics` return type
-- Fractional core support for containerized environments (e.g. Kubernetes millicores) is tracked in cboxdk/system-metrics#6
+- `ClusterManagerState::$cpuCores` is now `float` (was `int`). Code that type-checks or strict-compares this field may need updating.
+- The cluster summary payload field `cpu_cores` may now contain a float (e.g. `0.5`) where it previously always contained an integer.
+
+### Testing
+
+- 464 tests, 1127 assertions
+- Parametrized round-trip test for fractional CPU core values (0.2, 0.5, 1.5, 2.0, 4.0)
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.1.0...v3.2.0
 
 ## v3.1.0 — Measured CPU Capacity - 2026-04-29
 
