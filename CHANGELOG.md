@@ -5,6 +5,34 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.4.0 — Cluster scaling fixes - 2026-04-30
+
+### Fixed
+
+- **CPU capacity defaults corrected for containerized workloads** — `reserve_cpu_cores` changed from `1` to `0.2` (type widened from `int` to `float`), `worker_cpu_core_estimate` changed from `1.0` to `0.2`. A 0.5-core container now correctly supports workers instead of reporting 0 capacity.
+- **Usable cores guard relaxed for fractional cores** — Changed from `max(cores - reserve, 1)` to `max(cores - reserve, 0)`. The previous floor of 1 inflated capacity on sub-1-core containers.
+- **Cluster leader no longer applies local-host capacity to cluster-wide targets** — `clusterTargetWorkers()` now uses `ScalingEngine::evaluateDemand()` (strategy + config bounds only), so `required_workers` reflects actual demand. Per-host capacity enforcement happens during distribution.
+- **`distributeClusterTarget()` now respects per-host `maxWorkers`** — Phase 2 skips hosts at capacity instead of over-allocating. Remaining workers that exceed total cluster capacity are not assigned.
+- **`clusterScaleSignal()` no longer recommends scale-down under pressure** — Blocks scale-down when utilization ≥ 80% or any workload has pending jobs.
+
+### Added
+
+- **`ScalingEngine::evaluateDemand()`** — Returns unconstrained strategy recommendation clamped only by config bounds (workers.min/max), for cluster-wide demand calculation.
+
+### Breaking Changes
+
+- `AutoscaleConfiguration::reserveCpuCores()` now returns `float` (was `int`).
+- `ClusterManagerState::$cpuReservedCores` is now `float` (was `int`). Downstream consumers parsing this field as strict `int` may need updating.
+- Default `reserve_cpu_cores` changed from `1` to `0.2` — existing deployments relying on the old default will see more workers spawned per host.
+- Default `worker_cpu_core_estimate` changed from `1.0` to `0.2` — same effect; publish and review config if you had not overridden this value.
+
+### Testing
+
+- 480 tests, 1175 assertions
+- New test suites: `ClusterScaleSignalTest`, `ClusterDistributeTargetTest`, `ScalingEngineEvaluateDemandTest`
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.3.0...v3.4.0
+
 ## v3.3.0 — system-metrics v3 / queue-metrics v3 chain - 2026-04-29
 
 ### Changed
