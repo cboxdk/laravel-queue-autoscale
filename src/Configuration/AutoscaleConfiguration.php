@@ -218,6 +218,11 @@ final readonly class AutoscaleConfiguration
         return self::intConfig('queue-autoscale.limits.worker_memory_mb_estimate', 128);
     }
 
+    public static function workerCpuCoreEstimate(): float
+    {
+        return self::floatConfig('queue-autoscale.limits.worker_cpu_core_estimate', 1.0);
+    }
+
     public static function reserveCpuCores(): int
     {
         return self::intConfig('queue-autoscale.limits.reserve_cpu_cores', 1);
@@ -337,6 +342,11 @@ final readonly class AutoscaleConfiguration
     private static function intConfig(string $key, int $default): int
     {
         return self::intValue(config($key, $default), $default);
+    }
+
+    private static function floatConfig(string $key, float $default): float
+    {
+        return self::floatValue(config($key, $default), $default);
     }
 
     private static function stringConfig(string $key, string $default = ''): string

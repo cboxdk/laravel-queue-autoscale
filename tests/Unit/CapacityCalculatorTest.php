@@ -120,6 +120,70 @@ it('provides formatted details for verbose output', function () {
         ->and($formatted)->toHaveKey('Final Capacity');
 });
 
+it('includes worker_cpu_core_estimate in cpu_details', function () {
+    $calculator = new CapacityCalculator;
+
+    $result = $calculator->calculateMaxWorkers();
+
+    expect($result->details['cpu_details'])
+        ->toHaveKey('worker_cpu_core_estimate')
+        ->and($result->details['cpu_details']['worker_cpu_core_estimate'])->toBeFloat();
+});
+
+it('allows more workers with lower worker_cpu_core_estimate', function () {
+    config()->set('queue-autoscale.limits.worker_cpu_core_estimate', 1.0);
+    $calculator = new CapacityCalculator;
+    $highEstimate = $calculator->calculateMaxWorkers();
+
+    config()->set('queue-autoscale.limits.worker_cpu_core_estimate', 0.2);
+    $calculator->invalidateCache();
+    $lowEstimate = $calculator->calculateMaxWorkers();
+
+    expect($lowEstimate->maxWorkersByCpu)->toBeGreaterThan($highEstimate->maxWorkersByCpu);
+});
+
+it('uses default worker_cpu_core_estimate of 1.0 when not configured', function () {
+    config()->offsetUnset('queue-autoscale.limits.worker_cpu_core_estimate');
+    $calculator = new CapacityCalculator;
+
+    $result = $calculator->calculateMaxWorkers();
+
+    expect($result->details['cpu_details']['worker_cpu_core_estimate'])->toBe(1.0)
+        ->and($result->details['cpu_details']['cpu_estimate_source'])->toBe('config');
+});
+
+it('uses measured CPU estimate when set, overriding config', function () {
+    config()->set('queue-autoscale.limits.worker_cpu_core_estimate', 1.0);
+    $calculator = new CapacityCalculator;
+
+    $configResult = $calculator->calculateMaxWorkers();
+
+    $calculator->setMeasuredWorkerCpuCoreEstimate(0.1);
+    $calculator->invalidateCache();
+    $measuredResult = $calculator->calculateMaxWorkers();
+
+    expect($measuredResult->maxWorkersByCpu)->toBeGreaterThan($configResult->maxWorkersByCpu)
+        ->and($measuredResult->details['cpu_details']['worker_cpu_core_estimate'])->toBe(0.1)
+        ->and($measuredResult->details['cpu_details']['cpu_estimate_source'])->toBe('measured');
+});
+
+it('falls back to config when measured estimate is cleared', function () {
+    config()->set('queue-autoscale.limits.worker_cpu_core_estimate', 0.5);
+    $calculator = new CapacityCalculator;
+
+    $calculator->setMeasuredWorkerCpuCoreEstimate(0.1);
+    $calculator->invalidateCache();
+    $measuredResult = $calculator->calculateMaxWorkers();
+
+    $calculator->setMeasuredWorkerCpuCoreEstimate(null);
+    $calculator->invalidateCache();
+    $configResult = $calculator->calculateMaxWorkers();
+
+    expect($measuredResult->details['cpu_details']['cpu_estimate_source'])->toBe('measured')
+        ->and($configResult->details['cpu_details']['cpu_estimate_source'])->toBe('config')
+        ->and($configResult->details['cpu_details']['worker_cpu_core_estimate'])->toBe(0.5);
+});
+
 it('caches system metrics across consecutive calls within TTL', function () {
     $calculator = new CapacityCalculator;
 

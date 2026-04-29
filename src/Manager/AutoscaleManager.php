@@ -312,6 +312,8 @@ final class AutoscaleManager
     {
         app(CalculateQueueMetricsAction::class)->executeForAllQueues();
 
+        $this->updateMeasuredWorkerCpuEstimate();
+
         $allQueues = QueueMetrics::getAllQueuesWithMetrics();
 
         $configuredQueues = AutoscaleConfiguration::configuredQueues();
@@ -873,6 +875,8 @@ final class AutoscaleManager
         // Recalculate metrics first to ensure throughput uses current sliding window
         app(CalculateQueueMetricsAction::class)->executeForAllQueues();
 
+        $this->updateMeasuredWorkerCpuEstimate();
+
         // Get ALL queues with metrics from laravel-queue-metrics
         // Returns: ['redis:default' => [...metrics array...], ...]
         $allQueues = QueueMetrics::getAllQueuesWithMetrics();
@@ -1006,6 +1010,55 @@ final class AutoscaleManager
             'Queue excluded from autoscaling',
             ['connection' => $connection, 'queue' => $queue]
         );
+    }
+
+    /**
+     * Minimum measured CPU core estimate to prevent runaway capacity calculations.
+     * A worker using less than 1% of a core during processing is implausible;
+     * clamping here avoids division producing thousands of workers from noise.
+     */
+    private const MIN_MEASURED_CPU_CORE_ESTIMATE = 0.01;
+
+    /**
+     * Compute measured CPU core estimate from actual job processing metrics.
+     *
+     * Uses the ratio cpuTimeMs / durationMs across all job classes to determine
+     * how much CPU each worker actually uses during processing. This pessimistic
+     * estimate (based on active processing, not idle time) ensures capacity
+     * planning accounts for worst-case worker CPU load.
+     */
+    private function updateMeasuredWorkerCpuEstimate(): void
+    {
+        try {
+            $allJobs = QueueMetrics::getAllJobsWithMetrics();
+        } catch (\Throwable) {
+            return;
+        }
+
+        $totalWeightedCpuCores = 0.0;
+        $totalProcessed = 0;
+
+        foreach ($allJobs as $jobData) {
+            $cpu = is_array($jobData['cpu'] ?? null) ? $jobData['cpu'] : [];
+            $duration = is_array($jobData['duration'] ?? null) ? $jobData['duration'] : [];
+            $execution = is_array($jobData['execution'] ?? null) ? $jobData['execution'] : [];
+
+            $cpuAvgMs = is_numeric($cpu['avg'] ?? null) ? (float) $cpu['avg'] : 0.0;
+            $durationAvgMs = is_numeric($duration['avg'] ?? null) ? (float) $duration['avg'] : 0.0;
+            $processed = is_numeric($execution['total_processed'] ?? null) ? (int) $execution['total_processed'] : 0;
+
+            if ($durationAvgMs > 0 && $cpuAvgMs > 0 && $processed > 0) {
+                $coresPerWorker = $cpuAvgMs / $durationAvgMs;
+                $totalWeightedCpuCores += $coresPerWorker * $processed;
+                $totalProcessed += $processed;
+            }
+        }
+
+        if ($totalProcessed > 0) {
+            $measuredEstimate = max($totalWeightedCpuCores / $totalProcessed, self::MIN_MEASURED_CPU_CORE_ESTIMATE);
+            $this->capacity->setMeasuredWorkerCpuCoreEstimate($measuredEstimate);
+            $this->verbose(sprintf('  Measured worker CPU: %.3f cores/worker (from %d jobs)', $measuredEstimate, $totalProcessed), 'debug');
+        }
     }
 
     /**

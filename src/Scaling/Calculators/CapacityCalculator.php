@@ -26,10 +26,28 @@ class CapacityCalculator
     private ?float $cacheTimestamp = null;
 
     /**
+     * Measured CPU core usage per worker derived from actual job processing metrics.
+     * When set, takes precedence over the config-based estimate.
+     */
+    private ?float $measuredWorkerCpuCoreEstimate = null;
+
+    /**
      * How long cached metrics remain valid (seconds).
      * Should be shorter than the evaluation interval to ensure fresh data each tick.
      */
     private const CACHE_TTL_SECONDS = 4.0;
+
+    /**
+     * Set measured CPU core estimate from actual job processing data.
+     *
+     * This value represents the average fraction of a CPU core each worker
+     * consumes during job processing (e.g. 0.15 = 15% of one core).
+     * When set, this takes precedence over the config-based worker_cpu_core_estimate.
+     */
+    public function setMeasuredWorkerCpuCoreEstimate(?float $estimate): void
+    {
+        $this->measuredWorkerCpuCoreEstimate = $estimate;
+    }
 
     /**
      * Calculate maximum workers with detailed capacity breakdown
@@ -74,9 +92,14 @@ class CapacityCalculator
         $reserveCores = AutoscaleConfiguration::reserveCpuCores();
         $usableCores = max($this->cachedAvailableCores - $reserveCores, 1);
 
-        // Calculate additional workers we can add based on available CPU
-        $additionalWorkersByCpu = (int) floor($usableCores * ($availableCpuPercent / 100));
-        // Total capacity = current workers + additional capacity
+        $workerCpuCoreEstimate = max(
+            $this->measuredWorkerCpuCoreEstimate ?? AutoscaleConfiguration::workerCpuCoreEstimate(),
+            0.01
+        );
+        $cpuEstimateSource = $this->measuredWorkerCpuCoreEstimate !== null ? 'measured' : 'config';
+
+        $availableCoreEquivalents = $usableCores * ($availableCpuPercent / 100);
+        $additionalWorkersByCpu = (int) floor($availableCoreEquivalents / $workerCpuCoreEstimate);
         $maxWorkersByCpu = $currentWorkers + $additionalWorkersByCpu;
 
         // Memory capacity calculation
@@ -123,6 +146,8 @@ class CapacityCalculator
                 'total_cores' => $this->cachedAvailableCores,
                 'reserve_cores' => $reserveCores,
                 'usable_cores' => $usableCores,
+                'worker_cpu_core_estimate' => $workerCpuCoreEstimate,
+                'cpu_estimate_source' => $cpuEstimateSource,
             ],
             'memory_details' => [
                 'max_memory_percent' => $maxMemoryPercent,

@@ -5,6 +5,28 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.1.0 — Measured CPU Capacity - 2026-04-29
+
+### Added
+
+- **Measured per-worker CPU estimation from job metrics** — The capacity calculator now derives actual CPU core usage per worker from `queue-metrics` v2.8.0+ job processing data (`cpuTimeMs / durationMs`), replacing the previous implicit assumption that each worker consumes a full CPU core. Falls back gracefully to config-based estimate on older `queue-metrics` versions.
+- **`worker_cpu_core_estimate` config option** — New config key under `limits` (default `0.2`) provides a baseline estimate for per-worker CPU core usage. Used as fallback when measured job data is unavailable.
+- **`cpu_estimate_source` in capacity details** — Capacity breakdown now reports whether the CPU estimate is `measured` (from job metrics) or `config` (from fallback), visible in debug output and cluster topology.
+
+### Changed
+
+- **CPU capacity formula** — Updated from `floor(usableCores × availablePercent / 100)` (1 worker = 1 core) to `floor(usableCores × availablePercent / 100 / cpuCoreEstimate)`, allowing significantly more workers for I/O-bound workloads.
+
+### Compatibility
+
+- Requires `cboxdk/laravel-queue-metrics` v2.8.0+ for measured CPU data. Older versions fall back to the config estimate automatically — no crashes, no breaking changes.
+
+### Testing
+
+- 459 tests, 1114 assertions
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.0.2...v3.1.0
+
 ## v3.0.2 — Cluster Fixes - 2026-04-28
 
 ### Fixed
