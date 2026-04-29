@@ -271,7 +271,7 @@ final class AutoscaleManager
             cpuPercent: $this->clusterFloat($cpuDetails['current_cpu_percent'] ?? 0.0),
             cpuCores: is_numeric($cpuDetails['total_cores'] ?? null) ? (float) $cpuDetails['total_cores'] : 0.0,
             cpuUsableCores: is_numeric($cpuDetails['usable_cores'] ?? null) ? (float) $cpuDetails['usable_cores'] : 0.0,
-            cpuReservedCores: is_numeric($cpuDetails['reserve_cores'] ?? null) ? (int) $cpuDetails['reserve_cores'] : 0,
+            cpuReservedCores: is_numeric($cpuDetails['reserve_cores'] ?? null) ? (float) $cpuDetails['reserve_cores'] : 0.0,
             memoryPercent: $this->clusterFloat($memoryDetails['current_memory_percent'] ?? 0.0),
             memoryTotalMb: $memoryTotalMb,
             memoryUsedMb: $memoryUsedMb,
@@ -530,10 +530,12 @@ final class AutoscaleManager
             return $config->workers->pinnedCount();
         }
 
-        $decision = $this->engine->evaluate($metrics, $config, $currentWorkers, $clusterTotalWorkers);
-        $decision = $this->policies->beforeScaling($decision);
-
-        return $decision->targetWorkers;
+        // Use demand-only evaluation: strategy + config bounds, no system
+        // capacity constraint. The leader must see actual demand so it can
+        // recommend the right host count and distribute work across all
+        // managers. Per-host capacity enforcement happens during distribution
+        // (distributeClusterTarget respects each manager's maxWorkers).
+        return $this->engine->evaluateDemand($metrics, $config);
     }
 
     /**
@@ -590,19 +592,32 @@ final class AutoscaleManager
 
         $remaining = $targetWorkers;
 
+        // Phase 1: Preserve existing workers on their current managers,
+        // but cap at each manager's reported capacity.
         foreach ($preserveOrder as $state) {
             if ($remaining <= 0) {
                 break;
             }
 
-            $keep = min($currentCounts[$state->managerId], $remaining);
+            $hostCapacity = max($state->maxWorkers - ($assignedTotals[$state->managerId] ?? 0), 0);
+            $keep = min($currentCounts[$state->managerId], $remaining, $hostCapacity);
             $targets[$state->managerId] = $keep;
             $assignedTotals[$state->managerId] += $keep;
             $remaining -= $keep;
         }
 
+        // Phase 2: Distribute remaining workers to least-loaded managers
+        // that still have capacity.
         while ($remaining > 0) {
-            $candidates = $activeManagers;
+            $candidates = array_values(array_filter(
+                $activeManagers,
+                fn (ClusterManagerState $state): bool => $assignedTotals[$state->managerId] < $state->maxWorkers,
+            ));
+
+            if ($candidates === []) {
+                break;
+            }
+
             usort(
                 $candidates,
                 fn (ClusterManagerState $a, ClusterManagerState $b): int => ($assignedTotals[$a->managerId] <=> $assignedTotals[$b->managerId])
@@ -712,7 +727,7 @@ final class AutoscaleManager
         $requiredWorkers = array_sum(array_map(static fn (array $workload): int => (int) $workload['target_workers'], $workloads));
         $totalWorkers = array_sum(array_map(static fn (ClusterManagerState $state): int => $state->totalWorkers, $activeManagers));
         $recommendedHosts = $this->recommendedHostCount($activeManagers, $requiredWorkers);
-        $signal = $this->clusterScaleSignal($currentHosts, $recommendedHosts, $requiredWorkers, $totalWorkerCapacity);
+        $signal = $this->clusterScaleSignal($currentHosts, $recommendedHosts, $requiredWorkers, $totalWorkerCapacity, $totalWorkers, $workloads);
         $generatedAt = now();
         $generatedAtMs = $this->currentTimestamp();
         $leaderLeaseTtlSeconds = AutoscaleConfiguration::clusterLeaderLeaseSeconds();
@@ -806,6 +821,7 @@ final class AutoscaleManager
     }
 
     /**
+     * @param  array<int, array<string, mixed>>  $workloads
      * @return array<string, int|string>
      */
     private function clusterScaleSignal(
@@ -813,6 +829,8 @@ final class AutoscaleManager
         int $recommendedHosts,
         int $requiredWorkers,
         int $totalWorkerCapacity,
+        int $totalWorkers,
+        array $workloads,
     ): array {
         if ($requiredWorkers > $totalWorkerCapacity) {
             return [
@@ -824,6 +842,35 @@ final class AutoscaleManager
         }
 
         if ($recommendedHosts < $currentHosts) {
+            // Do not recommend scale-down when the cluster is under pressure.
+            $utilizationPercent = $totalWorkerCapacity > 0
+                ? ($totalWorkers / $totalWorkerCapacity) * 100
+                : 0.0;
+
+            $hasScaleUpPressure = false;
+            foreach ($workloads as $workload) {
+                $target = is_numeric($workload['target_workers'] ?? null) ? (int) $workload['target_workers'] : 0;
+                $current = is_numeric($workload['current_workers'] ?? null) ? (int) $workload['current_workers'] : 0;
+                $pending = is_numeric($workload['pending'] ?? null) ? (int) $workload['pending'] : 0;
+
+                if ($target > $current || $pending > 0) {
+                    $hasScaleUpPressure = true;
+
+                    break;
+                }
+            }
+
+            if ($utilizationPercent >= 80.0 || $hasScaleUpPressure) {
+                return [
+                    'action' => 'hold',
+                    'reason' => $utilizationPercent >= 80.0
+                        ? sprintf('high utilization (%.0f%%) prevents scale-down', $utilizationPercent)
+                        : 'pending workload prevents scale-down',
+                    'current_hosts' => $currentHosts,
+                    'recommended_hosts' => $currentHosts,
+                ];
+            }
+
             return [
                 'action' => 'scale_down',
                 'reason' => 'required workers fit on fewer hosts',

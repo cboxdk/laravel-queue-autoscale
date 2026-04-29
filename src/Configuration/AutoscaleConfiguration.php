@@ -220,12 +220,12 @@ final readonly class AutoscaleConfiguration
 
     public static function workerCpuCoreEstimate(): float
     {
-        return self::floatConfig('queue-autoscale.limits.worker_cpu_core_estimate', 1.0);
+        return self::floatConfig('queue-autoscale.limits.worker_cpu_core_estimate', 0.2);
     }
 
-    public static function reserveCpuCores(): int
+    public static function reserveCpuCores(): float
     {
-        return self::intConfig('queue-autoscale.limits.reserve_cpu_cores', 1);
+        return self::floatConfig('queue-autoscale.limits.reserve_cpu_cores', 0.2);
     }
 
     public static function workerTimeoutSeconds(): int

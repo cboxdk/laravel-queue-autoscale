@@ -90,7 +90,7 @@ class CapacityCalculator
 
         $availableCpuPercent = max($maxCpuPercent - $currentCpuPercent, 0);
         $reserveCores = AutoscaleConfiguration::reserveCpuCores();
-        $usableCores = max($this->cachedAvailableCores - $reserveCores, 1);
+        $usableCores = max($this->cachedAvailableCores - $reserveCores, 0);
 
         $workerCpuCoreEstimate = max(
             $this->measuredWorkerCpuCoreEstimate ?? AutoscaleConfiguration::workerCpuCoreEstimate(),

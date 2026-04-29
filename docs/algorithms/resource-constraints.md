@@ -29,7 +29,8 @@ Prevent resource exhaustion:
     'max_cpu_percent' => 85,            // Skip spawning when host CPU ≥ this
     'max_memory_percent' => 85,         // Same for memory
     'worker_memory_mb_estimate' => 128, // Used in the per-worker memory ceiling
-    'reserve_cpu_cores' => 1,           // Cores reserved for OS / other services
+    'worker_cpu_core_estimate' => 0.2,  // Baseline CPU cores per worker (fallback)
+    'reserve_cpu_cores' => 0.2,         // Cores reserved for OS / other services
 ],
 ```
 

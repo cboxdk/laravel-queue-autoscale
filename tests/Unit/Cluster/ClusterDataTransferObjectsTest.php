@@ -17,7 +17,7 @@ it('serializes cluster manager state payloads', function () {
         cpuPercent: 42.5,
         cpuCores: 8.0,
         cpuUsableCores: 7.0,
-        cpuReservedCores: 1,
+        cpuReservedCores: 1.0,
         memoryPercent: 63.1,
         memoryTotalMb: 8192.0,
         memoryUsedMb: 5169.2,
@@ -37,7 +37,7 @@ it('serializes cluster manager state payloads', function () {
         ->and($decoded->capacityLimiter)->toBe('memory')
         ->and($decoded->cpuCores)->toBe(8.0)
         ->and($decoded->cpuUsableCores)->toBe(7.0)
-        ->and($decoded->cpuReservedCores)->toBe(1)
+        ->and($decoded->cpuReservedCores)->toBe(1.0)
         ->and($decoded->memoryTotalMb)->toBe(8192.0)
         ->and($decoded->memoryUsedMb)->toBe(5169.2)
         ->and($decoded->memoryFreeMb)->toBe(3022.8)
@@ -62,7 +62,7 @@ it('round-trips fractional cpu core values through serialization', function (flo
         cpuPercent: 25.0,
         cpuCores: $cpuCores,
         cpuUsableCores: $usableCores,
-        cpuReservedCores: 0,
+        cpuReservedCores: 0.0,
         memoryPercent: 40.0,
         memoryTotalMb: 512.0,
         memoryUsedMb: 204.8,
@@ -80,7 +80,7 @@ it('round-trips fractional cpu core values through serialization', function (flo
         ->and($decoded->cpuCores)->toBeFloat()
         ->and($decoded->cpuUsableCores)->toBe($usableCores)
         ->and($decoded->cpuUsableCores)->toBeFloat()
-        ->and($decoded->cpuReservedCores)->toBe(0);
+        ->and($decoded->cpuReservedCores)->toBe(0.0);
 })->with([0.2, 0.5, 1.5, 2.0, 4.0]);
 
 it('resolves recommendation targets for queues and groups', function () {
