@@ -15,6 +15,9 @@ it('serializes cluster manager state payloads', function () {
         availableWorkerCapacity: 7,
         capacityLimiter: 'memory',
         cpuPercent: 42.5,
+        cpuCores: 8,
+        cpuUsableCores: 7,
+        cpuReservedCores: 1,
         memoryPercent: 63.1,
         memoryTotalMb: 8192.0,
         memoryUsedMb: 5169.2,
@@ -32,6 +35,9 @@ it('serializes cluster manager state payloads', function () {
         ->and($decoded->host)->toBe('orderscale-0')
         ->and($decoded->maxWorkers)->toBe(10)
         ->and($decoded->capacityLimiter)->toBe('memory')
+        ->and($decoded->cpuCores)->toBe(8)
+        ->and($decoded->cpuUsableCores)->toBe(7)
+        ->and($decoded->cpuReservedCores)->toBe(1)
         ->and($decoded->memoryTotalMb)->toBe(8192.0)
         ->and($decoded->memoryUsedMb)->toBe(5169.2)
         ->and($decoded->memoryFreeMb)->toBe(3022.8)
