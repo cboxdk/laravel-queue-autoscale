@@ -849,10 +849,11 @@ final class AutoscaleManager
 
             $hasScaleUpPressure = false;
             foreach ($workloads as $workload) {
-                $action = is_numeric($workload['action'] ?? null) ? (int) $workload['action'] : 0;
+                $target = is_numeric($workload['target_workers'] ?? null) ? (int) $workload['target_workers'] : 0;
+                $current = is_numeric($workload['current_workers'] ?? null) ? (int) $workload['current_workers'] : 0;
                 $pending = is_numeric($workload['pending'] ?? null) ? (int) $workload['pending'] : 0;
 
-                if ($action > 0 || $pending > 0) {
+                if ($target > $current || $pending > 0) {
                     $hasScaleUpPressure = true;
 
                     break;
