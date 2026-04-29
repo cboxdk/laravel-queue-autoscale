@@ -135,8 +135,8 @@ it('allows more workers with lower worker_cpu_core_estimate', function () {
     $calculator = new CapacityCalculator;
     $highEstimate = $calculator->calculateMaxWorkers();
 
+    // Reuse cached metrics — only the config value changes.
     config()->set('queue-autoscale.limits.worker_cpu_core_estimate', 0.2);
-    $calculator->invalidateCache();
     $lowEstimate = $calculator->calculateMaxWorkers();
 
     expect($lowEstimate->maxWorkersByCpu)->toBeGreaterThan($highEstimate->maxWorkersByCpu);
@@ -158,8 +158,11 @@ it('uses measured CPU estimate when set, overriding config', function () {
 
     $configResult = $calculator->calculateMaxWorkers();
 
+    // Do NOT invalidate cache — both calls must use the same CPU/memory
+    // snapshot so only the estimate changes. Invalidating would trigger a
+    // fresh 1-second CPU measurement that can return a wildly different
+    // value on small CI runners, making the comparison flaky.
     $calculator->setMeasuredWorkerCpuCoreEstimate(0.1);
-    $calculator->invalidateCache();
     $measuredResult = $calculator->calculateMaxWorkers();
 
     expect($measuredResult->maxWorkersByCpu)->toBeGreaterThan($configResult->maxWorkersByCpu)
