@@ -15,8 +15,8 @@ it('serializes cluster manager state payloads', function () {
         availableWorkerCapacity: 7,
         capacityLimiter: 'memory',
         cpuPercent: 42.5,
-        cpuCores: 8,
-        cpuUsableCores: 7,
+        cpuCores: 8.0,
+        cpuUsableCores: 7.0,
         cpuReservedCores: 1,
         memoryPercent: 63.1,
         memoryTotalMb: 8192.0,
@@ -35,8 +35,8 @@ it('serializes cluster manager state payloads', function () {
         ->and($decoded->host)->toBe('orderscale-0')
         ->and($decoded->maxWorkers)->toBe(10)
         ->and($decoded->capacityLimiter)->toBe('memory')
-        ->and($decoded->cpuCores)->toBe(8)
-        ->and($decoded->cpuUsableCores)->toBe(7)
+        ->and($decoded->cpuCores)->toBe(8.0)
+        ->and($decoded->cpuUsableCores)->toBe(7.0)
         ->and($decoded->cpuReservedCores)->toBe(1)
         ->and($decoded->memoryTotalMb)->toBe(8192.0)
         ->and($decoded->memoryUsedMb)->toBe(5169.2)
@@ -47,6 +47,41 @@ it('serializes cluster manager state payloads', function () {
         ->and($decoded->queueWorkers)->toBe(['redis:default' => 2])
         ->and($decoded->groupWorkers)->toBe(['redis:mailers' => 1]);
 });
+
+it('round-trips fractional cpu core values through serialization', function (float $cpuCores) {
+    $usableCores = max($cpuCores - 0.0, 1.0);
+
+    $state = new ClusterManagerState(
+        managerId: 'cgroup-manager',
+        host: 'container-0',
+        lastSeenAt: 5000,
+        totalWorkers: 1,
+        maxWorkers: 5,
+        availableWorkerCapacity: 4,
+        capacityLimiter: 'cpu',
+        cpuPercent: 25.0,
+        cpuCores: $cpuCores,
+        cpuUsableCores: $usableCores,
+        cpuReservedCores: 0,
+        memoryPercent: 40.0,
+        memoryTotalMb: 512.0,
+        memoryUsedMb: 204.8,
+        memoryFreeMb: 307.2,
+        queueCount: 1,
+        groupCount: 0,
+        packageVersion: '3.3.0',
+        queueWorkers: ['redis:default' => 1],
+        groupWorkers: [],
+    );
+
+    $decoded = ClusterManagerState::fromArray($state->toArray());
+
+    expect($decoded->cpuCores)->toBe($cpuCores)
+        ->and($decoded->cpuCores)->toBeFloat()
+        ->and($decoded->cpuUsableCores)->toBe($usableCores)
+        ->and($decoded->cpuUsableCores)->toBeFloat()
+        ->and($decoded->cpuReservedCores)->toBe(0);
+})->with([0.2, 0.5, 1.5, 2.0, 4.0]);
 
 it('resolves recommendation targets for queues and groups', function () {
     $recommendation = new ClusterRecommendation(

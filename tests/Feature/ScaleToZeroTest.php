@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
+use Cbox\LaravelQueueAutoscale\Tests\Simulation\UnlimitedCapacityCalculator;
 use Illuminate\Support\Facades\Event;
 
 beforeEach(function () {
@@ -14,6 +16,7 @@ beforeEach(function () {
         WorkersScaled::class,
     ]);
 
+    $this->app->bind(CapacityCalculator::class, UnlimitedCapacityCalculator::class);
     $this->engine = app(ScalingEngine::class);
 });
 
