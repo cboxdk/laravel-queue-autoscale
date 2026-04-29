@@ -531,10 +531,12 @@ $cpuUsage = SystemMetrics::cpuUsage(1.0)->usagePercentage(); // e.g., 60%
 
 $availableCpuPercent = max($maxCpuPercent - $cpuUsage, 0); // 30%
 
-$reserveCores = config('queue-autoscale.resource_limits.reserve_cpu_cores'); // 0.5
-$usableCores = max($limits->availableCpuCores() - $reserveCores, 1);
+$reserveCores = config('queue-autoscale.limits.reserve_cpu_cores'); // 0.2
+$usableCores = max($limits->availableCpuCores() - $reserveCores, 0);
 
-$maxWorkersByCpu = floor($usableCores * ($availableCpuPercent / 100));
+$workerCpuEstimate = config('queue-autoscale.limits.worker_cpu_core_estimate'); // 0.2
+$availableCoreEquivalents = $usableCores * ($availableCpuPercent / 100);
+$maxWorkersByCpu = floor($availableCoreEquivalents / $workerCpuEstimate);
 ```
 
 ### Memory Constraints

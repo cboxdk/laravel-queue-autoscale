@@ -402,7 +402,8 @@ Caps are under the top-level `limits` key:
     'max_cpu_percent' => 85,           // Skip spawning when host CPU ≥ this
     'max_memory_percent' => 85,        // Skip spawning when host memory ≥ this
     'worker_memory_mb_estimate' => 128, // Assumed memory footprint per worker
-    'reserve_cpu_cores' => 1,           // Cores reserved for the OS/other services
+    'worker_cpu_core_estimate' => 0.2,  // Baseline CPU cores per worker (fallback)
+    'reserve_cpu_cores' => 0.2,         // Cores reserved for the OS/other services
 ],
 ```
 

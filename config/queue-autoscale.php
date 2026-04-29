@@ -145,8 +145,8 @@ return [
         'max_cpu_percent' => 85,
         'max_memory_percent' => 85,
         'worker_memory_mb_estimate' => 128,
-        'worker_cpu_core_estimate' => 1.0,
-        'reserve_cpu_cores' => 1,
+        'worker_cpu_core_estimate' => 0.2,
+        'reserve_cpu_cores' => 0.2,
     ],
 
     /*

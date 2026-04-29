@@ -142,13 +142,13 @@ it('allows more workers with lower worker_cpu_core_estimate', function () {
     expect($lowEstimate->maxWorkersByCpu)->toBeGreaterThan($highEstimate->maxWorkersByCpu);
 });
 
-it('uses default worker_cpu_core_estimate of 1.0 when not configured', function () {
+it('uses default worker_cpu_core_estimate of 0.2 when not configured', function () {
     config()->offsetUnset('queue-autoscale.limits.worker_cpu_core_estimate');
     $calculator = new CapacityCalculator;
 
     $result = $calculator->calculateMaxWorkers();
 
-    expect($result->details['cpu_details']['worker_cpu_core_estimate'])->toBe(1.0)
+    expect($result->details['cpu_details']['worker_cpu_core_estimate'])->toBe(0.2)
         ->and($result->details['cpu_details']['cpu_estimate_source'])->toBe('config');
 });
 

@@ -18,12 +18,18 @@ final readonly class ScalingEngine
     ) {}
 
     /**
-     * Evaluate scaling decision for a queue
+     * Evaluate scaling decision for a single-host queue.
+     *
+     * Uses LOCAL system capacity (CPU/memory on this host) to constrain the
+     * strategy recommendation. Both $totalPoolWorkers and the capacity result
+     * must be from the SAME host — passing cluster-wide pool counts against
+     * local capacity produces incorrect results. For cluster-wide demand
+     * calculations use evaluateDemand() instead.
      *
      * @param  QueueMetricsData  $metrics  Queue metrics from laravel-queue-metrics
      * @param  QueueConfiguration  $config  Queue SLA configuration
-     * @param  int  $currentWorkers  Current worker count for this queue
-     * @param  int  $totalPoolWorkers  Total workers across all queues (for accurate capacity sharing)
+     * @param  int  $currentWorkers  Current worker count for this queue on this host
+     * @param  int  $totalPoolWorkers  Total workers across all queues on this host
      * @return ScalingDecision Scaling decision with target workers
      */
     public function evaluate(
@@ -36,9 +42,11 @@ final readonly class ScalingEngine
         $strategyRecommendation = $this->strategy->calculateTargetWorkers($metrics, $config);
         $targetWorkers = $strategyRecommendation;
 
-        // 2. Get system capacity using total pool workers for accurate measurement.
-        // This ensures capacity is calculated against ALL workers, not just this queue's,
+        // 2. Get LOCAL system capacity using total pool workers for accurate measurement.
+        // This ensures capacity is calculated against ALL workers on THIS host,
         // preventing each queue from assuming it has all remaining system capacity.
+        // Note: both $totalPoolWorkers and calculateMaxWorkers() must be local-host
+        // scoped. In cluster mode, use evaluateDemand() instead.
         $effectiveTotalWorkers = max($totalPoolWorkers, $currentWorkers);
         $capacityResult = $this->capacity->calculateMaxWorkers($effectiveTotalWorkers);
 
@@ -86,6 +94,26 @@ final readonly class ScalingEngine
             capacity: $finalCapacityResult,
             spawnCompensation: $config->spawnCompensation,
         );
+    }
+
+    /**
+     * Evaluate demand-only target for cluster-wide scaling decisions.
+     *
+     * Returns the strategy recommendation constrained only by config bounds
+     * (workers.min / workers.max), WITHOUT applying system capacity constraints.
+     * In cluster mode the leader must see actual demand so it can recommend
+     * the right host count; per-host capacity enforcement happens during
+     * distribution and at execution time on each manager.
+     */
+    public function evaluateDemand(
+        QueueMetricsData $metrics,
+        QueueConfiguration $config,
+    ): int {
+        $targetWorkers = $this->strategy->calculateTargetWorkers($metrics, $config);
+        $targetWorkers = max($targetWorkers, $config->workers->min);
+        $targetWorkers = min($targetWorkers, $config->workers->max);
+
+        return $targetWorkers;
     }
 
     /**

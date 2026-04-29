@@ -204,7 +204,8 @@ The global `limits` section protects the host from runaway spawning:
     'max_cpu_percent' => 85,            // Skip spawning at or above this
     'max_memory_percent' => 85,         // Same for memory
     'worker_memory_mb_estimate' => 128, // Used to derive a per-worker ceiling
-    'reserve_cpu_cores' => 1,           // Cores kept for OS/other services
+    'worker_cpu_core_estimate' => 0.2,  // Baseline CPU cores per worker (fallback)
+    'reserve_cpu_cores' => 0.2,         // Cores kept for OS/other services
 ],
 ```
 
@@ -215,7 +216,7 @@ $maxByMemory = floor(
     $systemMemoryMb * ($limits['max_memory_percent'] / 100) / $limits['worker_memory_mb_estimate']
 );
 
-$maxByCpu = ($cpuCores - $limits['reserve_cpu_cores']) * 2;
+$maxByCpu = floor(($cpuCores - $limits['reserve_cpu_cores']) / $limits['worker_cpu_core_estimate']);
 
 $hostCeiling = min($maxByMemory, $maxByCpu);
 ```
