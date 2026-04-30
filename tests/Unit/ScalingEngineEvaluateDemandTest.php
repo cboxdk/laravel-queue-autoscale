@@ -10,6 +10,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
 
@@ -45,7 +46,7 @@ beforeEach(function () {
         percentileCalc: new SortBasedPercentileCalculator,
     );
     $this->capacity = new CapacityCalculator;
-    $this->engine = new ScalingEngine($this->strategy, $this->capacity);
+    $this->engine = new ScalingEngine($this->strategy, $this->capacity, new ResourceEstimateResolver);
 });
 
 it('evaluateDemand clamps at config max workers', function () {

@@ -18,6 +18,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\ModerateForecastPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
@@ -126,7 +127,7 @@ final class ScalingSimulation
             percentileCalc: new SortBasedPercentileCalculator,
         );
 
-        $this->engine = new ScalingEngine($strategy, new UnlimitedCapacityCalculator);
+        $this->engine = new ScalingEngine($strategy, new UnlimitedCapacityCalculator, new ResourceEstimateResolver);
     }
 
     /**

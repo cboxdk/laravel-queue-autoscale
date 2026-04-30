@@ -5,6 +5,51 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.5.0 — Per-queue resource awareness - 2026-04-30
+
+### Added
+
+- **Per-queue resource estimates with three-source resolution** — Capacity calculations now use per-queue CPU and memory estimates instead of a single global average. The `ResourceEstimateResolver` resolves estimates through a precedence chain: measured runtime data → per-queue config override → global default. Each dimension (CPU, memory) resolves independently. (#14)
+- **Adaptive memory measurement** — `AutoscaleManager` now tracks per-queue memory usage from `queue-metrics` job data alongside the existing CPU tracking. Memory capacity was previously static config only (`worker_memory_mb_estimate`); it is now measured per queue and adapts automatically.
+- **Per-queue `resources` config** — Operators can declare `cpu_cores` and `memory_mb` per queue as cold-start fallbacks before measured data is available:
+  ```php
+  'queues' => [
+      'slow' => [
+          'resources' => [
+              'cpu_cores' => 0.5,
+              'memory_mb' => 2048,
+          ],
+      ],
+  ],
+  ```
+- **`ResourceEstimate` value object** — Carries CPU/memory estimates with per-dimension source metadata (`measured`, `config`, `default`) and sample counts, enabling downstream consumers to inspect provenance.
+- **`EstimateSource` enum** — `Measured`, `Config`, `Default` — tracks where each dimension of a resource estimate originated.
+
+### Fixed
+
+- **Target oscillation under steady-state load** — Added `TargetSmoother` that suppresses jitter when the target changes by less than 1 full worker (e.g. oscillating between 4 and 5 under stable load). Uses EMA smoothing with a dead-band to prevent unnecessary scale-up/scale-down cycles. (#15)
+
+### Changed
+
+- **`CapacityCalculator::calculateMaxWorkers()` signature** — Now requires a `ResourceEstimate` parameter (was optional internal state). All callers pass either a resolved per-queue estimate or `ResourceEstimate::globalDefault()`.
+- **`ScalingEngine` constructor** — Now accepts a `ResourceEstimateResolver` as third parameter.
+- **`AutoscaleManager` constructor** — Now accepts a `ResourceEstimateResolver` as last parameter.
+- **`updateMeasuredWorkerCpuEstimate()` replaced by `updateMeasuredResourceEstimates()`** — The old method computed a single global weighted-average CPU estimate across all job classes. The new method groups by `connection:queue` and tracks both CPU and memory per queue, feeding results into the `ResourceEstimateResolver`.
+- **Memory capacity details** — `memory_details` in capacity breakdown now includes `memory_estimate_source` field.
+
+### Breaking Changes
+
+- `CapacityCalculator::calculateMaxWorkers()` requires a second `ResourceEstimate` parameter — code calling this method directly must pass `ResourceEstimate::globalDefault()` or a resolved estimate.
+- `CapacityCalculator::setMeasuredWorkerCpuCoreEstimate()` removed — CPU estimate state moved to `ResourceEstimateResolver`.
+- `ScalingEngine` constructor requires a third `ResourceEstimateResolver` parameter.
+
+### Testing
+
+- 525 tests, 1473 assertions
+- New test suites: `ResourceEstimateTest`, `ResourceEstimateResolverTest`, `ResourceAwareCapacityTest`, `TargetSmootherTest`, `HybridStrategyBehaviourTest`
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.4.0...v3.5.0
+
 ## v3.4.0 — Cluster scaling fixes - 2026-04-30
 
 ### Fixed

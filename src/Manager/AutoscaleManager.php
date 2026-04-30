@@ -27,7 +27,9 @@ use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\QueueStats;
 use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\WorkerStatus;
 use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\ResourceEstimate;
 use Cbox\LaravelQueueAutoscale\Scaling\FairShareAllocator;
+use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
@@ -106,6 +108,7 @@ final class AutoscaleManager
         private readonly RestartSignal $restartSignal,
         private readonly ClusterStore $clusterStore,
         private readonly CapacityCalculator $capacity,
+        private readonly ResourceEstimateResolver $resolver,
     ) {
         $this->pool = new WorkerPool;
         $this->outputBuffer = new WorkerOutputBuffer;
@@ -252,7 +255,10 @@ final class AutoscaleManager
 
     private function runClusterCycle(): void
     {
-        $capacity = $this->capacity->calculateMaxWorkers($this->pool->totalCount());
+        $capacity = $this->capacity->calculateMaxWorkers(
+            $this->pool->totalCount(),
+            ResourceEstimate::globalDefault(),
+        );
         $capacityDetails = $capacity->details;
         $cpuDetails = is_array($capacityDetails['cpu_details'] ?? null) ? $capacityDetails['cpu_details'] : [];
         $memoryDetails = is_array($capacityDetails['memory_details'] ?? null) ? $capacityDetails['memory_details'] : [];
@@ -316,7 +322,7 @@ final class AutoscaleManager
     {
         app(CalculateQueueMetricsAction::class)->executeForAllQueues();
 
-        $this->updateMeasuredWorkerCpuEstimate();
+        $this->updateMeasuredResourceEstimates();
 
         $allQueues = QueueMetrics::getAllQueuesWithMetrics();
 
@@ -962,7 +968,7 @@ final class AutoscaleManager
         // Recalculate metrics first to ensure throughput uses current sliding window
         app(CalculateQueueMetricsAction::class)->executeForAllQueues();
 
-        $this->updateMeasuredWorkerCpuEstimate();
+        $this->updateMeasuredResourceEstimates();
 
         // Get ALL queues with metrics from laravel-queue-metrics
         // Returns: ['redis:default' => [...metrics array...], ...]
@@ -1100,21 +1106,14 @@ final class AutoscaleManager
     }
 
     /**
-     * Minimum measured CPU core estimate to prevent runaway capacity calculations.
-     * A worker using less than 1% of a core during processing is implausible;
-     * clamping here avoids division producing thousands of workers from noise.
-     */
-    private const MIN_MEASURED_CPU_CORE_ESTIMATE = 0.01;
-
-    /**
-     * Compute measured CPU core estimate from actual job processing metrics.
+     * Compute per-queue measured CPU and memory estimates from actual job metrics.
      *
-     * Uses the ratio cpuTimeMs / durationMs across all job classes to determine
-     * how much CPU each worker actually uses during processing. This pessimistic
-     * estimate (based on active processing, not idle time) ensures capacity
-     * planning accounts for worst-case worker CPU load.
+     * Walks QueueMetrics::getAllJobsWithMetrics() and groups results by
+     * connection:queue. For each queue, calculates weighted average CPU cores
+     * (cpuTimeMs / durationMs) and weighted average memory. Results are pushed
+     * into the ResourceEstimateResolver for use by ScalingEngine.
      */
-    private function updateMeasuredWorkerCpuEstimate(): void
+    private function updateMeasuredResourceEstimates(): void
     {
         try {
             $allJobs = QueueMetrics::getAllJobsWithMetrics();
@@ -1122,29 +1121,83 @@ final class AutoscaleManager
             return;
         }
 
-        $totalWeightedCpuCores = 0.0;
-        $totalProcessed = 0;
+        /** @var array<string, array{cpu_weighted: float, mem_weighted: float, cpu_processed: int, mem_processed: int}> $perQueue */
+        $perQueue = [];
 
         foreach ($allJobs as $jobData) {
+            $connection = is_string($jobData['connection'] ?? null) ? $jobData['connection'] : 'default';
+            $queue = is_string($jobData['queue'] ?? null) ? $jobData['queue'] : 'default';
+            $key = "{$connection}:{$queue}";
+
             $cpu = is_array($jobData['cpu'] ?? null) ? $jobData['cpu'] : [];
             $duration = is_array($jobData['duration'] ?? null) ? $jobData['duration'] : [];
+            $memory = is_array($jobData['memory'] ?? null) ? $jobData['memory'] : [];
             $execution = is_array($jobData['execution'] ?? null) ? $jobData['execution'] : [];
 
             $cpuAvgMs = is_numeric($cpu['avg'] ?? null) ? (float) $cpu['avg'] : 0.0;
             $durationAvgMs = is_numeric($duration['avg'] ?? null) ? (float) $duration['avg'] : 0.0;
+            $memAvgMb = is_numeric($memory['avg'] ?? null) ? (float) $memory['avg'] : 0.0;
             $processed = is_numeric($execution['total_processed'] ?? null) ? (int) $execution['total_processed'] : 0;
 
-            if ($durationAvgMs > 0 && $cpuAvgMs > 0 && $processed > 0) {
+            if ($processed <= 0) {
+                continue;
+            }
+
+            if (! isset($perQueue[$key])) {
+                $perQueue[$key] = ['cpu_weighted' => 0.0, 'mem_weighted' => 0.0, 'cpu_processed' => 0, 'mem_processed' => 0];
+            }
+
+            if ($durationAvgMs > 0 && $cpuAvgMs > 0) {
                 $coresPerWorker = $cpuAvgMs / $durationAvgMs;
-                $totalWeightedCpuCores += $coresPerWorker * $processed;
-                $totalProcessed += $processed;
+                $perQueue[$key]['cpu_weighted'] += $coresPerWorker * $processed;
+                $perQueue[$key]['cpu_processed'] += $processed;
+            }
+
+            if ($memAvgMb > 0) {
+                $perQueue[$key]['mem_weighted'] += $memAvgMb * $processed;
+                $perQueue[$key]['mem_processed'] += $processed;
             }
         }
 
-        if ($totalProcessed > 0) {
-            $measuredEstimate = max($totalWeightedCpuCores / $totalProcessed, self::MIN_MEASURED_CPU_CORE_ESTIMATE);
-            $this->capacity->setMeasuredWorkerCpuCoreEstimate($measuredEstimate);
-            $this->verbose(sprintf('  Measured worker CPU: %.3f cores/worker (from %d jobs)', $measuredEstimate, $totalProcessed), 'debug');
+        foreach ($perQueue as $key => $data) {
+            [$connection, $queue] = explode(':', $key, 2);
+
+            $hasCpu = $data['cpu_processed'] > 0;
+            $hasMemory = $data['mem_processed'] > 0;
+
+            if ($hasCpu && $hasMemory) {
+                $this->resolver->setMeasured(
+                    $connection,
+                    $queue,
+                    $data['cpu_weighted'] / $data['cpu_processed'],
+                    $data['mem_weighted'] / $data['mem_processed'],
+                    $data['cpu_processed'],
+                    $data['mem_processed'],
+                );
+            } elseif ($hasCpu) {
+                $this->resolver->setMeasuredCpu(
+                    $connection,
+                    $queue,
+                    $data['cpu_weighted'] / $data['cpu_processed'],
+                    $data['cpu_processed'],
+                );
+            } elseif ($hasMemory) {
+                $this->resolver->setMeasuredMemory(
+                    $connection,
+                    $queue,
+                    $data['mem_weighted'] / $data['mem_processed'],
+                    $data['mem_processed'],
+                );
+            }
+
+            $this->verbose(sprintf(
+                '  Measured resources [%s]: cpu=%.3f cores (%d samples), mem=%.1f MB (%d samples)',
+                $key,
+                $hasCpu ? $data['cpu_weighted'] / $data['cpu_processed'] : 0.0,
+                $data['cpu_processed'],
+                $hasMemory ? $data['mem_weighted'] / $data['mem_processed'] : 0.0,
+                $data['mem_processed'],
+            ), 'debug');
         }
     }
 

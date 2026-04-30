@@ -13,6 +13,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\TargetSmoother;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
 /**
@@ -45,6 +46,7 @@ final class HybridStrategy implements ScalingStrategyContract
         private readonly SpawnLatencyTrackerContract $spawnTracker,
         private readonly PickupTimeStoreContract $pickupStore,
         private readonly PercentileCalculatorContract $percentileCalc,
+        private readonly TargetSmoother $smoother = new TargetSmoother,
     ) {}
 
     public function calculateTargetWorkers(QueueMetricsData $metrics, QueueConfiguration $config): int
@@ -230,6 +232,23 @@ final class HybridStrategy implements ScalingStrategyContract
             min($config->workers->max, (int) ceil(max($targetWorkers, 0))),
         );
 
+        // Apply hysteresis: limit scale-down to -1/cycle when throughput is stable.
+        // This prevents oscillation at the edge of steady-state load where transient
+        // pending=0 blips cause sharp target drops that immediately reverse.
+        $targetWorkers = $this->smoother->smooth($queueKey, $targetWorkers, $metrics->throughputPerMinute);
+        $targetWorkers = max($config->workers->min, min($config->workers->max, $targetWorkers));
+
+        // Record smoothing info for reason building
+        $smoothing = $this->smoother->getLastSmoothing();
+        if ($smoothing['applied']) {
+            $this->lastCalculation['smoothing'] = sprintf(
+                'target dampened %d→%d (CV=%.1f%%, stable throughput)',
+                $smoothing['raw_target'],
+                $smoothing['smoothed_target'],
+                ($smoothing['cv'] ?? 0) * 100,
+            );
+        }
+
         return $targetWorkers;
     }
 
@@ -296,6 +315,12 @@ final class HybridStrategy implements ScalingStrategyContract
         $utilizationAdj = (string) ($calc['utilization_adjustment'] ?? '');
         if ($utilizationAdj !== '') {
             $parts[] = $utilizationAdj;
+        }
+
+        // Add smoothing note if target was dampened
+        $smoothingNote = (string) ($calc['smoothing'] ?? '');
+        if ($smoothingNote !== '') {
+            $parts[] = $smoothingNote;
         }
 
         return implode('; ', $parts);

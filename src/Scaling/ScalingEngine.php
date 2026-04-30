@@ -15,6 +15,7 @@ final readonly class ScalingEngine
     public function __construct(
         private ScalingStrategyContract $strategy,
         private CapacityCalculator $capacity,
+        private ResourceEstimateResolver $resolver,
     ) {}
 
     /**
@@ -48,7 +49,8 @@ final readonly class ScalingEngine
         // Note: both $totalPoolWorkers and calculateMaxWorkers() must be local-host
         // scoped. In cluster mode, use evaluateDemand() instead.
         $effectiveTotalWorkers = max($totalPoolWorkers, $currentWorkers);
-        $capacityResult = $this->capacity->calculateMaxWorkers($effectiveTotalWorkers);
+        $estimate = $this->resolver->resolve($config->connection, $config->queue);
+        $capacityResult = $this->capacity->calculateMaxWorkers($effectiveTotalWorkers, $estimate);
 
         // 3. Apply resource constraints: this queue's share of system capacity
         // System can support capacityResult->finalMaxWorkers total. Other queues
