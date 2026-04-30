@@ -5,6 +5,26 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.6.0 — Fair-share allocation between queues - 2026-04-30
+
+### Added
+
+- **Fair-share allocation layer** — When total per-queue demand exceeds cluster capacity, workers are now distributed proportionally instead of first-queue-wins. The new `FairShareAllocator` sits between demand evaluation and cross-host distribution, using min-first then proportional allocation with water-filling iteration. (#16)
+- **Water-filling redistribution** — When max-clamping reduces a queue's allocation, freed capacity is automatically redistributed to other eligible queues. Converges in 2–3 iterations.
+- **Pinned queue capacity reservation** — Non-scalable (pinned) workloads are subtracted from cluster capacity before fair-share runs, ensuring they don't compete with scalable queues.
+
+### Changed
+
+- **`evaluateAndPublishClusterRecommendations()` refactored** — The single evaluate-and-distribute loop is now three phases: collect all demands (Phase A), fair-share allocate (Phase B), distribute adjusted targets across hosts (Phase C). Workload summaries reflect post-fairness targets.
+- **`workers.max` semantics clarified** — Max is now purely a safety bound (rate-limits, connection pools), not a fairness mechanism. Operators no longer need to set max low to prevent queue starvation.
+
+### Testing
+
+- 541 tests, 1541 assertions
+- New test suites: `FairShareAllocatorTest` (14 tests), `ClusterFairShareIntegrationTest` (2 tests)
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.5.0...v3.6.0
+
 ## v3.5.0 — Per-queue resource awareness - 2026-04-30
 
 ### Added
