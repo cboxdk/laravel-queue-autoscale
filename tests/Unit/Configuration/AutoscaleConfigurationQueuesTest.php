@@ -34,3 +34,53 @@ test('throws on numeric-keyed queues config (list-of-dicts shape)', function ():
     InvalidArgumentException::class,
     'queue-autoscale.queues'
 );
+
+it('returns empty array when queue has no resources configured', function (): void {
+    config()->set('queue-autoscale.queues', [
+        'fast' => ['sla' => ['target_seconds' => 10]],
+    ]);
+
+    $resources = AutoscaleConfiguration::queueResources('fast');
+
+    expect($resources)->toBe([]);
+});
+
+it('returns configured resources for a queue', function (): void {
+    config()->set('queue-autoscale.queues', [
+        'slow' => [
+            'resources' => [
+                'cpu_cores' => 0.5,
+                'memory_mb' => 2048,
+            ],
+        ],
+    ]);
+
+    $resources = AutoscaleConfiguration::queueResources('slow');
+
+    expect($resources)->toBe([
+        'cpu_cores' => 0.5,
+        'memory_mb' => 2048,
+    ]);
+});
+
+it('returns partial resources when only one dimension configured', function (): void {
+    config()->set('queue-autoscale.queues', [
+        'heavy' => [
+            'resources' => [
+                'memory_mb' => 4096,
+            ],
+        ],
+    ]);
+
+    $resources = AutoscaleConfiguration::queueResources('heavy');
+
+    expect($resources)->toBe(['memory_mb' => 4096]);
+});
+
+it('returns empty array when queue is not configured at all', function (): void {
+    config()->set('queue-autoscale.queues', []);
+
+    $resources = AutoscaleConfiguration::queueResources('nonexistent');
+
+    expect($resources)->toBe([]);
+});
