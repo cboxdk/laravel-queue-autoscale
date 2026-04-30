@@ -658,3 +658,220 @@ describe('constructor requirements', function () {
         expect($strategy)->toBeInstanceOf(HybridStrategy::class);
     });
 });
+
+describe('target oscillation prevention (issue #15)', function () {
+    it('holds target stable when pending alternates between 0 and 25 with stable throughput', function () {
+        // Scenario from issue #15:
+        // 24 jobs/sec, 12 workers @ 280ms avg → throughput exactly matches capacity
+        // pending oscillates between 0 and 25, throughput stays at 1440/min
+        $config = makeQueueConfig(['minWorkers' => 1, 'maxWorkers' => 12]);
+        $throughput = 1440.0; // 24 jobs/sec × 60
+        $avgDuration = 0.28;  // 280ms
+
+        // Warm-up phase: build arrival rate and smoother history at equilibrium (12 workers)
+        // Need multiple calls with time gaps for arrival estimator to build confidence
+        for ($i = 0; $i < 5; $i++) {
+            $metrics = createMetrics([
+                'throughput_per_minute' => $throughput,
+                'active_workers' => 12,
+                'pending' => 15,
+                'oldest_job_age' => 3,
+                'avg_duration' => $avgDuration,
+            ]);
+            $this->strategy->calculateTargetWorkers($metrics, $config);
+
+            // Age the arrival estimator snapshots so next call sees a valid interval
+            $history = $this->arrivalEstimator->getHistory();
+            if (! empty($history)) {
+                $key = array_key_first($history);
+                foreach ($history[$key] as &$snapshot) {
+                    $snapshot['timestamp'] -= 5;
+                }
+                unset($snapshot);
+
+                $reflection = new ReflectionClass($this->arrivalEstimator);
+                $historyProperty = $reflection->getProperty('history');
+                $historyProperty->setValue($this->arrivalEstimator, $history);
+            }
+        }
+
+        // Capture the equilibrium target after warm-up
+        $equilibriumMetrics = createMetrics([
+            'throughput_per_minute' => $throughput,
+            'active_workers' => 12,
+            'pending' => 15,
+            'oldest_job_age' => 3,
+            'avg_duration' => $avgDuration,
+        ]);
+        $equilibrium = $this->strategy->calculateTargetWorkers($equilibriumMetrics, $config);
+
+        // Oscillation phase: pending alternates between 0 and 25
+        // Throughput stays constant (proving the workload is stable)
+        $targets = [];
+        for ($cycle = 0; $cycle < 30; $cycle++) {
+            $pendingIsZero = ($cycle % 2 === 0);
+
+            // Age arrival estimator between cycles
+            $history = $this->arrivalEstimator->getHistory();
+            if (! empty($history)) {
+                $key = array_key_first($history);
+                foreach ($history[$key] as &$snapshot) {
+                    $snapshot['timestamp'] -= 5;
+                }
+                unset($snapshot);
+
+                $reflection = new ReflectionClass($this->arrivalEstimator);
+                $historyProperty = $reflection->getProperty('history');
+                $historyProperty->setValue($this->arrivalEstimator, $history);
+            }
+
+            $metrics = createMetrics([
+                'throughput_per_minute' => $throughput,
+                'active_workers' => 12,
+                'pending' => $pendingIsZero ? 0 : 25,
+                'oldest_job_age' => $pendingIsZero ? 0 : 5,
+                'avg_duration' => $avgDuration,
+            ]);
+
+            $targets[] = $this->strategy->calculateTargetWorkers($metrics, $config);
+        }
+
+        // Target should never drop more than 1 worker per cycle
+        $previousTarget = $equilibrium;
+        foreach ($targets as $i => $target) {
+            if ($target < $previousTarget) {
+                $drop = $previousTarget - $target;
+                expect($drop)->toBeLessThanOrEqual(1, "Cycle {$i}: dropped {$drop} workers (from {$previousTarget} to {$target})");
+            }
+            $previousTarget = $target;
+        }
+    });
+
+    it('preserves scale-up reactivity when load genuinely increases', function () {
+        // The smoother should NOT slow down scale-up — only scale-down
+        $config = makeQueueConfig(['minWorkers' => 1, 'maxWorkers' => 20]);
+
+        // Build stable history at 5 workers
+        for ($i = 0; $i < 5; $i++) {
+            $metrics = createMetrics([
+                'throughput_per_minute' => 300.0,
+                'active_workers' => 5,
+                'pending' => 2,
+                'oldest_job_age' => 1,
+                'avg_duration' => 1.0,
+            ]);
+            $this->strategy->calculateTargetWorkers($metrics, $config);
+
+            $history = $this->arrivalEstimator->getHistory();
+            if (! empty($history)) {
+                $key = array_key_first($history);
+                foreach ($history[$key] as &$snapshot) {
+                    $snapshot['timestamp'] -= 5;
+                }
+                unset($snapshot);
+
+                $reflection = new ReflectionClass($this->arrivalEstimator);
+                $historyProperty = $reflection->getProperty('history');
+                $historyProperty->setValue($this->arrivalEstimator, $history);
+            }
+        }
+
+        $lastTarget = $this->strategy->calculateTargetWorkers(createMetrics([
+            'throughput_per_minute' => 300.0,
+            'active_workers' => 5,
+            'pending' => 2,
+            'oldest_job_age' => 1,
+            'avg_duration' => 1.0,
+        ]), $config);
+
+        // Sudden load spike: backlog jumps, SLA breach imminent
+        $history = $this->arrivalEstimator->getHistory();
+        if (! empty($history)) {
+            $key = array_key_first($history);
+            foreach ($history[$key] as &$snapshot) {
+                $snapshot['timestamp'] -= 5;
+            }
+            unset($snapshot);
+
+            $reflection = new ReflectionClass($this->arrivalEstimator);
+            $historyProperty = $reflection->getProperty('history');
+            $historyProperty->setValue($this->arrivalEstimator, $history);
+        }
+
+        $spikeMetrics = createMetrics([
+            'throughput_per_minute' => 300.0,
+            'active_workers' => 5,
+            'pending' => 200,
+            'oldest_job_age' => 20,
+            'avg_duration' => 1.0,
+        ]);
+
+        $spikeTarget = $this->strategy->calculateTargetWorkers($spikeMetrics, $config);
+
+        // Scale-up should be immediate and significant — not dampened
+        expect($spikeTarget)->toBeGreaterThan($lastTarget);
+    });
+
+    it('includes smoothing info in reason when target is dampened', function () {
+        $config = makeQueueConfig(['minWorkers' => 1, 'maxWorkers' => 12]);
+
+        // Build stable history at target=12 using heavy backlog near SLA breach.
+        // pending=100, oldestJobAge=27 (90% of SLA=30) produces backlog drain >> 12,
+        // which clamps to max=12.
+        for ($i = 0; $i < 5; $i++) {
+            $metrics = createMetrics([
+                'throughput_per_minute' => 1440.0,
+                'active_workers' => 12,
+                'pending' => 100,
+                'oldest_job_age' => 27, // 27/30 = 90% → heavy backlog drain
+                'avg_duration' => 0.28,
+            ]);
+            $target = $this->strategy->calculateTargetWorkers($metrics, $config);
+
+            $history = $this->arrivalEstimator->getHistory();
+            if (! empty($history)) {
+                $key = array_key_first($history);
+                foreach ($history[$key] as &$snapshot) {
+                    $snapshot['timestamp'] -= 5;
+                }
+                unset($snapshot);
+
+                $reflection = new ReflectionClass($this->arrivalEstimator);
+                $historyProperty = $reflection->getProperty('history');
+                $historyProperty->setValue($this->arrivalEstimator, $history);
+            }
+        }
+
+        // Verify warm-up actually reached 12
+        expect($target)->toBe(12);
+
+        // Now pending drops to 0 — Little's Law gives ~7, well below the previous 12
+        $history = $this->arrivalEstimator->getHistory();
+        if (! empty($history)) {
+            $key = array_key_first($history);
+            foreach ($history[$key] as &$snapshot) {
+                $snapshot['timestamp'] -= 5;
+            }
+            unset($snapshot);
+
+            $reflection = new ReflectionClass($this->arrivalEstimator);
+            $historyProperty = $reflection->getProperty('history');
+            $historyProperty->setValue($this->arrivalEstimator, $history);
+        }
+
+        $dropMetrics = createMetrics([
+            'throughput_per_minute' => 1440.0,
+            'active_workers' => 12,
+            'pending' => 0,
+            'oldest_job_age' => 0,
+            'avg_duration' => 0.28,
+        ]);
+
+        $target = $this->strategy->calculateTargetWorkers($dropMetrics, $config);
+        $reason = $this->strategy->getLastReason();
+
+        // Target should be dampened: strategy wants ~7, smoother limits to 11
+        expect($target)->toBeGreaterThanOrEqual(11)
+            ->and($reason)->toContain('dampened');
+    });
+});
