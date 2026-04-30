@@ -22,7 +22,7 @@ class CapacityCalculator
 
     private ?float $cachedTotalMemoryMb = null;
 
-    private ?float $cachedAvailableCores = null;
+    private ?int $cachedAvailableCores = null;
 
     private ?float $cacheTimestamp = null;
 
