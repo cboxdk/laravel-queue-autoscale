@@ -171,6 +171,76 @@ LUA;
         return $this->redis()->ping();
     }
 
+    /**
+     * Persist a scaling decision to the rolling history sorted set.
+     *
+     * @param  array<string, mixed>  $decision
+     */
+    public function recordDecision(array $decision): void
+    {
+        $redis = $this->redis();
+        $now = microtime(true);
+
+        $decision['recorded_at'] = $now;
+
+        $redis->zadd($this->decisionsHistoryKey(), [
+            json_encode($decision, JSON_THROW_ON_ERROR) => $now,
+        ]);
+
+        $maxSeconds = AutoscaleConfiguration::decisionHistorySeconds();
+        $maxEntries = AutoscaleConfiguration::decisionHistoryMax();
+
+        $redis->zremrangebyscore(
+            $this->decisionsHistoryKey(),
+            '-inf',
+            (string) ($now - $maxSeconds),
+        );
+
+        $redis->zremrangebyrank(
+            $this->decisionsHistoryKey(),
+            0,
+            -($maxEntries + 1),
+        );
+    }
+
+    /**
+     * Retrieve recent decisions within the given time window.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function recentDecisions(int $seconds): array
+    {
+        $members = $this->redis()->zrangebyscore(
+            $this->decisionsHistoryKey(),
+            (string) (microtime(true) - $seconds),
+            '+inf',
+        );
+
+        if (! is_array($members)) {
+            return [];
+        }
+
+        $decisions = [];
+
+        foreach ($members as $json) {
+            if (! is_string($json) || $json === '') {
+                continue;
+            }
+
+            try {
+                $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+            } catch (\JsonException) {
+                continue;
+            }
+
+            if (is_array($decoded)) {
+                $decisions[] = $decoded;
+            }
+        }
+
+        return $decisions;
+    }
+
     private function currentTimestamp(): int
     {
         return (int) round(microtime(true) * 1000);
@@ -199,6 +269,11 @@ LUA;
     private function summaryKey(): string
     {
         return $this->key('summary');
+    }
+
+    private function decisionsHistoryKey(): string
+    {
+        return $this->key('decisions:history');
     }
 
     private function key(string $suffix): string
