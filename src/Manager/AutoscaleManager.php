@@ -461,7 +461,6 @@ final class AutoscaleManager
         // Phase C: Distribute adjusted targets across hosts, build workload
         // summaries, and record scaling decisions + SLA events.
         $workloads = [];
-        $scalingDecisions = [];
 
         foreach ($adjustedTargets as $workloadKey => $targetWorkers) {
             $meta = $workloadMeta[$workloadKey];
@@ -516,7 +515,6 @@ final class AutoscaleManager
                     'reason' => $reason,
                 ];
 
-                $scalingDecisions[] = $decisionEntry;
                 $this->clusterStore->recordDecision($decisionEntry);
             }
 
