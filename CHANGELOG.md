@@ -5,6 +5,21 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.6.1 — Restore scaling decision logging in cluster mode - 2026-04-30
+
+### Fixed
+
+- **Scaling decisions now recorded in cluster mode** — The cluster evaluation path (`evaluateAndPublishClusterRecommendations`) was missing decision logging entirely. The `scaling_decisions` array in the cluster summary was always empty, causing downstream dashboard cards (Total Decisions, Scale Ups, Scale Downs, SLA Breaches, SLA Recoveries, Predictions) to show 0. Scaling decisions are now recorded in Phase C of the cluster evaluation loop for every workload where target differs from current workers. (#20)
+- **`ScalingDecisionMade` events now fired in cluster mode** — The event was only dispatched in the non-cluster path (`evaluateQueue`/`evaluateGroup`). It is now fired for every workload evaluated by the cluster leader.
+- **SLA breach/recovery events now fired in cluster mode** — `SlaBreached`, `SlaRecovered`, and `SlaBreachPredicted` events were missing from the cluster evaluation path. They are now emitted with the same semantics as the non-cluster path.
+
+### Testing
+
+- 545 tests, 1549 assertions
+- New test suite: `ClusterScalingDecisionsTest` (4 tests)
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.6.0...v3.6.1
+
 ## v3.6.0 — Fair-share allocation between queues - 2026-04-30
 
 ### Added
