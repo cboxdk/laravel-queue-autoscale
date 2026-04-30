@@ -505,7 +505,7 @@ final class AutoscaleManager
             );
 
             if (! $decision->shouldHold()) {
-                $scalingDecisions[] = [
+                $decisionEntry = [
                     'workload_key' => $workloadKey,
                     'type' => $meta['type'],
                     'connection' => $meta['connection'],
@@ -515,6 +515,9 @@ final class AutoscaleManager
                     'action' => $decision->action(),
                     'reason' => $reason,
                 ];
+
+                $scalingDecisions[] = $decisionEntry;
+                $this->clusterStore->recordDecision($decisionEntry);
             }
 
             event(new ScalingDecisionMade($decision));
@@ -570,7 +573,10 @@ final class AutoscaleManager
             );
         }
 
-        $summary = $this->buildClusterSummary($activeManagers, $workloads, $scalingDecisions);
+        $recentDecisions = $this->clusterStore->recentDecisions(
+            AutoscaleConfiguration::decisionHistorySeconds()
+        );
+        $summary = $this->buildClusterSummary($activeManagers, $workloads, $recentDecisions);
         $this->clusterStore->publishSummary($summary);
         event(new ClusterSummaryPublished(
             clusterId: $this->clusterString($summary['cluster_id'] ?? null),
@@ -867,7 +873,7 @@ final class AutoscaleManager
     /**
      * @param  array<int, ClusterManagerState>  $activeManagers
      * @param  array<int, array<string, int|float|string|list<string>>>  $workloads
-     * @param  array<int, array<string, string|int>>  $scalingDecisions
+     * @param  array<int, array<string, mixed>>  $scalingDecisions
      * @return array<string, mixed>
      */
     private function buildClusterSummary(array $activeManagers, array $workloads, array $scalingDecisions = []): array
