@@ -5,6 +5,19 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.6.2 — Fix worker pool thrashing in cluster distribution layer - 2026-04-30
+
+### Fixed
+
+- **Stable target now produces stable worker assignments** — `distributeClusterTarget()` sorted managers by live heartbeat worker counts, which fluctuate tick-to-tick as workers spawn and die. Different sort orders produced different per-host assignments each cycle, causing workers to be killed on one host and respawned on another every 2–3 seconds despite an unchanged cluster-wide target. The distribution layer now caches previous assignments and reuses them when the target, manager set, and per-host capacity are all unchanged. Fresh computation only triggers when the target actually changes, a manager joins or leaves, or capacity constraints shift. (#21)
+
+### Testing
+
+- 550 tests, 1595 assertions
+- 6 new tests in `ClusterDistributeTargetTest`, including a 30-cycle stability invariant
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.6.1...v3.6.2
+
 ## v3.6.1 — Restore scaling decision logging in cluster mode - 2026-04-30
 
 ### Fixed
