@@ -17,3 +17,9 @@ parameters:
 			identifier: deadCode.unreachable
 			count: 1
 			path: src/Workers/WorkerTerminator.php
+
+		-
+			message: '#^Property Cbox\\LaravelQueueAutoscale\\Scaling\\Calculators\\CapacityCalculator\:\:\$cachedAvailableCores \(float\|null\) is never assigned float so it can be removed from the property type\.$#'
+			identifier: property.unusedType
+			count: 1
+			path: src/Scaling/Calculators/CapacityCalculator.php
