@@ -33,6 +33,18 @@ return [
     | Each value can be a ProfileContract class OR an array of partial overrides
     | that merges with sla_defaults.
     |
+    | Optional 'resources' key declares per-queue CPU/memory estimates for
+    | capacity calculations. These override the global limits when measured
+    | data is not yet available (cold start). Once the autoscaler has enough
+    | measured samples, measured values take precedence automatically.
+    |
+    |   'slow' => [
+    |       'resources' => [
+    |           'cpu_cores'  => 0.5,    // CPU cores per worker (default: limits.worker_cpu_core_estimate)
+    |           'memory_mb'  => 2048,   // Memory MB per worker (default: limits.worker_memory_mb_estimate)
+    |       ],
+    |   ],
+    |
     */
     'queues' => [
         // 'payments' => CriticalProfile::class,

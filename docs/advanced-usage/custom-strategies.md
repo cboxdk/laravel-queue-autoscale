@@ -669,7 +669,8 @@ use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 it('integrates with scaling engine', function () {
     $strategy = new SimpleRateBasedStrategy();
     $capacity = app(\Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator::class);
-    $engine = new ScalingEngine($strategy, $capacity);
+    $resolver = app(\Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver::class);
+    $engine = new ScalingEngine($strategy, $capacity, $resolver);
 
     $metrics = (object) [
         'processingRate' => 10.0,

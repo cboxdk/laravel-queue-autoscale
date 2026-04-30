@@ -6,6 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Policies;
 
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\ResourceEstimate;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 /**
@@ -43,7 +44,10 @@ final readonly class NoScaleDownPolicy implements ScalingPolicy
 
         // Check if scale-down is forced by resource constraints
         // If current workers exceed system capacity, we must scale down for stability
-        $capacityResult = $this->capacity->calculateMaxWorkers();
+        $capacityResult = $this->capacity->calculateMaxWorkers(
+            $decision->currentWorkers,
+            ResourceEstimate::globalDefault(),
+        );
         if ($decision->currentWorkers > $capacityResult->finalMaxWorkers) {
             // Let resource-constrained scale-down proceed to maintain system stability
             return null;

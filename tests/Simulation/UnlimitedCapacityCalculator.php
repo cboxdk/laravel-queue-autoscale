@@ -6,6 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Tests\Simulation;
 
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\ResourceEstimate;
 
 /**
  * Capacity calculator that always returns unlimited capacity.
@@ -15,7 +16,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
  */
 final class UnlimitedCapacityCalculator extends CapacityCalculator
 {
-    public function calculateMaxWorkers(int $currentWorkers = 0): CapacityCalculationResult
+    public function calculateMaxWorkers(int $currentWorkers, ResourceEstimate $estimate): CapacityCalculationResult
     {
         return new CapacityCalculationResult(
             maxWorkersByCpu: PHP_INT_MAX,

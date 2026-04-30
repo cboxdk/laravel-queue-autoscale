@@ -339,6 +339,38 @@ final readonly class AutoscaleConfiguration
         return $result;
     }
 
+    /**
+     * Get per-queue resource overrides.
+     *
+     * Returns the 'resources' sub-array from the queue's config entry,
+     * or an empty array if not configured. Valid keys: 'cpu_cores', 'memory_mb'.
+     * Unknown keys are preserved for forward compatibility.
+     *
+     * @return array<string, float|int>
+     */
+    public static function queueResources(string $queue): array
+    {
+        $queueConfig = config("queue-autoscale.queues.{$queue}");
+
+        if (! is_array($queueConfig)) {
+            return [];
+        }
+
+        $resources = $queueConfig['resources'] ?? null;
+
+        if (! is_array($resources)) {
+            return [];
+        }
+
+        /** @var array<string, float|int> $filtered */
+        $filtered = array_filter(
+            $resources,
+            static fn (mixed $value): bool => is_int($value) || is_float($value),
+        );
+
+        return $filtered;
+    }
+
     private static function intConfig(string $key, int $default): int
     {
         return self::intValue(config($key, $default), $default);

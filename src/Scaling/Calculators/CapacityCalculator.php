@@ -6,6 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Scaling\Calculators;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\ResourceEstimate;
 use Cbox\SystemMetrics\SystemMetrics;
 
 class CapacityCalculator
@@ -26,28 +27,10 @@ class CapacityCalculator
     private ?float $cacheTimestamp = null;
 
     /**
-     * Measured CPU core usage per worker derived from actual job processing metrics.
-     * When set, takes precedence over the config-based estimate.
-     */
-    private ?float $measuredWorkerCpuCoreEstimate = null;
-
-    /**
      * How long cached metrics remain valid (seconds).
      * Should be shorter than the evaluation interval to ensure fresh data each tick.
      */
     private const CACHE_TTL_SECONDS = 4.0;
-
-    /**
-     * Set measured CPU core estimate from actual job processing data.
-     *
-     * This value represents the average fraction of a CPU core each worker
-     * consumes during job processing (e.g. 0.15 = 15% of one core).
-     * When set, this takes precedence over the config-based worker_cpu_core_estimate.
-     */
-    public function setMeasuredWorkerCpuCoreEstimate(?float $estimate): void
-    {
-        $this->measuredWorkerCpuCoreEstimate = $estimate;
-    }
 
     /**
      * Calculate maximum workers with detailed capacity breakdown
@@ -61,7 +44,7 @@ class CapacityCalculator
      * @param  int  $currentWorkers  Total workers currently running across all queues (for accurate capacity math)
      * @return CapacityCalculationResult Detailed capacity analysis with system-wide max workers
      */
-    public function calculateMaxWorkers(int $currentWorkers = 0): CapacityCalculationResult
+    public function calculateMaxWorkers(int $currentWorkers, ResourceEstimate $estimate): CapacityCalculationResult
     {
         // Refresh system metrics if cache is stale or empty
         if (! $this->isCacheValid()) {
@@ -92,11 +75,8 @@ class CapacityCalculator
         $reserveCores = AutoscaleConfiguration::reserveCpuCores();
         $usableCores = max($this->cachedAvailableCores - $reserveCores, 0);
 
-        $workerCpuCoreEstimate = max(
-            $this->measuredWorkerCpuCoreEstimate ?? AutoscaleConfiguration::workerCpuCoreEstimate(),
-            0.01
-        );
-        $cpuEstimateSource = $this->measuredWorkerCpuCoreEstimate !== null ? 'measured' : 'config';
+        $workerCpuCoreEstimate = max($estimate->cpuCoresPerWorker, 0.01);
+        $cpuEstimateSource = $estimate->cpuSource->value;
 
         $availableCoreEquivalents = $usableCores * ($availableCpuPercent / 100);
         $additionalWorkersByCpu = (int) floor($availableCoreEquivalents / $workerCpuCoreEstimate);
@@ -107,7 +87,7 @@ class CapacityCalculator
         $currentMemoryPercent = $this->cachedMemoryPercent ?? 50.0;
 
         $availableMemoryPercent = max($maxMemoryPercent - $currentMemoryPercent, 0);
-        $workerMemoryMb = AutoscaleConfiguration::workerMemoryMbEstimate();
+        $workerMemoryMb = max($estimate->memoryMbPerWorker, 1.0);
         $totalMemoryMb = $this->cachedTotalMemoryMb ?? 4096.0;
 
         // Calculate additional workers we can add based on available memory
@@ -155,6 +135,7 @@ class CapacityCalculator
                 'available_memory_percent' => $availableMemoryPercent,
                 'total_memory_mb' => $totalMemoryMb,
                 'worker_memory_mb' => $workerMemoryMb,
+                'memory_estimate_source' => $estimate->memorySource->value,
             ],
         ];
 

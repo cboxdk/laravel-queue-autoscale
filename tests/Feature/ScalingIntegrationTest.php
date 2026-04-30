@@ -6,6 +6,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Illuminate\Support\Facades\Event;
@@ -67,7 +68,7 @@ it('integrates with custom scaling strategies', function () {
 
     // Create engine with custom strategy
     $capacity = app(CapacityCalculator::class);
-    $customEngine = new ScalingEngine($customStrategy, $capacity);
+    $customEngine = new ScalingEngine($customStrategy, $capacity, new ResourceEstimateResolver);
 
     $metrics = createMetrics([
         'throughput_per_minute' => 600.0, // 10.0 jobs/sec * 60

@@ -32,6 +32,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\ModerateForecastPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Support\ManagerProcessLock;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
@@ -67,6 +68,7 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
         $this->app->singleton(LittlesLawCalculator::class);
         $this->app->singleton(BacklogDrainCalculator::class);
         $this->app->singleton(CapacityCalculator::class);
+        $this->app->singleton(ResourceEstimateResolver::class);
         $this->app->singleton(ArrivalRateEstimator::class);
 
         // Register v2 contracts with their default implementations
