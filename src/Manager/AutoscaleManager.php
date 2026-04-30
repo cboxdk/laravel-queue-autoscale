@@ -450,11 +450,14 @@ final class AutoscaleManager
         $scalableTargets = $allocator->allocate($scalableDemands, $scalableConfigs, $scalableCapacity);
         $adjustedTargets = $pinnedDemands + $scalableTargets;
 
-        // Phase C: Distribute adjusted targets across hosts and build workload summaries
+        // Phase C: Distribute adjusted targets across hosts, build workload
+        // summaries, and record scaling decisions + SLA events.
         $workloads = [];
+        $scalingDecisions = [];
 
         foreach ($adjustedTargets as $workloadKey => $targetWorkers) {
             $meta = $workloadMeta[$workloadKey];
+            $currentWorkers = $meta['current_workers'];
             $workloadAssignments = $this->distributeClusterTarget($activeManagers, $workloadKey, $targetWorkers, $assignedTotals);
 
             foreach ($workloadAssignments as $managerId => $target) {
@@ -466,7 +469,7 @@ final class AutoscaleManager
                 'connection' => $meta['connection'],
                 'name' => $meta['name'],
                 'driver' => $meta['driver'],
-                'current_workers' => $meta['current_workers'],
+                'current_workers' => $currentWorkers,
                 'target_workers' => $targetWorkers,
                 'worker_min' => $meta['config']->workers->min,
                 'worker_max' => $meta['config']->workers->max,
@@ -478,8 +481,67 @@ final class AutoscaleManager
                 'active_workers' => $meta['metrics']->activeWorkers,
                 'utilization_percent' => round($meta['metrics']->utilizationRate, 1),
                 'member_queues' => $meta['member_queues'],
-                'action' => $targetWorkers <=> $meta['current_workers'],
+                'action' => $targetWorkers <=> $currentWorkers,
             ];
+
+            // Record scaling decision and fire events for this workload
+            $reason = $targetWorkers > $currentWorkers ? 'cluster:scale_up' : ($targetWorkers < $currentWorkers ? 'cluster:scale_down' : 'cluster:hold');
+
+            $decision = new ScalingDecision(
+                connection: $meta['connection'],
+                queue: $meta['name'],
+                currentWorkers: $currentWorkers,
+                targetWorkers: $targetWorkers,
+                reason: $reason,
+                slaTarget: $meta['config']->sla->targetSeconds,
+            );
+
+            if (! $decision->shouldHold()) {
+                $scalingDecisions[] = [
+                    'workload_key' => $workloadKey,
+                    'type' => $meta['type'],
+                    'connection' => $meta['connection'],
+                    'name' => $meta['name'],
+                    'from' => $currentWorkers,
+                    'to' => $targetWorkers,
+                    'action' => $decision->action(),
+                    'reason' => $reason,
+                ];
+            }
+
+            event(new ScalingDecisionMade($decision));
+
+            // SLA breach/recovery tracking
+            $slaTarget = $meta['config']->sla->targetSeconds;
+            $isBreaching = $meta['metrics']->oldestJobAge > 0 && $meta['metrics']->oldestJobAge >= $slaTarget;
+            $breachKey = ($meta['type'] === 'group' ? 'group:' : '')."{$meta['connection']}:{$meta['name']}";
+            $wasBreaching = $this->breachState[$breachKey] ?? false;
+
+            if ($isBreaching && ! $wasBreaching) {
+                event(new SlaBreached(
+                    connection: $meta['connection'],
+                    queue: $meta['name'],
+                    oldestJobAge: $meta['metrics']->oldestJobAge,
+                    slaTarget: $slaTarget,
+                    pending: $meta['metrics']->pending,
+                    activeWorkers: $meta['metrics']->activeWorkers,
+                ));
+            } elseif (! $isBreaching && $wasBreaching) {
+                event(new SlaRecovered(
+                    connection: $meta['connection'],
+                    queue: $meta['name'],
+                    currentJobAge: $meta['metrics']->oldestJobAge,
+                    slaTarget: $slaTarget,
+                    pending: $meta['metrics']->pending,
+                    activeWorkers: $meta['metrics']->activeWorkers,
+                ));
+            }
+
+            $this->breachState[$breachKey] = $isBreaching;
+
+            if ($decision->isSlaBreachRisk()) {
+                event(new SlaBreachPredicted($decision));
+            }
         }
 
         $issuedAt = $this->currentTimestamp();
@@ -494,7 +556,7 @@ final class AutoscaleManager
             );
         }
 
-        $summary = $this->buildClusterSummary($activeManagers, $workloads);
+        $summary = $this->buildClusterSummary($activeManagers, $workloads, $scalingDecisions);
         $this->clusterStore->publishSummary($summary);
         event(new ClusterSummaryPublished(
             clusterId: $this->clusterString($summary['cluster_id'] ?? null),
@@ -745,9 +807,10 @@ final class AutoscaleManager
     /**
      * @param  array<int, ClusterManagerState>  $activeManagers
      * @param  array<int, array<string, int|float|string|list<string>>>  $workloads
+     * @param  array<int, array<string, string|int>>  $scalingDecisions
      * @return array<string, mixed>
      */
-    private function buildClusterSummary(array $activeManagers, array $workloads): array
+    private function buildClusterSummary(array $activeManagers, array $workloads, array $scalingDecisions = []): array
     {
         $workloadSortKey = static function (array $workload): string {
             $type = is_string($workload['type'] ?? null) ? $workload['type'] : '';
@@ -825,6 +888,7 @@ final class AutoscaleManager
 
                 return $workload;
             }, $workloads),
+            'scaling_decisions' => $scalingDecisions,
         ];
     }
 
