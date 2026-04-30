@@ -99,6 +99,14 @@ final class AutoscaleManager
     /** @var list<string> */
     private array $lastObservedManagerIds = [];
 
+    /**
+     * Cached per-workload host distributions from the previous cycle.
+     * Used to prevent thrashing when the cluster-wide target is unchanged.
+     *
+     * @var array<string, array<string, int>> workloadKey => [managerId => assignedWorkers]
+     */
+    private array $previousDistributions = [];
+
     public function __construct(
         private readonly ScalingEngine $engine,
         private readonly WorkerSpawner $spawner,
@@ -544,6 +552,12 @@ final class AutoscaleManager
             }
         }
 
+        // Prune cached distributions for workloads no longer present
+        $this->previousDistributions = array_intersect_key(
+            $this->previousDistributions,
+            $adjustedTargets,
+        );
+
         $issuedAt = $this->currentTimestamp();
 
         foreach ($managerIds as $managerId) {
@@ -674,7 +688,51 @@ final class AutoscaleManager
         }
 
         if ($targetWorkers <= 0 || $activeManagers === []) {
+            $this->previousDistributions[$workloadKey] = $targets;
+
             return $targets;
+        }
+
+        // Reuse previous distribution when target is unchanged and all
+        // cached assignments still fit within each host's remaining capacity.
+        // This prevents worker pool thrashing caused by sort-order instability
+        // when reported current counts fluctuate between heartbeats.
+        $cached = $this->previousDistributions[$workloadKey] ?? null;
+
+        if ($cached !== null && array_sum($cached) === $targetWorkers) {
+            $activeManagerIds = array_map(
+                static fn (ClusterManagerState $state): string => $state->managerId,
+                $activeManagers,
+            );
+            sort($activeManagerIds);
+
+            $cachedManagerIds = array_keys($cached);
+            sort($cachedManagerIds);
+
+            if ($activeManagerIds === $cachedManagerIds) {
+                $maxWorkersMap = [];
+                foreach ($activeManagers as $state) {
+                    $maxWorkersMap[$state->managerId] = $state->maxWorkers;
+                }
+
+                $feasible = true;
+                foreach ($cached as $managerId => $cachedCount) {
+                    $available = $maxWorkersMap[$managerId] - ($assignedTotals[$managerId] ?? 0);
+                    if ($cachedCount > $available) {
+                        $feasible = false;
+                        break;
+                    }
+                }
+
+                if ($feasible) {
+                    foreach ($cached as $managerId => $cachedCount) {
+                        $targets[$managerId] = $cachedCount;
+                        $assignedTotals[$managerId] += $cachedCount;
+                    }
+
+                    return $targets;
+                }
+            }
         }
 
         [$type, $connection, $name] = explode(':', $workloadKey, 3);
@@ -733,6 +791,8 @@ final class AutoscaleManager
             $assignedTotals[$chosen->managerId]++;
             $remaining--;
         }
+
+        $this->previousDistributions[$workloadKey] = $targets;
 
         return $targets;
     }
