@@ -106,6 +106,16 @@ final readonly class AutoscaleConfiguration
         return self::intConfig('queue-autoscale.cluster.summary_ttl_seconds', 30);
     }
 
+    public static function decisionHistorySeconds(): int
+    {
+        return self::intConfig('queue-autoscale.cluster.decision_history_seconds', 3600);
+    }
+
+    public static function decisionHistoryMax(): int
+    {
+        return self::intConfig('queue-autoscale.cluster.decision_history_max', 10000);
+    }
+
     private static function managerIdentitySource(): string
     {
         $parts = [];

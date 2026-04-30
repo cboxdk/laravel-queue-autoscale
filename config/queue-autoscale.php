@@ -210,6 +210,8 @@ return [
         'leader_lease_seconds' => env('QUEUE_AUTOSCALE_CLUSTER_LEADER_LEASE', 15),
         'recommendation_ttl_seconds' => env('QUEUE_AUTOSCALE_CLUSTER_RECOMMENDATION_TTL', 30),
         'summary_ttl_seconds' => env('QUEUE_AUTOSCALE_CLUSTER_SUMMARY_TTL', 30),
+        'decision_history_seconds' => env('QUEUE_AUTOSCALE_DECISION_HISTORY', 3600),
+        'decision_history_max' => env('QUEUE_AUTOSCALE_DECISION_HISTORY_MAX', 10000),
     ],
 
     'strategy' => HybridStrategy::class,
