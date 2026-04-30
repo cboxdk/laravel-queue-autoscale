@@ -245,3 +245,82 @@ it('includes scale_down decisions in scaling_decisions array', function () {
         ->and($summary['scaling_decisions'][0]['from'])->toBe(8)
         ->and($summary['scaling_decisions'][0]['to'])->toBe(2);
 });
+
+it('cluster summary receives historical decisions from ClusterStore', function () {
+    config()->set('queue-autoscale.cluster.enabled', true);
+    config()->set('queue-autoscale.cluster.app_id', 'test-cluster');
+    config()->set('queue-autoscale.cluster.decision_history_seconds', 3600);
+    config()->set('queue-autoscale.cluster.decision_history_max', 10000);
+
+    $managers = [makeSummaryManagerState('mgr-1', maxWorkers: 10, totalWorkers: 5)];
+    $workloads = [
+        [
+            'type' => 'queue',
+            'connection' => 'redis',
+            'name' => 'default',
+            'driver' => 'redis',
+            'current_workers' => 5,
+            'target_workers' => 5,
+            'worker_min' => 1,
+            'worker_max' => 10,
+            'sla_target_seconds' => 30,
+            'pending' => 0,
+            'oldest_job_age' => 0,
+            'oldest_job_age_status' => 'normal',
+            'throughput_per_minute' => 10.0,
+            'active_workers' => 5,
+            'utilization_percent' => 20.0,
+            'member_queues' => ['default'],
+            'action' => 0,
+        ],
+    ];
+
+    // Simulate historical decisions that were recorded in prior cycles
+    $historicalDecisions = [
+        [
+            'workload_key' => 'queue:redis:default',
+            'type' => 'queue',
+            'connection' => 'redis',
+            'name' => 'default',
+            'from' => 1,
+            'to' => 5,
+            'action' => 'scale_up',
+            'reason' => 'cluster:scale_up',
+            'recorded_at' => microtime(true) - 300,
+        ],
+        [
+            'workload_key' => 'queue:redis:default',
+            'type' => 'queue',
+            'connection' => 'redis',
+            'name' => 'default',
+            'from' => 5,
+            'to' => 8,
+            'action' => 'scale_up',
+            'reason' => 'cluster:scale_up',
+            'recorded_at' => microtime(true) - 120,
+        ],
+        [
+            'workload_key' => 'queue:redis:default',
+            'type' => 'queue',
+            'connection' => 'redis',
+            'name' => 'default',
+            'from' => 8,
+            'to' => 5,
+            'action' => 'scale_down',
+            'reason' => 'cluster:scale_down',
+            'recorded_at' => microtime(true) - 60,
+        ],
+    ];
+
+    // buildClusterSummary accepts historical decisions the same as current-cycle ones
+    $summary = invokeBuildClusterSummary($managers, $workloads, $historicalDecisions);
+
+    expect($summary['scaling_decisions'])->toHaveCount(3)
+        ->and($summary['scaling_decisions'][0]['recorded_at'])->toBeFloat()
+        ->and($summary['scaling_decisions'][0]['action'])->toBe('scale_up')
+        ->and($summary['scaling_decisions'][0]['from'])->toBe(1)
+        ->and($summary['scaling_decisions'][0]['to'])->toBe(5)
+        ->and($summary['scaling_decisions'][2]['action'])->toBe('scale_down')
+        ->and($summary['scaling_decisions'][2]['from'])->toBe(8)
+        ->and($summary['scaling_decisions'][2]['to'])->toBe(5);
+});
