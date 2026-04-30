@@ -174,6 +174,9 @@ LUA;
     /**
      * Persist a scaling decision to the rolling history sorted set.
      *
+     * Uses a Lua script to atomically add, time-prune, and count-prune
+     * in a single round-trip.
+     *
      * @param  array<string, mixed>  $decision
      */
     public function recordDecision(array $decision): void
@@ -183,24 +186,24 @@ LUA;
 
         $decision['recorded_at'] = $now;
 
-        $redis->zadd($this->decisionsHistoryKey(), [
-            json_encode($decision, JSON_THROW_ON_ERROR) => $now,
-        ]);
+        $key = $this->decisionsHistoryKey();
+        $member = json_encode($decision, JSON_THROW_ON_ERROR);
+        $score = (string) $now;
+        $cutoff = (string) ($now - AutoscaleConfiguration::decisionHistorySeconds());
+        $rankStop = (string) -(AutoscaleConfiguration::decisionHistoryMax() + 1);
 
-        $maxSeconds = AutoscaleConfiguration::decisionHistorySeconds();
-        $maxEntries = AutoscaleConfiguration::decisionHistoryMax();
+        $script = <<<'LUA'
+redis.call('zadd', KEYS[1], ARGV[1], ARGV[2])
+redis.call('zremrangebyscore', KEYS[1], '-inf', ARGV[3])
+redis.call('zremrangebyrank', KEYS[1], 0, tonumber(ARGV[4]))
+return 1
+LUA;
 
-        $redis->zremrangebyscore(
-            $this->decisionsHistoryKey(),
-            '-inf',
-            (string) ($now - $maxSeconds),
-        );
-
-        $redis->zremrangebyrank(
-            $this->decisionsHistoryKey(),
-            0,
-            -($maxEntries + 1),
-        );
+        if ($redis instanceof PhpRedisConnection) {
+            $redis->command('eval', [$script, [$key, $score, $member, $cutoff, $rankStop], 1]);
+        } else {
+            $redis->command('eval', [$script, 1, $key, $score, $member, $cutoff, $rankStop]);
+        }
     }
 
     /**

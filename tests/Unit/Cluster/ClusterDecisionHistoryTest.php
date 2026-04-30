@@ -3,13 +3,14 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
+use Illuminate\Redis\Connections\Connection;
 use Illuminate\Support\Facades\Redis;
 use Mockery\MockInterface;
 
 /**
  * Build a sample decision array for testing.
  *
- * @param array<string, mixed> $overrides
+ * @param  array<string, mixed>  $overrides
  * @return array<string, mixed>
  */
 function makeDecision(array $overrides = []): array
@@ -26,26 +27,40 @@ function makeDecision(array $overrides = []): array
     ], $overrides);
 }
 
+/**
+ * Extract the member JSON string from a recordDecision eval call.
+ *
+ * For a generic Connection, command('eval', [...]) receives:
+ *   [script, numkeys, key, score, member, cutoff, rankStop]
+ *
+ * @param  array<int, mixed>  $evalArgs
+ */
+function extractMemberFromEvalArgs(array $evalArgs): string
+{
+    return (string) $evalArgs[4];
+}
+
 it('records a decision and retrieves it via recentDecisions', function () {
     config()->set('queue-autoscale.cluster.decision_history_seconds', 3600);
     config()->set('queue-autoscale.cluster.decision_history_max', 10000);
 
-    $stored = [];
-    $connection = Mockery::mock(\Illuminate\Redis\Connections\Connection::class, function (MockInterface $mock) use (&$stored): void {
-        $mock->shouldReceive('zadd')
+    $storedMember = null;
+    $connection = Mockery::mock(Connection::class, function (MockInterface $mock) use (&$storedMember): void {
+        $mock->shouldReceive('command')
             ->once()
-            ->withArgs(function (string $key, mixed $members) use (&$stored): bool {
-                expect($key)->toContain('decisions:history');
-                $stored = $members;
+            ->withArgs(function (string $cmd, array $args) use (&$storedMember): bool {
+                if ($cmd !== 'eval') {
+                    return false;
+                }
+
+                $storedMember = extractMemberFromEvalArgs($args);
 
                 return true;
             });
-        $mock->shouldReceive('zremrangebyscore')->once();
-        $mock->shouldReceive('zremrangebyrank')->once();
         $mock->shouldReceive('zrangebyscore')
             ->once()
-            ->andReturnUsing(function () use (&$stored): array {
-                return array_keys($stored);
+            ->andReturnUsing(function () use (&$storedMember): array {
+                return [$storedMember];
             });
     });
 
@@ -65,7 +80,7 @@ it('records a decision and retrieves it via recentDecisions', function () {
 });
 
 it('returns empty array when no decisions exist', function () {
-    $connection = Mockery::mock(\Illuminate\Redis\Connections\Connection::class, function (MockInterface $mock): void {
+    $connection = Mockery::mock(Connection::class, function (MockInterface $mock): void {
         $mock->shouldReceive('zrangebyscore')
             ->once()
             ->andReturn([]);
@@ -84,16 +99,18 @@ it('adds recorded_at timestamp to each decision', function () {
     config()->set('queue-autoscale.cluster.decision_history_max', 10000);
 
     $storedJson = null;
-    $connection = Mockery::mock(\Illuminate\Redis\Connections\Connection::class, function (MockInterface $mock) use (&$storedJson): void {
-        $mock->shouldReceive('zadd')
+    $connection = Mockery::mock(Connection::class, function (MockInterface $mock) use (&$storedJson): void {
+        $mock->shouldReceive('command')
             ->once()
-            ->withArgs(function (string $key, mixed $members) use (&$storedJson): bool {
-                $storedJson = array_key_first($members);
+            ->withArgs(function (string $cmd, array $args) use (&$storedJson): bool {
+                if ($cmd !== 'eval') {
+                    return false;
+                }
+
+                $storedJson = extractMemberFromEvalArgs($args);
 
                 return true;
             });
-        $mock->shouldReceive('zremrangebyscore')->once();
-        $mock->shouldReceive('zremrangebyrank')->once();
     });
 
     Redis::shouldReceive('connection')->andReturn($connection);
@@ -114,16 +131,18 @@ it('accumulates decisions across multiple recording calls', function () {
     config()->set('queue-autoscale.cluster.decision_history_max', 10000);
 
     $allStored = [];
-    $connection = Mockery::mock(\Illuminate\Redis\Connections\Connection::class, function (MockInterface $mock) use (&$allStored): void {
-        $mock->shouldReceive('zadd')
+    $connection = Mockery::mock(Connection::class, function (MockInterface $mock) use (&$allStored): void {
+        $mock->shouldReceive('command')
             ->times(3)
-            ->withArgs(function (string $key, mixed $members) use (&$allStored): bool {
-                $allStored[] = array_key_first($members);
+            ->withArgs(function (string $cmd, array $args) use (&$allStored): bool {
+                if ($cmd !== 'eval') {
+                    return false;
+                }
+
+                $allStored[] = extractMemberFromEvalArgs($args);
 
                 return true;
             });
-        $mock->shouldReceive('zremrangebyscore')->times(3);
-        $mock->shouldReceive('zremrangebyrank')->times(3);
         $mock->shouldReceive('zrangebyscore')
             ->once()
             ->andReturnUsing(function () use (&$allStored): array {
@@ -146,28 +165,25 @@ it('accumulates decisions across multiple recording calls', function () {
         ->and($recent[2]['name'])->toBe('batch');
 });
 
-it('calls zremrangebyscore with configured time window for pruning', function () {
+it('passes correct time-based pruning cutoff to Lua script', function () {
     config()->set('queue-autoscale.cluster.decision_history_seconds', 1800);
     config()->set('queue-autoscale.cluster.decision_history_max', 500);
 
-    $connection = Mockery::mock(\Illuminate\Redis\Connections\Connection::class, function (MockInterface $mock): void {
-        $mock->shouldReceive('zadd')->once();
-        $mock->shouldReceive('zremrangebyscore')
+    $connection = Mockery::mock(Connection::class, function (MockInterface $mock): void {
+        $mock->shouldReceive('command')
             ->once()
-            ->withArgs(function (string $key, string $min, string $max): bool {
-                expect($min)->toBe('-inf');
-                $cutoff = (float) $max;
+            ->withArgs(function (string $cmd, array $args): bool {
+                if ($cmd !== 'eval') {
+                    return false;
+                }
+
+                $cutoff = (float) $args[5];
                 $expectedCutoff = microtime(true) - 1800;
                 expect($cutoff)->toBeGreaterThanOrEqual($expectedCutoff - 1)
                     ->toBeLessThanOrEqual($expectedCutoff + 1);
 
-                return true;
-            });
-        $mock->shouldReceive('zremrangebyrank')
-            ->once()
-            ->withArgs(function (string $key, int $start, int $stop): bool {
-                expect($start)->toBe(0)
-                    ->and($stop)->toBe(-501);
+                $rankStop = (int) $args[6];
+                expect($rankStop)->toBe(-501);
 
                 return true;
             });
@@ -179,18 +195,20 @@ it('calls zremrangebyscore with configured time window for pruning', function ()
     $store->recordDecision(makeDecision());
 });
 
-it('calls zremrangebyrank with configured max entries for pruning', function () {
+it('passes correct count-based pruning limit to Lua script', function () {
     config()->set('queue-autoscale.cluster.decision_history_seconds', 3600);
     config()->set('queue-autoscale.cluster.decision_history_max', 100);
 
-    $connection = Mockery::mock(\Illuminate\Redis\Connections\Connection::class, function (MockInterface $mock): void {
-        $mock->shouldReceive('zadd')->once();
-        $mock->shouldReceive('zremrangebyscore')->once();
-        $mock->shouldReceive('zremrangebyrank')
+    $connection = Mockery::mock(Connection::class, function (MockInterface $mock): void {
+        $mock->shouldReceive('command')
             ->once()
-            ->withArgs(function (string $key, int $start, int $stop): bool {
-                expect($start)->toBe(0)
-                    ->and($stop)->toBe(-101);
+            ->withArgs(function (string $cmd, array $args): bool {
+                if ($cmd !== 'eval') {
+                    return false;
+                }
+
+                $rankStop = (int) $args[6];
+                expect($rankStop)->toBe(-101);
 
                 return true;
             });
@@ -209,16 +227,18 @@ it('uses the correct Redis key pattern for decisions history', function () {
     config()->set('app.env', 'testing');
 
     $capturedKey = null;
-    $connection = Mockery::mock(\Illuminate\Redis\Connections\Connection::class, function (MockInterface $mock) use (&$capturedKey): void {
-        $mock->shouldReceive('zadd')
+    $connection = Mockery::mock(Connection::class, function (MockInterface $mock) use (&$capturedKey): void {
+        $mock->shouldReceive('command')
             ->once()
-            ->withArgs(function (string $key) use (&$capturedKey): bool {
-                $capturedKey = $key;
+            ->withArgs(function (string $cmd, array $args) use (&$capturedKey): bool {
+                if ($cmd !== 'eval') {
+                    return false;
+                }
+
+                $capturedKey = $args[2];
 
                 return true;
             });
-        $mock->shouldReceive('zremrangebyscore')->once();
-        $mock->shouldReceive('zremrangebyrank')->once();
     });
 
     Redis::shouldReceive('connection')->andReturn($connection);
@@ -231,7 +251,7 @@ it('uses the correct Redis key pattern for decisions history', function () {
 });
 
 it('passes correct score range to zrangebyscore', function () {
-    $connection = Mockery::mock(\Illuminate\Redis\Connections\Connection::class, function (MockInterface $mock): void {
+    $connection = Mockery::mock(Connection::class, function (MockInterface $mock): void {
         $mock->shouldReceive('zrangebyscore')
             ->once()
             ->withArgs(function (string $key, string $min, string $max): bool {
@@ -254,7 +274,7 @@ it('passes correct score range to zrangebyscore', function () {
 });
 
 it('gracefully handles malformed JSON entries from Redis', function () {
-    $connection = Mockery::mock(\Illuminate\Redis\Connections\Connection::class, function (MockInterface $mock): void {
+    $connection = Mockery::mock(Connection::class, function (MockInterface $mock): void {
         $mock->shouldReceive('zrangebyscore')
             ->once()
             ->andReturn([
@@ -272,4 +292,33 @@ it('gracefully handles malformed JSON entries from Redis', function () {
     expect($recent)->toHaveCount(2)
         ->and($recent[0]['workload_key'])->toBe('queue:redis:good')
         ->and($recent[1]['workload_key'])->toBe('queue:redis:also-good');
+});
+
+it('uses atomic Lua script for record and prune operations', function () {
+    config()->set('queue-autoscale.cluster.decision_history_seconds', 3600);
+    config()->set('queue-autoscale.cluster.decision_history_max', 10000);
+
+    $capturedScript = null;
+    $connection = Mockery::mock(Connection::class, function (MockInterface $mock) use (&$capturedScript): void {
+        $mock->shouldReceive('command')
+            ->once()
+            ->withArgs(function (string $cmd, array $args) use (&$capturedScript): bool {
+                if ($cmd !== 'eval') {
+                    return false;
+                }
+
+                $capturedScript = $args[0];
+
+                return true;
+            });
+    });
+
+    Redis::shouldReceive('connection')->andReturn($connection);
+    $store = new ClusterStore;
+
+    $store->recordDecision(makeDecision());
+
+    expect($capturedScript)->toContain('zadd')
+        ->and($capturedScript)->toContain('zremrangebyscore')
+        ->and($capturedScript)->toContain('zremrangebyrank');
 });
