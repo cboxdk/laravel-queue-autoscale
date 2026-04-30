@@ -28,6 +28,7 @@ use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\WorkerStatus;
 use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\ResourceEstimate;
+use Cbox\LaravelQueueAutoscale\Scaling\FairShareAllocator;
 use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
@@ -376,7 +377,12 @@ final class AutoscaleManager
         $assignedTotals = array_fill_keys($managerIds, 0);
         $assignments = array_fill_keys($managerIds, []);
         $clusterTotalWorkers = array_sum(array_map(static fn (ClusterManagerState $state): int => $state->totalWorkers, $activeManagers));
-        $workloads = [];
+        $clusterCapacity = array_sum(array_map(static fn (ClusterManagerState $state): int => $state->maxWorkers, $activeManagers));
+
+        // Phase A: Collect demands for all workloads
+        $demands = [];
+        $workerConfigs = [];
+        $workloadMeta = [];
 
         foreach ($metricsByKey as $queueKey => $metrics) {
             if (AutoscaleConfiguration::isExcluded($metrics->queue) || isset($groupedQueueKeys[$queueKey])) {
@@ -386,32 +392,20 @@ final class AutoscaleManager
             $config = QueueConfiguration::fromConfig($metrics->connection, $metrics->queue);
             $workloadKey = ClusterRecommendation::queueWorkloadKey($metrics->connection, $metrics->queue);
             $currentWorkers = $this->clusterCurrentWorkers($activeManagers, $workloadKey);
-
             $targetWorkers = $this->clusterTargetWorkers($config, $metrics, $currentWorkers, $clusterTotalWorkers);
-            $workloadAssignments = $this->distributeClusterTarget($activeManagers, $workloadKey, $targetWorkers, $assignedTotals);
 
-            foreach ($workloadAssignments as $managerId => $target) {
-                $assignments[$managerId][$workloadKey] = $target;
-            }
-
-            $workloads[] = [
+            $demands[$workloadKey] = $targetWorkers;
+            $workerConfigs[$workloadKey] = ['min' => $config->workers->min, 'max' => $config->workers->max];
+            $workloadMeta[$workloadKey] = [
                 'type' => 'queue',
                 'connection' => $metrics->connection,
                 'name' => $metrics->queue,
                 'driver' => $metrics->driver,
+                'config' => $config,
                 'current_workers' => $currentWorkers,
-                'target_workers' => $targetWorkers,
-                'worker_min' => $config->workers->min,
-                'worker_max' => $config->workers->max,
-                'sla_target_seconds' => $config->sla->targetSeconds,
-                'pending' => $metrics->pending,
-                'oldest_job_age' => $metrics->oldestJobAge,
-                'oldest_job_age_status' => $metrics->ageStatus,
-                'throughput_per_minute' => $metrics->throughputPerMinute,
-                'active_workers' => $metrics->activeWorkers,
-                'utilization_percent' => round($metrics->utilizationRate, 1),
+                'metrics' => $metrics,
+                'scalable' => $config->workers->scalable,
                 'member_queues' => [$metrics->queue],
-                'action' => $targetWorkers <=> $currentWorkers,
             ];
         }
 
@@ -421,6 +415,46 @@ final class AutoscaleManager
             $workloadKey = ClusterRecommendation::groupWorkloadKey($group->connection, $group->name);
             $currentWorkers = $this->clusterCurrentWorkers($activeManagers, $workloadKey);
             $targetWorkers = $this->clusterTargetWorkers($config, $aggregated, $currentWorkers, $clusterTotalWorkers);
+
+            $demands[$workloadKey] = $targetWorkers;
+            $workerConfigs[$workloadKey] = ['min' => $config->workers->min, 'max' => $config->workers->max];
+            $workloadMeta[$workloadKey] = [
+                'type' => 'group',
+                'connection' => $group->connection,
+                'name' => $group->name,
+                'driver' => $aggregated->driver,
+                'config' => $config,
+                'current_workers' => $currentWorkers,
+                'metrics' => $aggregated,
+                'scalable' => $config->workers->scalable,
+                'member_queues' => array_values($group->queues),
+            ];
+        }
+
+        // Phase B: Fair-share allocation
+        $pinnedDemands = [];
+        $scalableDemands = [];
+        $scalableConfigs = [];
+
+        foreach ($demands as $workloadKey => $demand) {
+            if (! $workloadMeta[$workloadKey]['scalable']) {
+                $pinnedDemands[$workloadKey] = $demand;
+            } else {
+                $scalableDemands[$workloadKey] = $demand;
+                $scalableConfigs[$workloadKey] = $workerConfigs[$workloadKey];
+            }
+        }
+
+        $scalableCapacity = max($clusterCapacity - array_sum($pinnedDemands), 0);
+        $allocator = new FairShareAllocator;
+        $scalableTargets = $allocator->allocate($scalableDemands, $scalableConfigs, $scalableCapacity);
+        $adjustedTargets = $pinnedDemands + $scalableTargets;
+
+        // Phase C: Distribute adjusted targets across hosts and build workload summaries
+        $workloads = [];
+
+        foreach ($adjustedTargets as $workloadKey => $targetWorkers) {
+            $meta = $workloadMeta[$workloadKey];
             $workloadAssignments = $this->distributeClusterTarget($activeManagers, $workloadKey, $targetWorkers, $assignedTotals);
 
             foreach ($workloadAssignments as $managerId => $target) {
@@ -428,23 +462,23 @@ final class AutoscaleManager
             }
 
             $workloads[] = [
-                'type' => 'group',
-                'connection' => $group->connection,
-                'name' => $group->name,
-                'driver' => $aggregated->driver,
-                'current_workers' => $currentWorkers,
+                'type' => $meta['type'],
+                'connection' => $meta['connection'],
+                'name' => $meta['name'],
+                'driver' => $meta['driver'],
+                'current_workers' => $meta['current_workers'],
                 'target_workers' => $targetWorkers,
-                'worker_min' => $config->workers->min,
-                'worker_max' => $config->workers->max,
-                'sla_target_seconds' => $config->sla->targetSeconds,
-                'pending' => $aggregated->pending,
-                'oldest_job_age' => $aggregated->oldestJobAge,
-                'oldest_job_age_status' => $aggregated->ageStatus,
-                'throughput_per_minute' => $aggregated->throughputPerMinute,
-                'active_workers' => $aggregated->activeWorkers,
-                'utilization_percent' => round($aggregated->utilizationRate, 1),
-                'member_queues' => array_values($group->queues),
-                'action' => $targetWorkers <=> $currentWorkers,
+                'worker_min' => $meta['config']->workers->min,
+                'worker_max' => $meta['config']->workers->max,
+                'sla_target_seconds' => $meta['config']->sla->targetSeconds,
+                'pending' => $meta['metrics']->pending,
+                'oldest_job_age' => $meta['metrics']->oldestJobAge,
+                'oldest_job_age_status' => $meta['metrics']->ageStatus,
+                'throughput_per_minute' => $meta['metrics']->throughputPerMinute,
+                'active_workers' => $meta['metrics']->activeWorkers,
+                'utilization_percent' => round($meta['metrics']->utilizationRate, 1),
+                'member_queues' => $meta['member_queues'],
+                'action' => $targetWorkers <=> $meta['current_workers'],
             ];
         }
 
