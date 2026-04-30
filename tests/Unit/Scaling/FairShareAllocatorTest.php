@@ -224,8 +224,8 @@ it('caps at workers max and redistributes freed capacity', function () {
     $allocator = new FairShareAllocator;
 
     // A demands 15 but max=5, B demands 8 with max=20
-    // Proportional share with headroom: A headroom=4, B headroom=7, total=11
-    // A gets floor(4*8/11)=2 + min=1 = 3+1=4 via remainder, B gets floor(7*8/11)=5 + min=1 = 6
+    // Without water-filling: A=5, B=4, total=9 (1 wasted)
+    // With water-filling: A=5, B=5, total=10
     $demands = [
         'queue:redis:a' => 15,
         'queue:redis:b' => 8,
@@ -238,8 +238,8 @@ it('caps at workers max and redistributes freed capacity', function () {
     $result = $allocator->allocate($demands, $configs, 10);
 
     expect($result)->toBe([
-        'queue:redis:a' => 4,
-        'queue:redis:b' => 6,
+        'queue:redis:a' => 5,
+        'queue:redis:b' => 5,
     ]);
 });
 
@@ -247,9 +247,8 @@ it('handles multiple queues hitting max in sequence', function () {
     $allocator = new FairShareAllocator;
 
     // A max=3, B max=3, C max=20, all demand 15, capacity=10
-    // Headroom: A=2, B=2, C=14, total=18, remaining=7
-    // Proportional share: A=0.78, B=0.78, C=5.44
-    // After floor + remainder: A=2, B=2, C=6
+    // Iteration 1: uncapped proportional gives each ~3.33, A and B clamped to 3
+    // Iteration 2: freed capacity goes to C → C=4
     $demands = [
         'queue:redis:a' => 15,
         'queue:redis:b' => 15,
@@ -263,9 +262,9 @@ it('handles multiple queues hitting max in sequence', function () {
 
     $result = $allocator->allocate($demands, $configs, 10);
 
-    expect($result['queue:redis:a'])->toBe(2)
-        ->and($result['queue:redis:b'])->toBe(2)
-        ->and($result['queue:redis:c'])->toBe(6);
+    expect($result['queue:redis:a'])->toBe(3)
+        ->and($result['queue:redis:b'])->toBe(3)
+        ->and($result['queue:redis:c'])->toBe(4);
 
     expect(array_sum($result))->toBe(10);
 });

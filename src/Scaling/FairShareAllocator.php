@@ -82,7 +82,11 @@ final class FairShareAllocator
                 $ceiling = min($demand, $configs[$key]['max']);
 
                 if ($targets[$key] < $ceiling) {
-                    $eligible[$key] = $ceiling - $targets[$key];
+                    // Use uncapped headroom for proportional distribution.
+                    // This may over-allocate past max in this iteration;
+                    // the clamping step below corrects it, and the freed
+                    // capacity is picked up by the next iteration.
+                    $eligible[$key] = $demand - $targets[$key];
                 }
             }
 
@@ -110,6 +114,13 @@ final class FairShareAllocator
 
             if ($leftover > 0) {
                 $this->distributeFractionalLeftover($targets, $fractionals, $configs, $demands, $leftover);
+            }
+
+            // Clamp to ceiling — capacity freed by clamping is picked
+            // up by the next water-fill iteration
+            foreach ($targets as $key => $target) {
+                $ceiling = min($demands[$key], $configs[$key]['max']);
+                $targets[$key] = min($target, $ceiling);
             }
         }
     }
