@@ -23,3 +23,4 @@ parameters:
 			identifier: property.unusedType
 			count: 1
 			path: src/Scaling/Calculators/CapacityCalculator.php
+			reportUnmatched: false
