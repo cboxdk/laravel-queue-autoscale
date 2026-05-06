@@ -189,20 +189,23 @@ LUA;
         $key = $this->decisionsHistoryKey();
         $member = json_encode($decision, JSON_THROW_ON_ERROR);
         $score = (string) $now;
-        $cutoff = (string) ($now - AutoscaleConfiguration::decisionHistorySeconds());
+        $historySeconds = AutoscaleConfiguration::decisionHistorySeconds();
+        $cutoff = (string) ($now - $historySeconds);
         $rankStop = (string) -(AutoscaleConfiguration::decisionHistoryMax() + 1);
+        $ttl = (string) $historySeconds;
 
         $script = <<<'LUA'
 redis.call('zadd', KEYS[1], ARGV[1], ARGV[2])
 redis.call('zremrangebyscore', KEYS[1], '-inf', ARGV[3])
 redis.call('zremrangebyrank', KEYS[1], 0, tonumber(ARGV[4]))
+redis.call('expire', KEYS[1], tonumber(ARGV[5]))
 return 1
 LUA;
 
         if ($redis instanceof PhpRedisConnection) {
-            $redis->command('eval', [$script, [$key, $score, $member, $cutoff, $rankStop], 1]);
+            $redis->command('eval', [$script, [$key, $score, $member, $cutoff, $rankStop, $ttl], 1]);
         } else {
-            $redis->command('eval', [$script, 1, $key, $score, $member, $cutoff, $rankStop]);
+            $redis->command('eval', [$script, 1, $key, $score, $member, $cutoff, $rankStop, $ttl]);
         }
     }
 

@@ -31,7 +31,7 @@ function makeDecision(array $overrides = []): array
  * Extract the member JSON string from a recordDecision eval call.
  *
  * For a generic Connection, command('eval', [...]) receives:
- *   [script, numkeys, key, score, member, cutoff, rankStop]
+ *   [script, numkeys, key, score, member, cutoff, rankStop, ttl]
  *
  * @param  array<int, mixed>  $evalArgs
  */
@@ -320,5 +320,31 @@ it('uses atomic Lua script for record and prune operations', function () {
 
     expect($capturedScript)->toContain('zadd')
         ->and($capturedScript)->toContain('zremrangebyscore')
-        ->and($capturedScript)->toContain('zremrangebyrank');
+        ->and($capturedScript)->toContain('zremrangebyrank')
+        ->and($capturedScript)->toContain('expire');
+});
+
+it('sets TTL on the sorted set key matching decision_history_seconds', function () {
+    config()->set('queue-autoscale.cluster.decision_history_seconds', 1800);
+    config()->set('queue-autoscale.cluster.decision_history_max', 10000);
+
+    $connection = Mockery::mock(Connection::class, function (MockInterface $mock): void {
+        $mock->shouldReceive('command')
+            ->once()
+            ->withArgs(function (string $cmd, array $args): bool {
+                if ($cmd !== 'eval') {
+                    return false;
+                }
+
+                $ttl = (int) $args[7];
+                expect($ttl)->toBe(1800);
+
+                return true;
+            });
+    });
+
+    Redis::shouldReceive('connection')->andReturn($connection);
+    $store = new ClusterStore;
+
+    $store->recordDecision(makeDecision());
 });
