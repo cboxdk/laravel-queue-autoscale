@@ -171,6 +171,82 @@ LUA;
         return $this->redis()->ping();
     }
 
+    /**
+     * Persist a scaling decision to the rolling history sorted set.
+     *
+     * Uses a Lua script to atomically add, time-prune, and count-prune
+     * in a single round-trip.
+     *
+     * @param  array<string, mixed>  $decision
+     */
+    public function recordDecision(array $decision): void
+    {
+        $redis = $this->redis();
+        $now = microtime(true);
+
+        $decision['recorded_at'] = $now;
+
+        $key = $this->decisionsHistoryKey();
+        $member = json_encode($decision, JSON_THROW_ON_ERROR);
+        $score = (string) $now;
+        $historySeconds = AutoscaleConfiguration::decisionHistorySeconds();
+        $cutoff = (string) ($now - $historySeconds);
+        $rankStop = (string) -(AutoscaleConfiguration::decisionHistoryMax() + 1);
+        $ttl = (string) $historySeconds;
+
+        $script = <<<'LUA'
+redis.call('zadd', KEYS[1], ARGV[1], ARGV[2])
+redis.call('zremrangebyscore', KEYS[1], '-inf', ARGV[3])
+redis.call('zremrangebyrank', KEYS[1], 0, tonumber(ARGV[4]))
+redis.call('expire', KEYS[1], tonumber(ARGV[5]))
+return 1
+LUA;
+
+        if ($redis instanceof PhpRedisConnection) {
+            $redis->command('eval', [$script, [$key, $score, $member, $cutoff, $rankStop, $ttl], 1]);
+        } else {
+            $redis->command('eval', [$script, 1, $key, $score, $member, $cutoff, $rankStop, $ttl]);
+        }
+    }
+
+    /**
+     * Retrieve recent decisions within the given time window.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function recentDecisions(int $seconds): array
+    {
+        $members = $this->redis()->zrangebyscore(
+            $this->decisionsHistoryKey(),
+            (string) (microtime(true) - $seconds),
+            '+inf',
+        );
+
+        if (! is_array($members)) {
+            return [];
+        }
+
+        $decisions = [];
+
+        foreach ($members as $json) {
+            if (! is_string($json) || $json === '') {
+                continue;
+            }
+
+            try {
+                $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+            } catch (\JsonException) {
+                continue;
+            }
+
+            if (is_array($decoded)) {
+                $decisions[] = $decoded;
+            }
+        }
+
+        return $decisions;
+    }
+
     private function currentTimestamp(): int
     {
         return (int) round(microtime(true) * 1000);
@@ -199,6 +275,11 @@ LUA;
     private function summaryKey(): string
     {
         return $this->key('summary');
+    }
+
+    private function decisionsHistoryKey(): string
+    {
+        return $this->key('decisions:history');
     }
 
     private function key(string $suffix): string
