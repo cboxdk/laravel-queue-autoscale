@@ -477,6 +477,7 @@ final class AutoscaleManager
                 'name' => $meta['name'],
                 'driver' => $meta['driver'],
                 'current_workers' => $currentWorkers,
+                'demand' => $demands[$workloadKey],
                 'target_workers' => $targetWorkers,
                 'worker_min' => $meta['config']->workers->min,
                 'worker_max' => $meta['config']->workers->max,
@@ -891,7 +892,7 @@ final class AutoscaleManager
 
         $currentHosts = count($activeManagers);
         $totalWorkerCapacity = array_sum(array_map(static fn (ClusterManagerState $state): int => $state->maxWorkers, $activeManagers));
-        $requiredWorkers = array_sum(array_map(static fn (array $workload): int => (int) $workload['target_workers'], $workloads));
+        $requiredWorkers = array_sum(array_map(static fn (array $workload): int => (int) $workload['demand'], $workloads));
         $totalWorkers = array_sum(array_map(static fn (ClusterManagerState $state): int => $state->totalWorkers, $activeManagers));
         $recommendedHosts = $this->recommendedHostCount($activeManagers, $requiredWorkers);
         $signal = $this->clusterScaleSignal($currentHosts, $recommendedHosts, $requiredWorkers, $totalWorkerCapacity, $totalWorkers, $workloads);
