@@ -5,6 +5,28 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.6.3 — Cluster scale-up signal & cumulative decision history - 2026-05-18
+
+### Fixed
+
+- **Cluster `scale_up` signal now fires when demand exceeds capacity** — `clusterScaleSignal()` derived `required_workers` from `target_workers`, which is already clamped by fair-share allocation and per-host capacity (so `target_workers` can never exceed `total_worker_capacity`). The `required_workers > total_worker_capacity` branch was therefore unreachable, leaving the cluster signal stuck on `hold` even when host count was the binding constraint. The signal now uses each workload's unclamped `demand` (the strategy's recommendation before capacity clamping) so over-capacity demand correctly surfaces as `scale_up` with a `recommended_hosts` count. (#25, #26)
+- **`scaling_decisions` in cluster summary now reflects rolling history** — Decisions were rebuilt from an ephemeral per-cycle array on the leader, so the cluster summary always contained at most one cycle's worth. Downstream dashboards (queue-monitor's Total Decisions / Scale Ups / Scale Downs cards) only saw what happened in the last evaluation. Decisions are now persisted to a Redis sorted set with atomic add-and-trim, and the cluster summary rebuilds `scaling_decisions` from the rolling window each tick. (#24)
+
+### Added
+
+- **`demand` field on cluster workload entries** — Each entry in `cluster.workloads[]` now exposes both `demand` (unclamped strategy recommendation) and `target_workers` (post-fair-share, post-capacity). Custom dashboards can compare the two to surface "wants N, got M" backpressure visualizations.
+- **`cluster.decision_history_seconds` config key** (default: `3600`, env: `QUEUE_AUTOSCALE_DECISION_HISTORY`) — Retention window for the scaling-decision rolling history.
+- **`cluster.decision_history_max` config key** (default: `10000`, env: `QUEUE_AUTOSCALE_DECISION_HISTORY_MAX`) — Hard cap on entries in the rolling history sorted set; older entries are trimmed by rank when the cap is reached.
+- **`ClusterStore::recordDecision()` and `ClusterStore::recentDecisions()`** — Public methods on the cluster store. The record path uses a single atomic Lua script (`ZADD` + `ZREMRANGEBYSCORE` + `ZREMRANGEBYRANK` + `EXPIRE`) per decision.
+
+### Testing
+
+- 565 tests, 1668 assertions
+- New `ClusterDecisionHistoryTest` suite (11 tests covering record/read/trim/TTL behavior)
+- 4 new tests in `ClusterScalingDecisionsTest` (3 for the unclamped-demand path, 1 for end-to-end decision history)
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.6.2...v3.6.3
+
 ## v3.6.2 — Fix worker pool thrashing in cluster distribution layer - 2026-04-30
 
 ### Fixed
