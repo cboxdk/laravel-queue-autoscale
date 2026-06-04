@@ -133,9 +133,13 @@ If neither applies, run `queue:autoscale:debug` for each member queue. If the me
 
 The manager is a long-running process — it holds the config in memory. It does not re-read the file.
 
-**Fix:** restart the manager. Every [platform deployment guide](../deployment/_index.md) covers the correct restart command, including `php artisan queue:autoscale:restart` for deploy hooks that cannot call `systemctl` / `supervisorctl` directly.
+**Fix:** restart the manager. Every [platform deployment guide](../deployment/_index.md) covers the preferred deployment command:
 
-If you're on Forge/Ploi, the zero-downtime deploy flow restarts the daemon automatically. If you skip that step in a custom deploy script, add `sudo supervisorctl restart daemon-<id>` (or the systemd equivalent).
+```bash
+php artisan queue:autoscale:restart
+```
+
+It lets the running manager drain spawned workers and exit. Your platform supervisor then starts the manager again from the current release. Use `supervisorctl restart` or `systemctl restart` only as manual fallbacks if the process is wedged.
 
 ## Two autoscalers are fighting each other
 

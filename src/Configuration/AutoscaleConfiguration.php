@@ -67,6 +67,20 @@ final readonly class AutoscaleConfiguration
         return Str::slug($appName, '-').'-'.$appEnv.'-'.$hash;
     }
 
+    public static function restartScopeId(): string
+    {
+        $configured = config('queue-autoscale.manager.restart_scope');
+
+        if (is_string($configured) && trim($configured) !== '') {
+            return Str::slug(trim($configured), '-');
+        }
+
+        $appName = self::stringConfig('app.name', 'laravel');
+        $appEnv = self::stringConfig('app.env', 'production');
+
+        return Str::slug($appName, '-').'-'.$appEnv;
+    }
+
     public static function pickupTimeStore(): string
     {
         $configured = config('queue-autoscale.pickup_time.store', 'auto');

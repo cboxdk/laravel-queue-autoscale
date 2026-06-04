@@ -182,10 +182,15 @@ return [
     |--------------------------------------------------------------------------
     | Manager process
     |--------------------------------------------------------------------------
+    |
+    | restart_scope controls the cache key used by queue:autoscale:restart.
+    | Leave unset unless multiple apps share the same cache backend.
+    |
     */
     'manager' => [
         'evaluation_interval_seconds' => 5,
         'log_channel' => env('QUEUE_AUTOSCALE_LOG_CHANNEL', 'stack'),
+        'restart_scope' => env('QUEUE_AUTOSCALE_RESTART_SCOPE'),
     ],
 
     /*

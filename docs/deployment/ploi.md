@@ -34,15 +34,15 @@ See [Queue Topology → Excluded Queues](../basic-usage/queue-topology.md#exclud
 
 ## 3. Deploys
 
-Ploi's deploy script restarts daemons automatically when the deploy hook runs `sudo -S supervisorctl restart`. If your custom deploy script doesn't do this, add:
+Add this near the end of your deploy script, after the new release is active and migrations/config-cache steps are done:
 
 ```bash
-sudo -S supervisorctl restart daemon-<id>
-# or, if your deploy hook only has Artisan access:
 php artisan queue:autoscale:restart
 ```
 
-Find the daemon ID in the Ploi UI or via `supervisorctl status`.
+The command writes a cache signal. The running autoscale manager sees it on the next evaluation tick, gracefully stops spawned workers, and exits. Ploi's Daemon supervisor then relaunches `php artisan queue:autoscale` from the current release.
+
+For manual operations, you can still use Ploi's **Daemons → Restart** button or restart the daemon directly with Supervisor. Find the daemon ID in the Ploi UI or via `supervisorctl status`.
 
 ## 4. Verify
 
