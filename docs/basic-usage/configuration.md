@@ -340,12 +340,13 @@ Balance based on:
 
 ```php
 'manager' => [
-    'evaluation_interval_seconds' => 30,
-    'max_concurrent_evaluations' => 5,    // Parallel queue evaluations
-    'enable_metrics_collection' => true,  // Collect performance data
-    'metrics_retention_hours' => 24,      // How long to keep metrics
+    'evaluation_interval_seconds' => 5,
+    'log_channel' => env('QUEUE_AUTOSCALE_LOG_CHANNEL', 'stack'),
+    'restart_scope' => env('QUEUE_AUTOSCALE_RESTART_SCOPE'),
 ],
 ```
+
+`restart_scope` controls the cache key used by `php artisan queue:autoscale:restart`. Leave it unset for the default `app.name` + `app.env` scope. Set `QUEUE_AUTOSCALE_RESTART_SCOPE` when multiple apps share the same cache backend and need isolated restart signals.
 
 ## Advanced Options
 
@@ -437,6 +438,10 @@ QUEUE_AUTOSCALE_ENABLED=true
 # Optional explicit manager/node ID override.
 # Leave unset to use the built-in auto-generated node identity.
 QUEUE_AUTOSCALE_MANAGER_ID=web-01
+
+# Optional cache scope for php artisan queue:autoscale:restart.
+# Set this if multiple apps share the same cache backend.
+QUEUE_AUTOSCALE_RESTART_SCOPE=my-app-production
 
 # Optional signal backends.
 # auto => null/no-op on single host, Redis-backed in cluster mode

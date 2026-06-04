@@ -46,11 +46,13 @@ sudo systemctl start queue-autoscale
 sudo systemctl status queue-autoscale
 ```
 
-On deploy, restart the daemon so it picks up new code:
+On deploy, signal the manager so it drains workers and exits. systemd will start it again from the current release:
 
 ```bash
-sudo systemctl restart queue-autoscale
+php artisan queue:autoscale:restart
 ```
+
+If the manager is wedged and does not exit, use `sudo systemctl restart queue-autoscale` as an operational fallback.
 
 ## Option B — Supervisor
 
@@ -84,15 +86,11 @@ Your deploy script should trigger exactly one restart path:
 
 ```bash
 php artisan queue:autoscale:restart
-# or
-sudo systemctl restart queue-autoscale
-# or
-sudo supervisorctl restart queue-autoscale
 ```
 
 `php artisan queue:autoscale:restart` works like Laravel's `queue:restart`: it writes a cache signal, the running manager notices it on the next evaluation tick, gracefully terminates all spawned `queue:work` processes, and exits. Your process supervisor then starts a fresh manager with the new code/config.
 
-Direct `systemctl` / `supervisorctl` restarts are also fine; they send SIGTERM immediately, and the manager performs the same graceful shutdown path.
+Direct `systemctl` / `supervisorctl` restarts are still fine as manual fallbacks; they send SIGTERM immediately, and the manager performs the same graceful shutdown path.
 
 **Do not also run `php artisan queue:restart`** — that's for separately-supervised `queue:work` daemons. Our spawned workers are killed directly when the manager shuts down.
 

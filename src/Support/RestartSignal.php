@@ -14,20 +14,34 @@ final class RestartSignal
         $timestamp = $this->currentTimestamp();
 
         Cache::forever($this->cacheKey(), $timestamp);
+        Cache::forever($this->managerCacheKey(), $timestamp);
 
         return $timestamp;
     }
 
     public function requestedAfter(int $timestamp): bool
     {
-        $restartAt = Cache::get($this->cacheKey());
+        $restartAt = max(
+            $this->numericTimestamp(Cache::get($this->cacheKey())),
+            $this->numericTimestamp(Cache::get($this->managerCacheKey())),
+        );
 
-        return is_numeric($restartAt) && (int) $restartAt > $timestamp;
+        return $restartAt > $timestamp;
     }
 
     public function cacheKey(): string
     {
+        return 'queue-autoscale:restart:'.AutoscaleConfiguration::restartScopeId();
+    }
+
+    public function managerCacheKey(): string
+    {
         return 'queue-autoscale:restart:'.AutoscaleConfiguration::applicationScopeId().':'.AutoscaleConfiguration::managerId();
+    }
+
+    private function numericTimestamp(mixed $value): int
+    {
+        return is_numeric($value) ? (int) $value : 0;
     }
 
     private function currentTimestamp(): int

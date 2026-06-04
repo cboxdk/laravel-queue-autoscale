@@ -432,6 +432,12 @@ redirect_stderr=true
 stdout_logfile=/path/to/logs/autoscale.log
 ```
 
+On deploy, restart the manager through Artisan so it can drain workers before Supervisor starts it again from the new release:
+
+```bash
+php artisan queue:autoscale:restart
+```
+
 ### Custom Evaluation Interval
 
 ```bash

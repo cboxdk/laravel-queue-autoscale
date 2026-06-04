@@ -35,17 +35,21 @@ You can keep Forge queue workers for queues you list in `queue-autoscale.exclude
 
 ## 3. Deploys
 
-Forge's default zero-downtime deploy script already restarts Daemons via `sudo -S supervisorctl restart`, which sends SIGTERM. The autoscaler catches it, gracefully stops spawned workers, and Forge relaunches the Daemon with new code. No extra steps needed.
-
-If you want to restart manually:
+Add this after the new release is active and migrations/config-cache steps are done:
 
 ```bash
-# Forge → Daemons → Restart button
-# or via SSH:
-sudo supervisorctl restart daemon-<daemon-id>
-# or inside a deploy hook without sudo:
 php artisan queue:autoscale:restart
 ```
+
+The command works like Laravel's `queue:restart`: it writes a cache signal, the running autoscale manager notices it on the next evaluation tick, gracefully stops spawned workers, and exits. Forge's Daemon supervisor then relaunches `php artisan queue:autoscale` from the current release.
+
+For a manual graceful restart, run:
+
+```bash
+php artisan queue:autoscale:restart
+```
+
+If the manager is wedged and does not exit, use Forge's **Daemons → Restart** button or `sudo supervisorctl restart daemon-<daemon-id>` as an operational fallback.
 
 ## 4. Verify
 
@@ -61,4 +65,4 @@ You should see `Autoscale manager started` shortly after deploy, then periodic w
 
 - **`.env` changes don't propagate** without a Daemon restart. Forge does this automatically after "Update Secrets" in the UI.
 - **PHP version mismatch.** Forge servers usually run multiple PHP versions. Make sure the Daemon command uses the same `php` binary your web layer uses (`php8.3` or similar if you pin a specific version).
-- **Long-running manager holds old code until restart.** A fresh deploy that changes scaling thresholds won't take effect until the Daemon restarts — which happens automatically on zero-downtime deploy, but not if you skipped that step.
+- **Long-running manager holds old code until restart.** A fresh deploy that changes scaling thresholds won't take effect until the Daemon restarts. Keep `php artisan queue:autoscale:restart` in the deploy script.
