@@ -5,6 +5,24 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.7.0 — Deployment-safe autoscale restarts - 2026-06-04
+
+### Added
+
+- **Deployment-safe `queue:autoscale:restart` signal** — The restart command now writes a global, deployment-stable cache signal so deploy hooks can ask the running autoscale manager to drain spawned workers and exit. The process supervisor then restarts `queue:autoscale` from the current release. (#27)
+- **`manager.restart_scope` config key** (env: `QUEUE_AUTOSCALE_RESTART_SCOPE`) — Optional cache-scope override for installs where multiple apps share the same cache backend and need isolated autoscale restart signals.
+
+### Changed
+
+- **Restart signal compatibility preserved** — Managers now check both the new deployment-stable restart key and the legacy manager-scoped key, so existing restart signals remain compatible during upgrades.
+- **Deployment documentation now prefers Artisan restarts** — Forge, Ploi, self-hosted, installation, README, and troubleshooting docs now recommend `php artisan queue:autoscale:restart` for deploy hooks, with direct `supervisorctl` / `systemctl` restarts documented as operational fallbacks only.
+
+### Testing
+
+- Added coverage for restart signal scoping, legacy signal compatibility, command signal writes, and manager shutdown/drain behavior after a restart request.
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.6.3...v3.7.0
+
 ## v3.6.3 — Cluster scale-up signal & cumulative decision history - 2026-05-18
 
 ### Fixed
