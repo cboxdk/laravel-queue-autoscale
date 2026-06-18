@@ -5,6 +5,15 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.8.0 - 2026-06-18
+
+### What's Changed
+
+* chore(deps): bump codecov/codecov-action from 6 to 7 by @dependabot[bot] in https://github.com/cboxdk/laravel-queue-autoscale/pull/28
+* [codex] Stabilize autoscaling worker targets by @sylvesterdamgaard in https://github.com/cboxdk/laravel-queue-autoscale/pull/29
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.7.0...v3.8.0
+
 ## v3.7.0 — Deployment-safe autoscale restarts - 2026-06-04
 
 ### Added
@@ -109,6 +118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
           ],
       ],
   ],
+  
   ```
 - **`ResourceEstimate` value object** — Carries CPU/memory estimates with per-dimension source metadata (`measured`, `config`, `default`) and sample counts, enabling downstream consumers to inspect provenance.
 - **`EstimateSource` enum** — `Measured`, `Config`, `Default` — tracks where each dimension of a resource estimate originated.
@@ -417,6 +427,7 @@ composer require php-tui/php-tui --dev
 
 
 
+
 ```
 ### Usage
 
@@ -429,6 +440,7 @@ php artisan queue:autoscale:debug
 
 # Dispatch test jobs
 php artisan queue:autoscale:test --jobs=10 --queue=default
+
 
 
 
@@ -463,6 +475,7 @@ First stable release of Queue Autoscale for Laravel with intelligent, predictive
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
+
 
 
 
