@@ -568,6 +568,7 @@ final class AutoscaleManager
                     managerId: $managerId,
                     issuedAt: $issuedAt,
                     workloads: $assignments[$managerId],
+                    leaderId: AutoscaleConfiguration::managerId(),
                 )
             );
         }
@@ -599,6 +600,15 @@ final class AutoscaleManager
 
     private function applyClusterRecommendation(ClusterRecommendation $recommendation): void
     {
+        if ($recommendation->leaderId !== null && $recommendation->leaderId !== $this->clusterStore->leaderId()) {
+            $this->verbose(
+                "Ignoring stale cluster recommendation from previous leader={$recommendation->leaderId}",
+                'debug',
+            );
+
+            return;
+        }
+
         $groups = GroupConfiguration::allFromConfig();
         $groupedQueueKeys = $this->groupedQueueKeys($groups);
 

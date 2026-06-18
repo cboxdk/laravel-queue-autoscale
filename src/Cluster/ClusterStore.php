@@ -89,24 +89,22 @@ class ClusterStore
     public function isLeader(string $managerId): bool
     {
         $redis = $this->redis();
-        $current = $this->leaderId();
         $payload = [
             'manager_id' => $managerId,
             'renewed_at' => $this->currentTimestamp(),
         ];
 
-        if ($current === $managerId) {
-            $redis->setex(
-                $this->leaderKey(),
-                AutoscaleConfiguration::clusterLeaderLeaseSeconds(),
-                $this->encode($payload),
-            );
-
-            return true;
-        }
-
         $script = <<<'LUA'
-if redis.call('exists', KEYS[1]) == 0 then
+local current = redis.call('get', KEYS[1])
+
+if not current then
+    redis.call('setex', KEYS[1], ARGV[2], ARGV[1])
+    return 1
+end
+
+local decoded_ok, decoded = pcall(cjson.decode, current)
+
+if decoded_ok and decoded['manager_id'] == ARGV[3] then
     redis.call('setex', KEYS[1], ARGV[2], ARGV[1])
     return 1
 end
@@ -118,8 +116,8 @@ LUA;
         $ttl = AutoscaleConfiguration::clusterLeaderLeaseSeconds();
 
         $acquired = $redis instanceof PhpRedisConnection
-            ? $redis->command('eval', [$script, [$leaderKey, $encodedPayload, $ttl], 1])
-            : $redis->command('eval', [$script, 1, $leaderKey, $encodedPayload, $ttl]);
+            ? $redis->command('eval', [$script, [$leaderKey, $encodedPayload, $ttl, $managerId], 1])
+            : $redis->command('eval', [$script, 1, $leaderKey, $encodedPayload, $ttl, $managerId]);
 
         return $acquired === true || $acquired === 1 || $acquired === '1';
     }
