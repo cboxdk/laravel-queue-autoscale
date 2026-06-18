@@ -3,10 +3,12 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterRecommendation;
+use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Illuminate\Support\Facades\Event;
+use Mockery\MockInterface;
 
 it('applies cluster recommendation for discovered queues not in explicit config', function () {
     config()->set('queue-autoscale.queues', []);
@@ -75,6 +77,36 @@ it('skips excluded queues in cluster recommendation', function () {
         workloads: [
             'queue:redis:ignored' => 2,
         ],
+    );
+
+    $manager = app(AutoscaleManager::class);
+
+    $method = new ReflectionMethod($manager, 'applyClusterRecommendation');
+    $method->invoke($manager, $recommendation);
+
+    Event::assertNotDispatched(WorkersScaled::class);
+});
+
+it('ignores stale recommendations from a previous leader', function () {
+    config()->set('queue-autoscale.queues', []);
+    config()->set('queue-autoscale.groups', []);
+    config()->set('queue-autoscale.excluded', []);
+
+    Event::fake([WorkersScaled::class]);
+
+    $this->mock(ClusterStore::class, function (MockInterface $mock): void {
+        $mock->shouldReceive('leaderId')
+            ->once()
+            ->andReturn('current-leader');
+    });
+
+    $recommendation = new ClusterRecommendation(
+        managerId: 'test-mgr',
+        issuedAt: now()->timestamp,
+        workloads: [
+            'queue:redis:default' => 2,
+        ],
+        leaderId: 'previous-leader',
     );
 
     $manager = app(AutoscaleManager::class);
