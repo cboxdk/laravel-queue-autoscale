@@ -68,7 +68,7 @@ describe('steady state calculations', function () {
             'oldest_job_age' => 0,
         ]);
 
-        // Avg job time: 4 workers / 2 jobs/sec = 2 sec/job
+        // Fallback avg job time: 2 sec
         // Little's Law: 2 jobs/sec × 2 sec = 4 workers (within max=10)
         $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
 
@@ -76,7 +76,7 @@ describe('steady state calculations', function () {
         expect($workers)->toBeGreaterThanOrEqual(4);
     });
 
-    it('estimates average job time from processing rate and active workers', function () {
+    it('uses fallback average job time instead of deriving it from active workers', function () {
         $metrics = createMetrics([
             'throughput_per_minute' => 120.0, // 2.0 jobs/sec * 60
             'active_workers' => 6,
@@ -84,11 +84,11 @@ describe('steady state calculations', function () {
             'oldest_job_age' => 0,
         ]);
 
-        // Avg job time: 6 workers / 2 jobs/sec = 3 sec/job
-        // Steady state: 2 jobs/sec × 3 sec = 6 workers (within max=10)
+        // Fallback avg job time: 2 sec
+        // Steady state: 2 jobs/sec × 2 sec = 4 workers (within max=10)
         $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
 
-        expect($workers)->toBeGreaterThanOrEqual(6);
+        expect($workers)->toBe(4);
     });
 
     it('uses configurable fallback average job time when no active workers', function () {
@@ -140,7 +140,7 @@ describe('backlog drain calculations', function () {
             'oldest_job_age' => 25, // approaching SLA (30s)
         ]);
 
-        // Avg job time: 2 sec
+        // Fallback avg job time: 2 sec
         // Steady: 2 × 2 = 4 workers
         // Backlog drain will be higher due to imminent breach
         $workers = $this->strategy->calculateTargetWorkers($metrics, $config);
@@ -158,7 +158,7 @@ describe('backlog drain calculations', function () {
             'oldest_job_age' => 28, // very close to SLA breach
         ]);
 
-        // Avg job time: 4 / 2 = 2 sec
+        // Fallback avg job time: 2 sec
         // Steady state: 2 × 2 = 4 workers
         // Backlog drain: will be much higher (approaching breach)
         $workers = $this->strategy->calculateTargetWorkers($metrics, $config);
@@ -339,8 +339,8 @@ describe('fallback arrival rate estimation', function () {
 
         $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
 
-        // Should NOT return 0 workers despite zero throughput
-        // Fallback estimates from active workers' capacity
+        // Should NOT return 0 workers despite zero throughput.
+        // Fallback estimates from backlog demand, not worker capacity.
         expect($workers)->toBeGreaterThan(0);
     });
 
@@ -521,6 +521,22 @@ describe('metrics handling', function () {
         // Workers = rate * avgDuration = 10 * 3 = 30 (within max=50)
         expect($workers)->toBeGreaterThanOrEqual(30)
             ->and($reason)->toContain('3'); // Should reference 3 second job time
+    });
+
+    it('does not preserve inflated worker count when duration metrics are missing', function () {
+        $config = makeQueueConfig(['minWorkers' => 0, 'maxWorkers' => 100]);
+        $metrics = createMetrics([
+            'throughput_per_minute' => 88.0,
+            'active_workers' => 18,
+            'pending' => 1,
+            'oldest_job_age' => 1,
+            'avg_duration' => 0.0,
+            'utilization_rate' => 0.0,
+        ]);
+
+        $workers = $this->strategy->calculateTargetWorkers($metrics, $config);
+
+        expect($workers)->toBe(3);
     });
 });
 

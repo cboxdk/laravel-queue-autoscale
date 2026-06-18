@@ -63,7 +63,7 @@ final class HybridStrategy implements ScalingStrategyContract
         $this->arrivalRateSource = '';
 
         // Determine average job time
-        [$avgJobTime, $jobTimeSource] = $this->determineJobTime($metrics, $processingRate, $activeWorkers);
+        [$avgJobTime, $jobTimeSource] = $this->determineJobTime($metrics);
 
         // Lazily configure the forecaster from queue config if not already set
         if (! $this->arrivalEstimator->hasForecaster()) {
@@ -97,7 +97,6 @@ final class HybridStrategy implements ScalingStrategyContract
         if ($arrivalRate === 0.0) {
             $arrivalRate = $this->estimateFallbackArrivalRate(
                 $backlogSize,
-                $activeWorkers,
                 $oldestJobAge,
                 $avgJobTime,
                 $config->sla->targetSeconds
@@ -356,8 +355,7 @@ final class HybridStrategy implements ScalingStrategyContract
      *
      * Priority order:
      * 1. Average duration from metrics (when available, always in seconds)
-     * 2. Estimation from throughput and worker count
-     * 3. Configurable fallback (default: 2.0 seconds)
+     * 2. Configurable fallback (default: 2.0 seconds)
      *
      * Note: The metrics package provides avgDuration in milliseconds, but
      * AutoscaleManager::mapMetricsFields() converts to seconds before creating
@@ -365,11 +363,8 @@ final class HybridStrategy implements ScalingStrategyContract
      *
      * @return array{float, string} [avgJobTime, source]
      */
-    private function determineJobTime(
-        QueueMetricsData $metrics,
-        float $processingRate,
-        int $activeWorkers
-    ): array {
+    private function determineJobTime(QueueMetricsData $metrics): array
+    {
         // Priority 1: Use average duration from metrics (already in seconds)
         if ($metrics->avgDuration > 0) {
             $avgDurationSeconds = $metrics->avgDuration;
@@ -381,17 +376,7 @@ final class HybridStrategy implements ScalingStrategyContract
             }
         }
 
-        // Priority 2: Estimate from throughput and active workers
-        if ($activeWorkers > 0 && $processingRate > 0) {
-            $estimated = $activeWorkers / $processingRate;
-
-            // Sanity check: cap at reasonable maximum (10 minutes)
-            $estimated = min($estimated, 600.0);
-
-            return [$estimated, sprintf('estimated: %d workers / %.2f rate = %.2fs', $activeWorkers, $processingRate, $estimated)];
-        }
-
-        // Priority 3: Configurable fallback
+        // Priority 2: Configurable fallback
         $fallback = AutoscaleConfiguration::fallbackJobTimeSeconds();
 
         return [$fallback, sprintf('fallback: %.1fs (configurable)', $fallback)];
@@ -404,7 +389,6 @@ final class HybridStrategy implements ScalingStrategyContract
      * Does NOT estimate from worker capacity - having workers doesn't mean jobs are arriving.
      *
      * @param  int  $backlogSize  Number of pending jobs
-     * @param  int  $activeWorkers  Current active workers (unused - kept for signature)
      * @param  int  $oldestJobAge  Age of oldest job in seconds
      * @param  float  $avgJobTime  Average processing time per job
      * @param  int  $slaTarget  Max pickup time SLA in seconds
@@ -412,7 +396,6 @@ final class HybridStrategy implements ScalingStrategyContract
      */
     private function estimateFallbackArrivalRate(
         int $backlogSize,
-        int $activeWorkers,
         int $oldestJobAge,
         float $avgJobTime,
         int $slaTarget,
