@@ -34,6 +34,21 @@ test('returns zero workers for idle queue', function () {
     expect($workers)->toBe(0);
 });
 
+test('uses fallback job time instead of deriving it from active workers', function () {
+    $metrics = MetricsHelper::createMetrics([
+        'pending' => 0,
+        'throughputPerMinute' => 60.0,
+        'avgDuration' => 0.0,
+        'oldestJobAge' => 0,
+        'activeWorkers' => 20,
+    ]);
+
+    $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
+
+    // Fallback job time: 2s. Little's Law gives 2 workers, then 25% buffer rounds to 3.
+    expect($workers)->toBe(3);
+});
+
 test('scales more aggressively than simple strategy', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 50,

@@ -39,13 +39,14 @@ test('uses fallback job time when metrics unavailable', function () {
         'throughputPerMinute' => 60.0, // 1 job/sec
         'avgDuration' => 0, // No duration data
         'oldestJobAge' => 5,
+        'activeWorkers' => 20,
     ]);
 
     $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
 
-    // With no duration data, falls back to 1 second
-    // Little's Law: L = 1 job/s × 1s = 1 worker
-    expect($workers)->toBe(1);
+    // With no duration data, falls back to the configured 2 second job time.
+    // Little's Law: L = 1 job/s × 2s = 2 workers
+    expect($workers)->toBe(2);
 });
 
 test('provides descriptive reason', function () {

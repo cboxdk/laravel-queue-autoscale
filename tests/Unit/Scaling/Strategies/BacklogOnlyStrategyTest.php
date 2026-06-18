@@ -33,6 +33,21 @@ test('returns zero workers for empty backlog', function () {
     expect($workers)->toBe(0);
 });
 
+test('uses fallback job time instead of deriving it from active workers', function () {
+    $metrics = MetricsHelper::createMetrics([
+        'pending' => 30,
+        'throughputPerMinute' => 60.0,
+        'avgDuration' => 0.0,
+        'oldestJobAge' => 0,
+        'activeWorkers' => 20,
+    ]);
+
+    $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
+
+    // Fallback job time: 2s. 30 jobs can be cleared inside the 30s SLA by 2 workers.
+    expect($workers)->toBe(2);
+});
+
 test('scales aggressively for old backlog', function () {
     $metrics = MetricsHelper::createMetrics([
         'pending' => 50,

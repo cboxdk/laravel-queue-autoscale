@@ -118,13 +118,6 @@ final class BacklogOnlyStrategy implements ScalingStrategyContract
             }
         }
 
-        // Estimate from current throughput if available
-        $processingRate = $metrics->throughputPerMinute / 60.0;
-        if ($metrics->activeWorkers > 0 && $processingRate > 0) {
-            return $metrics->activeWorkers / $processingRate;
-        }
-
-        // Fallback: assume 1 second per job
-        return 1.0;
+        return AutoscaleConfiguration::fallbackJobTimeSeconds();
     }
 }

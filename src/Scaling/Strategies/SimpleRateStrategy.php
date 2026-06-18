@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Scaling\Strategies;
 
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
@@ -40,7 +41,7 @@ final class SimpleRateStrategy implements ScalingStrategyContract
         $processingRate = $metrics->throughputPerMinute / 60.0;
 
         // Determine average job time
-        $avgJobTime = $this->determineJobTime($metrics, $processingRate, $metrics->activeWorkers);
+        $avgJobTime = $this->determineJobTime($metrics);
 
         // Calculate steady-state workers using Little's Law (L = λW)
         $targetWorkers = $this->littles->calculate($processingRate, $avgJobTime);
@@ -84,23 +85,14 @@ final class SimpleRateStrategy implements ScalingStrategyContract
     /**
      * Determine average job time from metrics
      */
-    private function determineJobTime(
-        QueueMetricsData $metrics,
-        float $processingRate,
-        int $activeWorkers
-    ): float {
+    private function determineJobTime(QueueMetricsData $metrics): float
+    {
         if ($metrics->avgDuration > 0) {
             if ($metrics->avgDuration >= 0.01) {
                 return $metrics->avgDuration;
             }
         }
 
-        // Estimate from throughput and active workers
-        if ($activeWorkers > 0 && $processingRate > 0) {
-            return $activeWorkers / $processingRate;
-        }
-
-        // Fallback: assume 1 second per job
-        return 1.0;
+        return AutoscaleConfiguration::fallbackJobTimeSeconds();
     }
 }
