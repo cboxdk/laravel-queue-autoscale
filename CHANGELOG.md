@@ -5,6 +5,14 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.9.1 - 2026-06-19
+
+### What's Changed
+
+* Weight cluster distribution by host capacity by @sylvesterdamgaard in https://github.com/cboxdk/laravel-queue-autoscale/pull/34
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.9.0...v3.9.1
+
 ## v3.9.0 - 2026-06-19
 
 ### What's Changed
@@ -129,6 +137,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
           ],
       ],
   ],
+  
   
   
   ```
@@ -441,6 +450,7 @@ composer require php-tui/php-tui --dev
 
 
 
+
 ```
 ### Usage
 
@@ -453,6 +463,7 @@ php artisan queue:autoscale:debug
 
 # Dispatch test jobs
 php artisan queue:autoscale:test --jobs=10 --queue=default
+
 
 
 
@@ -489,6 +500,7 @@ First stable release of Queue Autoscale for Laravel with intelligent, predictive
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
+
 
 
 
