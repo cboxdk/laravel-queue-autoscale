@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\EmaSpawnLatencyTracker;
+use Illuminate\Redis\Connections\Connection;
+use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Support\Facades\Redis;
 
 // Returns a closure-based in-memory Redis fake for use with andReturnUsing.
@@ -21,6 +23,44 @@ function makeSpawnConfig(float $fallback = 2.5, int $minSamples = 5, float $alph
         minSamples: $minSamples,
         emaAlpha: $alpha,
     );
+}
+
+function mockAtomicSpawnLatencyUpdates(array &$store, int $times): void
+{
+    $connection = Mockery::mock(Connection::class);
+    $connection->shouldReceive('command')
+        ->times($times)
+        ->withArgs(function (string $method, array $parameters) use (&$store): bool {
+            expect($method)->toBe('eval');
+            expect($parameters)->toHaveCount(7);
+
+            [$script, $numberOfKeys, $pendingKey, $emaKey, $countKey, $latency, $alpha] = $parameters;
+
+            expect($script)->toContain("redis.call('incr'");
+            expect($numberOfKeys)->toBe(3);
+
+            if (! array_key_exists($pendingKey, $store)) {
+                return true;
+            }
+
+            $current = is_numeric($store[$emaKey] ?? null) ? (float) $store[$emaKey] : null;
+            $latency = (float) $latency;
+            $alpha = (float) $alpha;
+            $next = $current === null
+                ? $latency
+                : ($alpha * $latency) + ((1 - $alpha) * $current);
+
+            $store[$emaKey] = (string) $next;
+            $store[$countKey] = (string) ((int) ($store[$countKey] ?? 0) + 1);
+            unset($store[$pendingKey]);
+
+            return true;
+        })
+        ->andReturn(1);
+
+    Redis::shouldReceive('connection')
+        ->times($times)
+        ->andReturn($connection);
 }
 
 test('returns fallback when fewer than 5 samples recorded', function (): void {
@@ -88,6 +128,7 @@ test('converges toward true latency after multiple samples', function (): void {
 
             return 1;
         });
+    mockAtomicSpawnLatencyUpdates($store, 20);
 
     $tracker = new EmaSpawnLatencyTracker(alpha: 0.2);
     $config = makeSpawnConfig(fallback: 10.0, minSamples: 5, alpha: 0.2);
@@ -120,6 +161,48 @@ test('ignores pickup for unknown worker id', function (): void {
     $tracker->recordFirstPickup('nonexistent-worker', microtime(true));
 
     expect($tracker->currentLatency('redis', 'default', $config))->toBe(2.5);
+});
+
+test('updates ema through phpredis compatible eval arguments', function (): void {
+    $spawnTs = microtime(true) - 1.0;
+    $payload = json_encode([
+        'ts' => $spawnTs,
+        'connection' => 'redis',
+        'queue' => 'default',
+        'alpha' => 0.2,
+    ], JSON_THROW_ON_ERROR);
+
+    Redis::shouldReceive('get')
+        ->with('autoscale:spawn:pending:worker-1')
+        ->once()
+        ->andReturn($payload);
+
+    $connection = Mockery::mock(PhpRedisConnection::class);
+    $connection->shouldReceive('command')
+        ->once()
+        ->withArgs(function (string $method, array $parameters): bool {
+            expect($method)->toBe('eval');
+            expect($parameters)->toHaveCount(3);
+
+            [$script, $arguments, $numberOfKeys] = $parameters;
+
+            expect($script)->toContain("redis.call('incr'");
+            expect($arguments)->toHaveCount(5);
+            expect($arguments[0])->toBe('autoscale:spawn:pending:worker-1');
+            expect($arguments[1])->toBe('autoscale:spawn:ema:redis:default');
+            expect($arguments[2])->toBe('autoscale:spawn:count:redis:default');
+            expect($numberOfKeys)->toBe(3);
+
+            return true;
+        })
+        ->andReturn(1);
+
+    Redis::shouldReceive('connection')
+        ->once()
+        ->andReturn($connection);
+
+    $tracker = new EmaSpawnLatencyTracker(alpha: 0.2);
+    $tracker->recordFirstPickup('worker-1', $spawnTs + 1.0);
 });
 
 test('clamps extreme latencies into safe bounds', function (): void {
@@ -173,6 +256,7 @@ test('clamps extreme latencies into safe bounds', function (): void {
 
             return 1;
         });
+    mockAtomicSpawnLatencyUpdates($store, 3);
 
     // minSamples=1 and alpha=1.0 so the EMA becomes the last sample immediately.
     $tracker = new EmaSpawnLatencyTracker(alpha: 1.0);
@@ -239,6 +323,7 @@ test('isolates queues from one another', function (): void {
 
             return 1;
         });
+    mockAtomicSpawnLatencyUpdates($store, 10);
 
     $tracker = new EmaSpawnLatencyTracker(alpha: 0.2);
     $config = makeSpawnConfig(fallback: 2.5, minSamples: 5, alpha: 0.2);

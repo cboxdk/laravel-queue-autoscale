@@ -6,6 +6,8 @@ namespace Cbox\LaravelQueueAutoscale\Workers\SpawnLatency;
 
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
+use Illuminate\Redis\Connections\Connection;
+use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Support\Facades\Redis;
 
 final class EmaSpawnLatencyTracker implements SpawnLatencyTrackerContract
@@ -62,22 +64,13 @@ final class EmaSpawnLatencyTracker implements SpawnLatencyTrackerContract
             ? $storedAlpha
             : $this->alpha;
 
-        /*
-         * NOTE: Read-modify-write of the EMA key is non-atomic.
-         * Concurrent first-pickups from multiple workers on the same queue
-         * can lose samples (last-write-wins). This is tolerable because the
-         * EMA is a smoothed signal; one lost sample doesn't degrade accuracy
-         * meaningfully. If that guarantee is insufficient, wrap the update
-         * in a Redis EVAL (Lua) or use WATCH/MULTI/EXEC.
-         */
-        $currentEma = Redis::get($emaKey);
-        $newEma = is_numeric($currentEma)
-            ? ($alpha * $latency) + ((1 - $alpha) * (float) $currentEma)
-            : $latency;
-
-        Redis::set($emaKey, (string) $newEma);
-        Redis::incr($countKey);
-        Redis::del($this->pendingKey($workerId));
+        $this->recordLatencyAtomically(
+            pendingKey: $this->pendingKey($workerId),
+            emaKey: $emaKey,
+            countKey: $countKey,
+            latency: $latency,
+            alpha: $alpha,
+        );
     }
 
     /**
@@ -114,5 +107,49 @@ final class EmaSpawnLatencyTracker implements SpawnLatencyTrackerContract
     private function countKey(string $connection, string $queue): string
     {
         return sprintf('autoscale:spawn:count:%s:%s', $connection, $queue);
+    }
+
+    private function recordLatencyAtomically(
+        string $pendingKey,
+        string $emaKey,
+        string $countKey,
+        float $latency,
+        float $alpha,
+    ): void {
+        $script = <<<'LUA'
+if redis.call('get', KEYS[1]) == false then
+    return 0
+end
+
+local current = tonumber(redis.call('get', KEYS[2]))
+local latency = tonumber(ARGV[1])
+local alpha = tonumber(ARGV[2])
+local next = latency
+
+if current ~= nil then
+    next = (alpha * latency) + ((1 - alpha) * current)
+end
+
+redis.call('set', KEYS[2], tostring(next))
+redis.call('incr', KEYS[3])
+redis.call('del', KEYS[1])
+
+return 1
+LUA;
+
+        $redis = $this->redis();
+
+        if ($redis instanceof PhpRedisConnection) {
+            $redis->command('eval', [$script, [$pendingKey, $emaKey, $countKey, (string) $latency, (string) $alpha], 3]);
+
+            return;
+        }
+
+        $redis->command('eval', [$script, 3, $pendingKey, $emaKey, $countKey, (string) $latency, (string) $alpha]);
+    }
+
+    private function redis(): Connection
+    {
+        return Redis::connection();
     }
 }

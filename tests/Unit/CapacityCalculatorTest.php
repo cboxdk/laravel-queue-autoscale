@@ -258,5 +258,8 @@ it('uses per-queue memory estimate from ResourceEstimate', function () {
 
     if ($largeResult->maxWorkersByMemory > 0) {
         expect($smallResult->maxWorkersByMemory)->toBeGreaterThan($largeResult->maxWorkersByMemory);
+    } else {
+        expect($smallResult->details['memory_details']['worker_memory_mb'])->toBe(50.0)
+            ->and($largeResult->details['memory_details']['worker_memory_mb'])->toBe(2048.0);
     }
 });
