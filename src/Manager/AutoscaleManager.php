@@ -722,8 +722,9 @@ final class AutoscaleManager
             return $targets;
         }
 
-        // Reuse previous distribution when target is unchanged and all
-        // cached assignments still fit within each host's remaining capacity.
+        // Reuse previous distribution when target is unchanged, all cached
+        // assignments still fit within each host's remaining capacity, and the
+        // cached split is still balanced by host capacity.
         // This prevents worker pool thrashing caused by sort-order instability
         // when reported current counts fluctuate between heartbeats.
         $cached = $this->previousDistributions[$workloadKey] ?? null;
@@ -753,7 +754,7 @@ final class AutoscaleManager
                     }
                 }
 
-                if ($feasible) {
+                if ($feasible && $this->distributionIsCapacityBalanced($activeManagers, $cached, $assignedTotals)) {
                     foreach ($cached as $managerId => $cachedCount) {
                         $targets[$managerId] = $cachedCount;
                         $assignedTotals[$managerId] += $cachedCount;
@@ -772,35 +773,12 @@ final class AutoscaleManager
             $currentCounts[$state->managerId] = (int) ($counts["{$connection}:{$name}"] ?? 0);
         }
 
-        $preserveOrder = $activeManagers;
-        usort(
-            $preserveOrder,
-            fn (ClusterManagerState $a, ClusterManagerState $b): int => ($currentCounts[$b->managerId] <=> $currentCounts[$a->managerId])
-                ?: strcmp($a->managerId, $b->managerId),
-        );
-
         $remaining = $targetWorkers;
 
-        // Phase 1: Preserve existing workers on their current managers,
-        // but cap at each manager's reported capacity.
-        foreach ($preserveOrder as $state) {
-            if ($remaining <= 0) {
-                break;
-            }
-
-            $hostCapacity = max($state->maxWorkers - ($assignedTotals[$state->managerId] ?? 0), 0);
-            $keep = min($currentCounts[$state->managerId], $remaining, $hostCapacity);
-            $targets[$state->managerId] = $keep;
-            $assignedTotals[$state->managerId] += $keep;
-            $remaining -= $keep;
-        }
-
-        // Phase 2: Distribute remaining workers to least-loaded managers
-        // that still have capacity.
         while ($remaining > 0) {
             $candidates = array_values(array_filter(
                 $activeManagers,
-                fn (ClusterManagerState $state): bool => $assignedTotals[$state->managerId] < $state->maxWorkers,
+                fn (ClusterManagerState $state): bool => ($assignedTotals[$state->managerId] + $targets[$state->managerId]) < $state->maxWorkers,
             ));
 
             if ($candidates === []) {
@@ -809,21 +787,97 @@ final class AutoscaleManager
 
             usort(
                 $candidates,
-                fn (ClusterManagerState $a, ClusterManagerState $b): int => ($assignedTotals[$a->managerId] <=> $assignedTotals[$b->managerId])
-                    ?: ($a->totalWorkers <=> $b->totalWorkers)
+                fn (ClusterManagerState $a, ClusterManagerState $b): int => $this->projectedUtilizationAfterAssignment($a, $targets, $assignedTotals) <=> $this->projectedUtilizationAfterAssignment($b, $targets, $assignedTotals)
+                    ?: (($currentCounts[$b->managerId] - $targets[$b->managerId]) <=> ($currentCounts[$a->managerId] - $targets[$a->managerId]))
                     ?: strcmp($a->managerId, $b->managerId),
             );
 
             $chosen = $candidates[0];
 
             $targets[$chosen->managerId]++;
-            $assignedTotals[$chosen->managerId]++;
             $remaining--;
+        }
+
+        foreach ($targets as $managerId => $target) {
+            $assignedTotals[$managerId] += $target;
         }
 
         $this->previousDistributions[$workloadKey] = $targets;
 
         return $targets;
+    }
+
+    /**
+     * @param  array<int, ClusterManagerState>  $activeManagers
+     * @param  array<string, int>  $distribution
+     * @param  array<string, int>  $assignedTotals
+     */
+    private function distributionIsCapacityBalanced(array $activeManagers, array $distribution, array $assignedTotals): bool
+    {
+        $currentSpread = $this->distributionUtilizationSpread($activeManagers, $distribution, $assignedTotals);
+
+        foreach ($activeManagers as $donor) {
+            $donorId = $donor->managerId;
+
+            if (($distribution[$donorId] ?? 0) <= 0) {
+                continue;
+            }
+
+            foreach ($activeManagers as $recipient) {
+                $recipientId = $recipient->managerId;
+
+                if ($recipientId === $donorId) {
+                    continue;
+                }
+
+                if ((($assignedTotals[$recipientId] ?? 0) + ($distribution[$recipientId] ?? 0)) >= $recipient->maxWorkers) {
+                    continue;
+                }
+
+                $candidate = $distribution;
+                $candidate[$donorId]--;
+                $candidate[$recipientId]++;
+
+                if ($this->distributionUtilizationSpread($activeManagers, $candidate, $assignedTotals) + 0.000001 < $currentSpread) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  array<int, ClusterManagerState>  $activeManagers
+     * @param  array<string, int>  $distribution
+     * @param  array<string, int>  $assignedTotals
+     */
+    private function distributionUtilizationSpread(array $activeManagers, array $distribution, array $assignedTotals): float
+    {
+        $min = null;
+        $max = null;
+
+        foreach ($activeManagers as $state) {
+            $utilization = $this->utilizationFor($state, ($assignedTotals[$state->managerId] ?? 0) + ($distribution[$state->managerId] ?? 0));
+            $min = $min === null ? $utilization : min($min, $utilization);
+            $max = $max === null ? $utilization : max($max, $utilization);
+        }
+
+        return ($max ?? 0.0) - ($min ?? 0.0);
+    }
+
+    /**
+     * @param  array<string, int>  $targets
+     * @param  array<string, int>  $assignedTotals
+     */
+    private function projectedUtilizationAfterAssignment(ClusterManagerState $state, array $targets, array $assignedTotals): float
+    {
+        return $this->utilizationFor($state, ($assignedTotals[$state->managerId] ?? 0) + ($targets[$state->managerId] ?? 0) + 1);
+    }
+
+    private function utilizationFor(ClusterManagerState $state, int $workers): float
+    {
+        return $workers / max($state->maxWorkers, 1);
     }
 
     private function reconcileQueueTarget(QueueConfiguration $config, int $targetWorkers): void
