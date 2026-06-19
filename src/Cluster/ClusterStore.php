@@ -86,28 +86,47 @@ class ClusterStore
         return is_string($managerId) && $managerId !== '' ? $managerId : null;
     }
 
+    public function leaderToken(): ?string
+    {
+        $payload = $this->decode($this->redis()->get($this->leaderKey()));
+
+        if (! is_array($payload)) {
+            return null;
+        }
+
+        $token = $payload['leader_token'] ?? null;
+
+        return is_string($token) && $token !== '' ? $token : null;
+    }
+
     public function isLeader(string $managerId): bool
     {
         $redis = $this->redis();
-        $current = $this->leaderId();
+        $renewedAt = $this->currentTimestamp();
         $payload = [
             'manager_id' => $managerId,
-            'renewed_at' => $this->currentTimestamp(),
+            'renewed_at' => $renewedAt,
+            'leader_token' => $this->newLeaderToken(),
         ];
 
-        if ($current === $managerId) {
-            $redis->setex(
-                $this->leaderKey(),
-                AutoscaleConfiguration::clusterLeaderLeaseSeconds(),
-                $this->encode($payload),
-            );
-
-            return true;
-        }
-
         $script = <<<'LUA'
-if redis.call('exists', KEYS[1]) == 0 then
+local current = redis.call('get', KEYS[1])
+
+if not current then
     redis.call('setex', KEYS[1], ARGV[2], ARGV[1])
+    return 1
+end
+
+local decoded_ok, decoded = pcall(cjson.decode, current)
+
+if decoded_ok and decoded['manager_id'] == ARGV[3] then
+    if decoded['leader_token'] == nil or decoded['leader_token'] == '' then
+        redis.call('setex', KEYS[1], ARGV[2], ARGV[1])
+    else
+        decoded['renewed_at'] = tonumber(ARGV[4]) or ARGV[4]
+        redis.call('setex', KEYS[1], ARGV[2], cjson.encode(decoded))
+    end
+
     return 1
 end
 
@@ -118,8 +137,8 @@ LUA;
         $ttl = AutoscaleConfiguration::clusterLeaderLeaseSeconds();
 
         $acquired = $redis instanceof PhpRedisConnection
-            ? $redis->command('eval', [$script, [$leaderKey, $encodedPayload, $ttl], 1])
-            : $redis->command('eval', [$script, 1, $leaderKey, $encodedPayload, $ttl]);
+            ? $redis->command('eval', [$script, [$leaderKey, $encodedPayload, $ttl, $managerId, $renewedAt], 1])
+            : $redis->command('eval', [$script, 1, $leaderKey, $encodedPayload, $ttl, $managerId, $renewedAt]);
 
         return $acquired === true || $acquired === 1 || $acquired === '1';
     }
@@ -250,6 +269,11 @@ LUA;
     private function currentTimestamp(): int
     {
         return (int) round(microtime(true) * 1000);
+    }
+
+    private function newLeaderToken(): string
+    {
+        return bin2hex(random_bytes(16));
     }
 
     private function managersRegistryKey(): string

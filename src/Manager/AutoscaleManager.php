@@ -561,6 +561,7 @@ final class AutoscaleManager
         );
 
         $issuedAt = $this->currentTimestamp();
+        $leaderToken = $this->clusterStore->leaderToken();
 
         foreach ($managerIds as $managerId) {
             $this->clusterStore->publishRecommendation(
@@ -568,6 +569,8 @@ final class AutoscaleManager
                     managerId: $managerId,
                     issuedAt: $issuedAt,
                     workloads: $assignments[$managerId],
+                    leaderId: AutoscaleConfiguration::managerId(),
+                    leaderToken: $leaderToken,
                 )
             );
         }
@@ -599,6 +602,24 @@ final class AutoscaleManager
 
     private function applyClusterRecommendation(ClusterRecommendation $recommendation): void
     {
+        if ($recommendation->leaderId !== null && $recommendation->leaderId !== $this->clusterStore->leaderId()) {
+            $this->verbose(
+                "Ignoring stale cluster recommendation from previous leader={$recommendation->leaderId}",
+                'debug',
+            );
+
+            return;
+        }
+
+        if ($recommendation->leaderToken !== null && $recommendation->leaderToken !== $this->clusterStore->leaderToken()) {
+            $this->verbose(
+                'Ignoring stale cluster recommendation from previous leader lease',
+                'debug',
+            );
+
+            return;
+        }
+
         $groups = GroupConfiguration::allFromConfig();
         $groupedQueueKeys = $this->groupedQueueKeys($groups);
 

@@ -13,6 +13,8 @@ final readonly class ClusterRecommendation
         public string $managerId,
         public int $issuedAt,
         public array $workloads,
+        public ?string $leaderId = null,
+        public ?string $leaderToken = null,
     ) {}
 
     public static function queueWorkloadKey(string $connection, string $queue): string
@@ -44,6 +46,8 @@ final readonly class ClusterRecommendation
             'manager_id' => $this->managerId,
             'issued_at' => $this->issuedAt,
             'workloads' => $this->workloads,
+            'leader_id' => $this->leaderId,
+            'leader_token' => $this->leaderToken,
         ];
     }
 
@@ -65,11 +69,15 @@ final readonly class ClusterRecommendation
         }
 
         $managerId = $payload['manager_id'] ?? null;
+        $leaderId = $payload['leader_id'] ?? null;
+        $leaderToken = $payload['leader_token'] ?? null;
 
         return new self(
             managerId: is_string($managerId) ? $managerId : '',
             issuedAt: is_numeric($payload['issued_at'] ?? null) ? (int) $payload['issued_at'] : 0,
             workloads: $workloads,
+            leaderId: is_string($leaderId) && $leaderId !== '' ? $leaderId : null,
+            leaderToken: is_string($leaderToken) && $leaderToken !== '' ? $leaderToken : null,
         );
     }
 }
