@@ -28,16 +28,22 @@ it('acquires or renews the leader lease atomically through eval for phpredis', f
                 expect($script)->toContain("redis.call('get'");
                 expect($script)->toContain('pcall(cjson.decode');
                 expect($script)->toContain("decoded['manager_id'] == ARGV[3]");
+                expect($script)->toContain("decoded['leader_token']");
                 expect($script)->toContain("redis.call('setex'");
-                expect($arguments)->toHaveCount(4);
-                [$key, $payload, $ttl, $managerId] = $arguments;
+                expect($arguments)->toHaveCount(5);
+                [$key, $payload, $ttl, $managerId, $renewedAt] = $arguments;
                 expect($numberOfKeys)->toBe(1);
                 expect($key)->toContain('queue-autoscale:cluster:');
-                expect(json_decode($payload, true, 512, JSON_THROW_ON_ERROR))->toMatchArray([
+                $decodedPayload = json_decode($payload, true, 512, JSON_THROW_ON_ERROR);
+                expect($decodedPayload)->toMatchArray([
                     'manager_id' => 'manager-a',
                 ]);
+                expect($decodedPayload['leader_token'] ?? null)->toBeString();
+                expect($decodedPayload['leader_token'])->not->toBe('');
+                expect($decodedPayload['renewed_at'] ?? null)->toBeInt();
                 expect($ttl)->toBe(15);
                 expect($managerId)->toBe('manager-a');
+                expect($renewedAt)->toBeInt();
 
                 return true;
             })
@@ -64,4 +70,22 @@ it('does not treat the manager as leader when the atomic lease script rejects it
     $store = new ClusterStore;
 
     expect($store->isLeader('manager-a'))->toBeFalse();
+});
+
+it('reads the current leader fencing token from the lease payload', function () {
+    $connection = Mockery::mock(PhpRedisConnection::class, function (MockInterface $mock): void {
+        $mock->shouldReceive('get')
+            ->once()
+            ->with(Mockery::type('string'))
+            ->andReturn(json_encode([
+                'manager_id' => 'manager-a',
+                'renewed_at' => 1234,
+                'leader_token' => 'lease-token-a',
+            ], JSON_THROW_ON_ERROR));
+    });
+
+    Redis::shouldReceive('connection')->once()->andReturn($connection);
+    $store = new ClusterStore;
+
+    expect($store->leaderToken())->toBe('lease-token-a');
 });

@@ -92,6 +92,7 @@ it('resolves recommendation targets for queues and groups', function () {
             ClusterRecommendation::groupWorkloadKey('redis', 'mailers') => 1,
         ],
         leaderId: 'leader-a',
+        leaderToken: 'lease-token-a',
     );
 
     $decoded = ClusterRecommendation::fromArray($recommendation->toArray());
@@ -99,7 +100,8 @@ it('resolves recommendation targets for queues and groups', function () {
     expect($decoded->targetForQueue('redis', 'default'))->toBe(2)
         ->and($decoded->targetForGroup('redis', 'mailers'))->toBe(1)
         ->and($decoded->targetForQueue('redis', 'missing'))->toBe(0)
-        ->and($decoded->leaderId)->toBe('leader-a');
+        ->and($decoded->leaderId)->toBe('leader-a')
+        ->and($decoded->leaderToken)->toBe('lease-token-a');
 });
 
 it('keeps legacy recommendations without a leader id readable', function () {
@@ -112,5 +114,6 @@ it('keeps legacy recommendations without a leader id readable', function () {
     ]);
 
     expect($decoded->targetForQueue('redis', 'default'))->toBe(2)
-        ->and($decoded->leaderId)->toBeNull();
+        ->and($decoded->leaderId)->toBeNull()
+        ->and($decoded->leaderToken)->toBeNull();
 });

@@ -116,3 +116,37 @@ it('ignores stale recommendations from a previous leader', function () {
 
     Event::assertNotDispatched(WorkersScaled::class);
 });
+
+it('ignores stale recommendations from a previous lease held by the same leader id', function () {
+    config()->set('queue-autoscale.queues', []);
+    config()->set('queue-autoscale.groups', []);
+    config()->set('queue-autoscale.excluded', []);
+
+    Event::fake([WorkersScaled::class]);
+
+    $this->mock(ClusterStore::class, function (MockInterface $mock): void {
+        $mock->shouldReceive('leaderId')
+            ->once()
+            ->andReturn('leader-a');
+        $mock->shouldReceive('leaderToken')
+            ->once()
+            ->andReturn('current-lease-token');
+    });
+
+    $recommendation = new ClusterRecommendation(
+        managerId: 'test-mgr',
+        issuedAt: now()->timestamp,
+        workloads: [
+            'queue:redis:default' => 2,
+        ],
+        leaderId: 'leader-a',
+        leaderToken: 'previous-lease-token',
+    );
+
+    $manager = app(AutoscaleManager::class);
+
+    $method = new ReflectionMethod($manager, 'applyClusterRecommendation');
+    $method->invoke($manager, $recommendation);
+
+    Event::assertNotDispatched(WorkersScaled::class);
+});
