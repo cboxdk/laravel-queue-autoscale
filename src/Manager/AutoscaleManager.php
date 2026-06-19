@@ -232,6 +232,7 @@ final class AutoscaleManager
 
             try {
                 $this->processWorkerOutput();
+                $this->enforceTerminationDeadlines();
                 $this->cleanupDeadWorkers();
 
                 if (AutoscaleConfiguration::clusterEnabled()) {
@@ -1919,10 +1920,10 @@ final class AutoscaleManager
 
         $this->verbose("  ⬇️  Scaling group DOWN: terminating {$toRemove} worker(s) in '{$group->name}'", 'info');
 
-        $workers = $this->pool->removeFromGroup($group->connection, $group->name, $toRemove);
+        $workers = $this->pool->getTerminatableFromGroup($group->connection, $group->name, $toRemove);
 
         foreach ($workers as $worker) {
-            $this->terminator->terminate($worker);
+            $this->terminator->requestTermination($worker);
         }
 
         Log::channel(AutoscaleConfiguration::logChannel())->info(
@@ -2020,10 +2021,10 @@ final class AutoscaleManager
             $toRemove = $current - $target;
             $this->verbose("  ⬇️  Supervisor trim: terminating {$toRemove} excess worker(s)", 'info');
 
-            $workers = $this->pool->remove($connection, $queue, $toRemove);
+            $workers = $this->pool->getTerminatable($connection, $queue, $toRemove);
 
             foreach ($workers as $worker) {
-                $this->terminator->terminate($worker);
+                $this->terminator->requestTermination($worker);
             }
 
             Log::channel(AutoscaleConfiguration::logChannel())->info(
@@ -2159,15 +2160,15 @@ final class AutoscaleManager
             $decision->reason
         );
 
-        $workers = $this->pool->remove(
+        $workers = $this->pool->getTerminatable(
             $decision->connection,
             $decision->queue,
             $toRemove
         );
 
         foreach ($workers as $worker) {
-            $this->verbose("     ✓ Terminating worker: PID {$worker->pid()}", 'info');
-            $this->terminator->terminate($worker);
+            $this->verbose("     ✓ Requesting worker termination: PID {$worker->pid()}", 'info');
+            $this->terminator->requestTermination($worker);
         }
 
         Log::channel(AutoscaleConfiguration::logChannel())->info(
@@ -2212,6 +2213,13 @@ final class AutoscaleManager
         }
     }
 
+    private function enforceTerminationDeadlines(): void
+    {
+        foreach ($this->pool->getTerminatingWorkers() as $worker) {
+            $this->terminator->forceKillIfExpired($worker);
+        }
+    }
+
     private function processWorkerOutput(): void
     {
         if ($this->renderer === null) {
@@ -2249,7 +2257,7 @@ final class AutoscaleManager
                 pid: $worker->pid(),
                 connection: $worker->connection,
                 queue: $worker->queue,
-                status: $worker->isRunning() ? 'running' : 'dead',
+                status: $worker->isTerminating() ? 'terminating' : ($worker->isRunning() ? 'running' : 'dead'),
                 uptimeSeconds: $worker->uptimeSeconds(),
             );
             $id++;

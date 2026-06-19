@@ -9,6 +9,63 @@ use Illuminate\Support\Facades\Log;
 
 final readonly class WorkerTerminator
 {
+    public function requestTermination(WorkerProcess $worker): bool
+    {
+        if ($worker->isTerminating()) {
+            return true;
+        }
+
+        $pid = $worker->pid();
+
+        if ($pid === null || ! $worker->isRunning()) {
+            return true;
+        }
+
+        if (! posix_kill($pid, SIGTERM)) {
+            Log::channel(AutoscaleConfiguration::logChannel())->warning(
+                'Failed to send SIGTERM to worker',
+                ['pid' => $pid]
+            );
+
+            return false;
+        }
+
+        $worker->markTerminationRequested(now(), AutoscaleConfiguration::shutdownTimeoutSeconds());
+
+        Log::channel(AutoscaleConfiguration::logChannel())->info(
+            'Worker termination requested',
+            ['pid' => $pid]
+        );
+
+        return true;
+    }
+
+    public function forceKillIfExpired(WorkerProcess $worker): bool
+    {
+        if (! $worker->isTerminating()) {
+            return false;
+        }
+
+        $pid = $worker->pid();
+
+        if ($pid === null || ! $worker->isRunning()) {
+            return false;
+        }
+
+        if (! $worker->terminationDeadlinePassed(now())) {
+            return false;
+        }
+
+        Log::channel(AutoscaleConfiguration::logChannel())->warning(
+            'Worker termination deadline exceeded, sending SIGKILL',
+            ['pid' => $pid]
+        );
+
+        posix_kill($pid, SIGKILL);
+
+        return true;
+    }
+
     /**
      * Terminate a worker process gracefully (SIGTERM then SIGKILL)
      *

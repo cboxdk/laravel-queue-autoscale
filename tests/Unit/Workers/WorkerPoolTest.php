@@ -186,3 +186,30 @@ test('totalCount counts group and per-queue workers together', function () {
 
     expect($this->pool->totalCount())->toBe(2);
 });
+
+test('terminating workers stay tracked but do not count as active capacity', function () {
+    $worker = createMockWorker('redis', 'default', 6001);
+    $worker->markTerminationRequested(now(), 30);
+
+    $this->pool->add($worker);
+
+    expect($this->pool->all())->toHaveCount(1)
+        ->and($this->pool->getTerminatingWorkers())->toHaveCount(1)
+        ->and($this->pool->count('redis', 'default'))->toBe(0)
+        ->and($this->pool->totalCount())->toBe(0)
+        ->and($this->pool->queueCounts())->toBe([]);
+});
+
+test('terminatable workers exclude workers already shutting down', function () {
+    $terminating = createMockWorker('redis', 'default', 7001);
+    $terminating->markTerminationRequested(now(), 30);
+    $active = createMockWorker('redis', 'default', 7002);
+
+    $this->pool->add($terminating);
+    $this->pool->add($active);
+
+    $terminatable = $this->pool->getTerminatable('redis', 'default', 2);
+
+    expect($terminatable)->toHaveCount(1)
+        ->and($terminatable->first())->toBe($active);
+});
