@@ -102,21 +102,21 @@ final class WorkerPool
     public function count(string $connection, string $queue): int
     {
         return $this->workers->filter(
-            fn (WorkerProcess $w) => $w->matches($connection, $queue) && $w->isRunning()
+            fn (WorkerProcess $w) => $w->matches($connection, $queue) && $w->isRunning() && ! $w->isTerminating()
         )->count();
     }
 
     public function countGroup(string $connection, string $group): int
     {
         return $this->workers->filter(
-            fn (WorkerProcess $w) => $w->matchesGroup($connection, $group) && $w->isRunning()
+            fn (WorkerProcess $w) => $w->matchesGroup($connection, $group) && $w->isRunning() && ! $w->isTerminating()
         )->count();
     }
 
     public function totalCount(): int
     {
         return $this->workers->filter(
-            fn (WorkerProcess $w) => $w->isRunning()
+            fn (WorkerProcess $w) => $w->isRunning() && ! $w->isTerminating()
         )->count();
     }
 
@@ -128,7 +128,7 @@ final class WorkerPool
         $counts = [];
 
         foreach ($this->workers as $worker) {
-            if (! $worker->isRunning() || $worker->isGroupWorker()) {
+            if (! $worker->isRunning() || $worker->isTerminating() || $worker->isGroupWorker()) {
                 continue;
             }
 
@@ -149,7 +149,7 @@ final class WorkerPool
         $counts = [];
 
         foreach ($this->workers as $worker) {
-            if (! $worker->isRunning() || ! $worker->isGroupWorker() || $worker->group === null) {
+            if (! $worker->isRunning() || $worker->isTerminating() || ! $worker->isGroupWorker() || $worker->group === null) {
                 continue;
             }
 
@@ -176,12 +176,36 @@ final class WorkerPool
         );
     }
 
+    /** @return Collection<int, WorkerProcess> */
+    public function getTerminatingWorkers(): Collection
+    {
+        return $this->workers->filter(
+            fn (WorkerProcess $w) => $w->isTerminating() && $w->isRunning()
+        );
+    }
+
     /** @return array<int, WorkerProcess> */
     public function getByConnection(string $connection, string $queue): array
     {
         return $this->workers->filter(
             fn (WorkerProcess $w) => $w->matches($connection, $queue)
         )->values()->all();
+    }
+
+    /** @return Collection<int, WorkerProcess> */
+    public function getTerminatable(string $connection, string $queue, int $count): Collection
+    {
+        return $this->workers->filter(
+            fn (WorkerProcess $w) => $w->matches($connection, $queue) && $w->isRunning() && ! $w->isTerminating()
+        )->take($count);
+    }
+
+    /** @return Collection<int, WorkerProcess> */
+    public function getTerminatableFromGroup(string $connection, string $group, int $count): Collection
+    {
+        return $this->workers->filter(
+            fn (WorkerProcess $w) => $w->matchesGroup($connection, $group) && $w->isRunning() && ! $w->isTerminating()
+        )->take($count);
     }
 
     /**

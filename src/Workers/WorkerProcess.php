@@ -9,6 +9,10 @@ use Symfony\Component\Process\Process;
 
 final class WorkerProcess
 {
+    private ?Carbon $terminationRequestedAt = null;
+
+    private ?Carbon $terminationDeadline = null;
+
     /**
      * @param  string  $queue  For per-queue workers this is the queue name; for group workers it is the
      *                         comma-separated queue list exactly as passed to `queue:work --queue=`.
@@ -35,6 +39,22 @@ final class WorkerProcess
     public function isDead(): bool
     {
         return ! $this->process->isRunning();
+    }
+
+    public function isTerminating(): bool
+    {
+        return $this->terminationRequestedAt !== null;
+    }
+
+    public function markTerminationRequested(Carbon $requestedAt, int $timeoutSeconds): void
+    {
+        $this->terminationRequestedAt = $requestedAt;
+        $this->terminationDeadline = $requestedAt->copy()->addSeconds(max($timeoutSeconds, 0));
+    }
+
+    public function terminationDeadlinePassed(Carbon $now): bool
+    {
+        return $this->terminationDeadline !== null && $now->greaterThanOrEqualTo($this->terminationDeadline);
     }
 
     public function uptimeSeconds(): int
