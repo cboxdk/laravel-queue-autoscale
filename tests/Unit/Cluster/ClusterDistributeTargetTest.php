@@ -49,6 +49,24 @@ function invokeDistributeClusterTarget(array $managers, string $workloadKey, int
     return $method->invokeArgs($manager, [$managers, $workloadKey, $targetWorkers, &$assignedTotals]);
 }
 
+/**
+ * @param  array<int, ClusterManagerState>  $managers
+ * @param  array<string, int>  $assignedTotals
+ * @param  array<string, array<string, int>>  $previousDistributions
+ * @return array<string, int>
+ */
+function invokeDistributeClusterTargetWithCache(array $managers, string $workloadKey, int $targetWorkers, array &$assignedTotals, array $previousDistributions): array
+{
+    $manager = app(AutoscaleManager::class);
+
+    $property = new ReflectionProperty($manager, 'previousDistributions');
+    $property->setValue($manager, $previousDistributions);
+
+    $method = new ReflectionMethod($manager, 'distributeClusterTarget');
+
+    return $method->invokeArgs($manager, [$managers, $workloadKey, $targetWorkers, &$assignedTotals]);
+}
+
 it('caps assignments at per-host maxWorkers', function () {
     $small = makeManagerState('small', maxWorkers: 2);
     $large = makeManagerState('large', maxWorkers: 4);
@@ -76,7 +94,50 @@ it('distributes to least-loaded manager first', function () {
     expect($result['b'])->toBeGreaterThanOrEqual($result['a']);
 });
 
-it('skips full hosts in phase 2', function () {
+it('weights assignments by each host worker capacity', function () {
+    $small = makeManagerState('small', maxWorkers: 4);
+    $large = makeManagerState('large', maxWorkers: 8);
+    $managers = [$small, $large];
+
+    $assignedTotals = ['small' => 0, 'large' => 0];
+    $result = invokeDistributeClusterTarget($managers, 'queue:redis:fast', 6, $assignedTotals);
+
+    expect($result)->toBe([
+        'small' => 2,
+        'large' => 4,
+    ])->and($assignedTotals)->toBe([
+        'small' => 2,
+        'large' => 4,
+    ]);
+});
+
+it('rebalances cached assignments when host capacity changes the fair split', function () {
+    $small = makeManagerState('small', maxWorkers: 4);
+    $large = makeManagerState('large', maxWorkers: 8);
+    $managers = [$small, $large];
+    $workloadKey = 'queue:redis:fast';
+
+    $assignedTotals = ['small' => 0, 'large' => 0];
+    $result = invokeDistributeClusterTargetWithCache(
+        managers: $managers,
+        workloadKey: $workloadKey,
+        targetWorkers: 6,
+        assignedTotals: $assignedTotals,
+        previousDistributions: [
+            $workloadKey => [
+                'small' => 3,
+                'large' => 3,
+            ],
+        ],
+    );
+
+    expect($result)->toBe([
+        'small' => 2,
+        'large' => 4,
+    ]);
+});
+
+it('skips full hosts when assigning workers', function () {
     $full = makeManagerState('full', maxWorkers: 2);
     $available = makeManagerState('available', maxWorkers: 5);
     $managers = [$full, $available];
@@ -99,7 +160,7 @@ it('returns zero assignments when target is zero', function () {
     expect($result['a'])->toBe(0);
 });
 
-it('preserves existing workers in phase 1', function () {
+it('prefers preserving existing workers when utilization ties', function () {
     $a = makeManagerState('a', maxWorkers: 5, queueWorkers: ['redis:fast' => 2]);
     $b = makeManagerState('b', maxWorkers: 5, queueWorkers: ['redis:fast' => 1]);
     $managers = [$a, $b];
@@ -107,7 +168,6 @@ it('preserves existing workers in phase 1', function () {
     $assignedTotals = ['a' => 0, 'b' => 0];
     $result = invokeDistributeClusterTarget($managers, 'queue:redis:fast', 3, $assignedTotals);
 
-    // Should preserve existing: a=2, b=1
     expect($result['a'])->toBe(2)
         ->and($result['b'])->toBe(1);
 });
