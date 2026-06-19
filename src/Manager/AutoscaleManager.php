@@ -263,6 +263,8 @@ final class AutoscaleManager
 
     private function runClusterCycle(): void
     {
+        $this->beginEvaluationCycle();
+
         $capacity = $this->capacity->calculateMaxWorkers(
             $this->pool->totalCount(),
             ResourceEstimate::globalDefault(),
@@ -1092,8 +1094,15 @@ final class AutoscaleManager
         return InstalledVersions::getPrettyVersion('cboxdk/laravel-queue-autoscale') ?? 'unknown';
     }
 
+    private function beginEvaluationCycle(): void
+    {
+        $this->capacity->invalidateCache();
+    }
+
     private function evaluateAndScale(): void
     {
+        $this->beginEvaluationCycle();
+
         // Recalculate metrics first to ensure throughput uses current sliding window
         app(CalculateQueueMetricsAction::class)->executeForAllQueues();
 
