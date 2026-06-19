@@ -5,6 +5,17 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.9.0 - 2026-06-19
+
+### What's Changed
+
+* Harden cluster leader leases by @sylvesterdamgaard in https://github.com/cboxdk/laravel-queue-autoscale/pull/30
+* Make worker scale-down non-blocking by @sylvesterdamgaard in https://github.com/cboxdk/laravel-queue-autoscale/pull/31
+* Refresh capacity each evaluation cycle by @sylvesterdamgaard in https://github.com/cboxdk/laravel-queue-autoscale/pull/32
+* Make spawn latency EMA updates atomic by @sylvesterdamgaard in https://github.com/cboxdk/laravel-queue-autoscale/pull/33
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.8.0...v3.9.0
+
 ## v3.8.0 - 2026-06-18
 
 ### What's Changed
@@ -118,6 +129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
           ],
       ],
   ],
+  
   
   ```
 - **`ResourceEstimate` value object** — Carries CPU/memory estimates with per-dimension source metadata (`measured`, `config`, `default`) and sample counts, enabling downstream consumers to inspect provenance.
@@ -428,6 +440,7 @@ composer require php-tui/php-tui --dev
 
 
 
+
 ```
 ### Usage
 
@@ -440,6 +453,7 @@ php artisan queue:autoscale:debug
 
 # Dispatch test jobs
 php artisan queue:autoscale:test --jobs=10 --queue=default
+
 
 
 
@@ -475,6 +489,7 @@ First stable release of Queue Autoscale for Laravel with intelligent, predictive
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
+
 
 
 
