@@ -343,10 +343,13 @@ Balance based on:
     'evaluation_interval_seconds' => 5,
     'log_channel' => env('QUEUE_AUTOSCALE_LOG_CHANNEL', 'stack'),
     'restart_scope' => env('QUEUE_AUTOSCALE_RESTART_SCOPE'),
+    'honor_queue_restart' => env('QUEUE_AUTOSCALE_HONOR_QUEUE_RESTART', true),
 ],
 ```
 
 `restart_scope` controls the cache key used by `php artisan queue:autoscale:restart`. Leave it unset for the default `app.name` + `app.env` scope. Set `QUEUE_AUTOSCALE_RESTART_SCOPE` when multiple apps share the same cache backend and need isolated restart signals.
+
+`honor_queue_restart` (default `true`) makes the manager also exit gracefully when Laravel's own `php artisan queue:restart` signal is issued, so standard deploy pipelines restart it automatically. Set it to `false` if `queue:restart` must only affect separately-supervised `queue:work` daemons. Note that `illuminate:queue:restart` is a global (unscoped) cache key — in multi-app setups sharing one cache backend, another app's `queue:restart` will also restart this manager; set `honor_queue_restart` to `false` (and use `queue:autoscale:restart` with `restart_scope`) to isolate.
 
 ## Advanced Options
 
@@ -442,6 +445,9 @@ QUEUE_AUTOSCALE_MANAGER_ID=web-01
 # Optional cache scope for php artisan queue:autoscale:restart.
 # Set this if multiple apps share the same cache backend.
 QUEUE_AUTOSCALE_RESTART_SCOPE=my-app-production
+
+# Set to false if php artisan queue:restart must NOT restart the manager
+QUEUE_AUTOSCALE_HONOR_QUEUE_RESTART=true
 
 # Optional signal backends.
 # auto => null/no-op on single host, Redis-backed in cluster mode

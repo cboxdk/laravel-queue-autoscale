@@ -440,7 +440,7 @@ tail -f storage/logs/laravel.log | grep "WorkersScaled"
 # Status check
 sudo supervisorctl status queue-autoscale
 
-# Graceful restart on deploy
+# Graceful restart on deploy (php artisan queue:restart also works)
 php artisan queue:autoscale:restart
 
 # Force restart if the manager is wedged

@@ -35,15 +35,9 @@ You can keep Forge queue workers for queues you list in `queue-autoscale.exclude
 
 ## 3. Deploys
 
-Add this after the new release is active and migrations/config-cache steps are done:
+Forge's default deploy script already runs `php artisan queue:restart` (via "Restart Queue Workers") — that now also restarts the autoscale manager: it notices the signal on the next evaluation tick, gracefully stops spawned workers, and exits. Forge's Daemon supervisor then relaunches `php artisan queue:autoscale` from the current release. No extra deploy step is needed.
 
-```bash
-php artisan queue:autoscale:restart
-```
-
-The command works like Laravel's `queue:restart`: it writes a cache signal, the running autoscale manager notices it on the next evaluation tick, gracefully stops spawned workers, and exits. Forge's Daemon supervisor then relaunches `php artisan queue:autoscale` from the current release.
-
-For a manual graceful restart, run:
+To restart only the autoscale manager (leaving any separately-supervised workers alone), run:
 
 ```bash
 php artisan queue:autoscale:restart
