@@ -5,6 +5,23 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.10.0 - 2026-07-06
+
+### ⚠️ Behavior change: the manager now honors `php artisan queue:restart`
+
+The autoscale manager exits gracefully for a supervised restart when Laravel's native `queue:restart` signal is issued — your standard deploy pipeline now restarts the manager with no package-specific step.
+
+- **Forge users:** the default deploy script's "Restart Queue Workers" step now restarts the autoscale manager on every deploy (this is what you want — fresh release code — but it is new behavior).
+- **Opt out** if `queue:restart` must only affect separately-supervised workers: set `QUEUE_AUTOSCALE_HONOR_QUEUE_RESTART=false`.
+- `php artisan queue:autoscale:restart` is unchanged and still restarts only the manager.
+- Note for multi-app setups sharing one cache backend: `illuminate:queue:restart` is an unscoped key, so another app's `queue:restart` also restarts this manager — see the config reference for isolation via `restart_scope` + the opt-out.
+
+### What's Changed
+
+* Honor Laravel queue:restart signal in the autoscale manager by @sylvesterdamgaard in https://github.com/cboxdk/laravel-queue-autoscale/pull/36
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.9.1...v3.10.0
+
 ## v3.9.1 - 2026-06-19
 
 ### What's Changed
@@ -137,6 +154,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
           ],
       ],
   ],
+  
   
   
   
@@ -451,6 +469,7 @@ composer require php-tui/php-tui --dev
 
 
 
+
 ```
 ### Usage
 
@@ -463,6 +482,7 @@ php artisan queue:autoscale:debug
 
 # Dispatch test jobs
 php artisan queue:autoscale:test --jobs=10 --queue=default
+
 
 
 
@@ -500,6 +520,7 @@ First stable release of Queue Autoscale for Laravel with intelligent, predictive
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
+
 
 
 
