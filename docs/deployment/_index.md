@@ -20,7 +20,7 @@ The autoscaler manager (`php artisan queue:autoscale`) is a long-running daemon.
 - **Single-node or cluster mode.** By default, run one autoscaler. If you enable `queue-autoscale.cluster.enabled`, multiple managers can safely run against the same queues: they auto-join via Redis, elect a leader, and receive per-host worker recommendations.
 - **Graceful shutdown.** The manager catches `SIGTERM` and cleanly stops all spawned workers. Your platform should send SIGTERM, wait for `shutdown_timeout_seconds` (default 30), then SIGKILL.
 - **Don't double-configure workers.** If your platform has a "queue workers" section (Forge, Ploi) **do not** add entries for queues the autoscaler manages. The autoscaler IS your queue worker supervisor — the platform UI is for `queue:work` daemons that the autoscaler would fight with.
-- **Restart on deploy.** When your code changes, the manager must restart to pick up new code/config. Prefer `php artisan queue:autoscale:restart` in deploy hooks. It lets the running manager drain its spawned workers and exit, then your process supervisor starts it again from the new release.
+- **Restart on deploy.** When your code changes, the manager must restart to pick up new code/config. Your existing deploy script's `php artisan queue:restart` step is enough — the manager honors the same signal on its next evaluation tick and exits gracefully, then your process supervisor starts it again from the new release. Use `php artisan queue:autoscale:restart` only if you also run separately-supervised `queue:work` daemons that should keep running.
 
 ## Logs to keep an eye on
 

@@ -34,13 +34,13 @@ See [Queue Topology → Excluded Queues](../basic-usage/queue-topology.md#exclud
 
 ## 3. Deploys
 
-Add this near the end of your deploy script, after the new release is active and migrations/config-cache steps are done:
+Your standard deploy script's `php artisan queue:restart` step is enough — add it near the end, after the new release is active and migrations/config-cache are done:
 
 ```bash
-php artisan queue:autoscale:restart
+php artisan queue:restart
 ```
 
-The command writes a cache signal. The running autoscale manager sees it on the next evaluation tick, gracefully stops spawned workers, and exits. Ploi's Daemon supervisor then relaunches `php artisan queue:autoscale` from the current release.
+The running autoscale manager sees the signal on its next evaluation tick, gracefully stops spawned workers, and exits. Ploi's Daemon supervisor then relaunches `php artisan queue:autoscale` from the current release. Alternatively, use `php artisan queue:autoscale:restart` if you run separately-supervised `queue:work` daemons.
 
 For manual operations, you can still use Ploi's **Daemons → Restart** button or restart the daemon directly with Supervisor. Find the daemon ID in the Ploi UI or via `supervisorctl status`.
 

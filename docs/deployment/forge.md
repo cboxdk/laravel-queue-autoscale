@@ -59,4 +59,4 @@ You should see `Autoscale manager started` shortly after deploy, then periodic w
 
 - **`.env` changes don't propagate** without a Daemon restart. Forge does this automatically after "Update Secrets" in the UI.
 - **PHP version mismatch.** Forge servers usually run multiple PHP versions. Make sure the Daemon command uses the same `php` binary your web layer uses (`php8.3` or similar if you pin a specific version).
-- **Long-running manager holds old code until restart.** A fresh deploy that changes scaling thresholds won't take effect until the Daemon restarts. Keep `php artisan queue:autoscale:restart` in the deploy script.
+- **Long-running manager holds old code until restart.** A fresh deploy that changes scaling thresholds won't take effect until the Daemon restarts. Forge's default `php artisan queue:restart` step already handles this.

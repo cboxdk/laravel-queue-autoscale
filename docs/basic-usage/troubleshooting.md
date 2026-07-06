@@ -133,13 +133,13 @@ If neither applies, run `queue:autoscale:debug` for each member queue. If the me
 
 The manager is a long-running process — it holds the config in memory. It does not re-read the file.
 
-**Fix:** restart the manager. Every [platform deployment guide](../deployment/_index.md) covers the preferred deployment command:
+**Fix:** restart the manager. Your existing deploy script's `php artisan queue:restart` step is enough:
 
 ```bash
-php artisan queue:autoscale:restart
+php artisan queue:restart
 ```
 
-It lets the running manager drain spawned workers and exit. Your platform supervisor then starts the manager again from the current release. Use `supervisorctl restart` or `systemctl restart` only as manual fallbacks if the process is wedged.
+The manager honors the same signal on its next evaluation tick, gracefully terminates remaining workers, and exits. Your platform supervisor then starts it again from the current release. Alternatively, use `php artisan queue:autoscale:restart` if you run separately-supervised `queue:work` daemons. Use `supervisorctl restart` or `systemctl restart` only as manual fallbacks if the process is wedged.
 
 ## Two autoscalers are fighting each other
 
