@@ -20,13 +20,25 @@ use Illuminate\Contracts\Container\Container;
  * so nothing else could evaluate a scrape callback for its in-memory state.
  *
  * Rare-but-important signals flush immediately — the daemon has no request
- * terminate. The per-tick decision handler flushes at most once per second.
+ * terminate. The per-tick decision handler flushes at most once per
+ * configured debounce window (one second by default).
+ *
+ * `Event::subscribe()` maps each listener to `[self::class, $method]` and
+ * lets the container resolve a fresh instance on every dispatch — it does
+ * NOT reuse the instance that registered the subscription. The debounce
+ * state above therefore only holds across dispatches because this class is
+ * bound as a container singleton (see the service provider); without that
+ * binding, every dispatch would construct a new instance with
+ * `$lastFlushAt = 0.0`, and every decision would flush.
  */
 final class TelemetryEventSubscriber
 {
     private float $lastFlushAt = 0.0;
 
-    public function __construct(private readonly Container $container) {}
+    public function __construct(
+        private readonly Container $container,
+        private readonly float $flushIntervalSeconds = 1.0,
+    ) {}
 
     /**
      * @return array<class-string, string>
@@ -82,7 +94,7 @@ final class TelemetryEventSubscriber
         $telemetry = $this->telemetry();
         $labels = ['connection' => $event->connection, 'queue' => $event->queue];
 
-        $telemetry->counter('queue_autoscale.scaling.actions', 'Executed scaling actions')
+        $telemetry->counter('queue_autoscale.scaling.actions', 'Executed scaling actions', unit: '{actions}')
             ->inc(1, [...$labels, 'direction' => $event->action]);
 
         $telemetry->event('queue_autoscale.scaling.action', [
@@ -108,7 +120,7 @@ final class TelemetryEventSubscriber
         $telemetry->gauge('queue_autoscale.sla.breach', description: 'Whether the queue is currently breaching its SLA', unit: '1')
             ->set(1.0, $labels);
 
-        $telemetry->counter('queue_autoscale.sla.breaches', 'SLA breach transitions')
+        $telemetry->counter('queue_autoscale.sla.breaches', 'SLA breach transitions', unit: '{breaches}')
             ->inc(1, $labels);
 
         $telemetry->event('queue_autoscale.sla.breached', [
@@ -160,6 +172,7 @@ final class TelemetryEventSubscriber
             'manager_id' => $event->managerId,
             'host' => $event->host,
             'cluster_enabled' => $event->clusterEnabled,
+            'cluster_id' => $event->clusterId,
             'interval_seconds' => $event->intervalSeconds,
             'package_version' => $event->packageVersion,
         ]);
@@ -194,7 +207,7 @@ final class TelemetryEventSubscriber
 
         $telemetry = $this->telemetry();
 
-        $telemetry->counter('queue_autoscale.cluster.leader_changes', 'Cluster leader changes')
+        $telemetry->counter('queue_autoscale.cluster.leader_changes', 'Cluster leader changes', unit: '{changes}')
             ->inc(1, []);
 
         $telemetry->event('queue_autoscale.cluster.leader_changed', [
@@ -220,7 +233,7 @@ final class TelemetryEventSubscriber
     {
         $nowSeconds = microtime(true);
 
-        if ($nowSeconds - $this->lastFlushAt < 1.0) {
+        if ($nowSeconds - $this->lastFlushAt < $this->flushIntervalSeconds) {
             return;
         }
 
