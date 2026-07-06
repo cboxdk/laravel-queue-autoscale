@@ -499,6 +499,8 @@ foreach ($allQueues as $queue) {
 
 When [`cboxdk/laravel-telemetry`](https://github.com/cboxdk/laravel-telemetry) is installed, the autoscaler automatically publishes its scaling signals — no configuration needed. Disable with `QUEUE_AUTOSCALE_TELEMETRY_ENABLED=false`.
 
+`cboxdk/laravel-telemetry` requires Laravel 12+. This autoscaler package still supports Laravel 11, but the telemetry integration described below is simply unavailable there — `queue:autoscale:debug` reports `Telemetry: not installed` in that case.
+
 | Metric | Type | Unit | Labels |
 | --- | --- | --- | --- |
 | `queue_autoscale.workers.target` | gauge | `{workers}` | `connection`, `queue` |

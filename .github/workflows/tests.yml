@@ -21,6 +21,15 @@ jobs:
             testbench: 11.*
           - laravel: 12.*
             testbench: 10.*
+          # Laravel 11 is still supported by this package (see require in
+          # composer.json), but cboxdk/laravel-telemetry needs illuminate
+          # ^12/^13, so this leg drops the telemetry dev dependency before
+          # installing and exercises the "telemetry not installed" path.
+          - laravel: 11.*
+            testbench: 9.*
+            php: 8.3
+            stability: prefer-stable
+            os: ubuntu-latest
         exclude:
           # spatie/laravel-prometheus ^13.0 support requires PHP 8.4+
           - php: 8.3
@@ -54,6 +63,10 @@ jobs:
         run: |
           echo "::add-matcher::${{ runner.tool_cache }}/php.json"
           echo "::add-matcher::${{ runner.tool_cache }}/phpunit.json"
+
+      - name: Remove telemetry integration (unsupported on Laravel 11)
+        if: matrix.laravel == '11.*'
+        run: composer remove --dev cboxdk/laravel-telemetry --no-update --no-interaction
 
       - name: Install dependencies
         run: |
