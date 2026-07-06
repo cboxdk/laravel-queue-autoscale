@@ -242,4 +242,28 @@ return [
     'alerting' => [
         'cooldown_seconds' => env('QUEUE_AUTOSCALE_ALERT_COOLDOWN', 300),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | 📡 TELEMETRY (cboxdk/laravel-telemetry)
+    |--------------------------------------------------------------------------
+    |
+    | When cboxdk/laravel-telemetry is installed, the autoscaler automatically
+    | publishes scaling gauges/counters and pushes domain events (scaling
+    | actions, SLA breaches, leader changes) to it, plus observable cluster
+    | gauges in cluster mode. Batteries included: on by default, no-op when
+    | the package is not installed.
+    |
+    */
+    'telemetry' => [
+        'enabled' => env('QUEUE_AUTOSCALE_TELEMETRY_ENABLED', true),
+
+        'cache_ttl' => env('QUEUE_AUTOSCALE_TELEMETRY_CACHE_TTL', 10),
+
+        'gauges' => [
+            'cluster' => true,
+        ],
+
+        'events' => true,
+    ],
 ];
