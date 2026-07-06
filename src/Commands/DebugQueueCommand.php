@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Commands;
 
 use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
+use Cbox\Telemetry\TelemetryManager;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -27,6 +28,9 @@ class DebugQueueCommand extends Command
         $connection = is_string($connectionOpt) && $connectionOpt !== '' ? $connectionOpt : $fallback;
 
         $this->info("Debugging queue: {$connection}:{$queue}");
+        $this->line('');
+
+        $this->line('Telemetry: '.$this->describeTelemetryIntegration());
         $this->line('');
 
         // Get queue depth from metrics package
@@ -170,5 +174,26 @@ class DebugQueueCommand extends Command
                 [$delayedKey, 'ZSET', (string) $redis->zcard($delayedKey)],
             ]
         );
+    }
+
+    private function describeTelemetryIntegration(): string
+    {
+        if (! class_exists(TelemetryManager::class)) {
+            return 'not installed (composer require cboxdk/laravel-telemetry)';
+        }
+
+        if (! $this->laravel->bound(TelemetryManager::class)) {
+            return 'installed but not booted (telemetry service provider not registered)';
+        }
+
+        if (! config('queue-autoscale.telemetry.enabled', true)) {
+            return 'disabled (queue-autoscale.telemetry.enabled)';
+        }
+
+        if (! config('telemetry.enabled', true)) {
+            return 'inactive (telemetry.enabled is false)';
+        }
+
+        return 'active';
     }
 }

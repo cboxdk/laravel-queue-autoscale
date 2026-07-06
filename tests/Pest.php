@@ -9,8 +9,23 @@ use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\ModerateForecastPolicy;
 use Cbox\LaravelQueueAutoscale\Tests\TestCase;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
+use Cbox\Telemetry\TelemetryManager;
 
 uses(TestCase::class)->in(__DIR__);
+
+/**
+ * The telemetry integration lives behind an optional dev dependency
+ * (cboxdk/laravel-telemetry, required on Laravel 12+ only). Skip the
+ * Pest-style telemetry specs cleanly when it isn't installed, e.g. on the
+ * Laravel 11 CI leg, instead of fataling on a missing class.
+ */
+uses()
+    ->beforeEach(function () {
+        if (! class_exists(TelemetryManager::class)) {
+            $this->markTestSkipped('requires cboxdk/laravel-telemetry');
+        }
+    })
+    ->in('Feature/Telemetry');
 
 /**
  * Helper function to build a v2 QueueConfiguration for tests.
