@@ -59,7 +59,10 @@ it('publishes no samples for an empty cluster snapshot', function () {
     bindClusterSnapshot([]);
     $this->fake->provider(new QueueAutoscaleTelemetryProvider(app()));
 
-    expect($this->fake->gaugeValue('queue_autoscale.cluster.managers', []))->toBe(0.0);
+    $family = collect($this->fake->collect())->first(fn ($f) => $f->name() === 'queue_autoscale.cluster.managers');
+
+    expect($family)->not->toBeNull()
+        ->and($family->samples)->toBeEmpty();
 });
 
 it('registers no cluster gauges when the gauge group is disabled', function () {
@@ -77,4 +80,9 @@ it('coerces non-numeric summary fields to zero instead of throwing', function ()
     $this->fake->provider(new QueueAutoscaleTelemetryProvider(app()));
 
     expect($this->fake->gaugeValue('queue_autoscale.cluster.managers', []))->toBe(0.0);
+
+    $hostFamily = collect($this->fake->collect())->first(fn ($f) => $f->name() === 'queue_autoscale.cluster.host.workers');
+
+    expect($hostFamily)->not->toBeNull()
+        ->and($hostFamily->samples)->toBeEmpty();
 });
