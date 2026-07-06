@@ -5,6 +5,25 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.11.0 - 2026-07-06
+
+### OpenTelemetry integration via cboxdk/laravel-telemetry
+
+When [`cboxdk/laravel-telemetry`](https://github.com/cboxdk/laravel-telemetry) (>= v0.2.0, requires Laravel 12+) is installed, the autoscaler automatically publishes its scaling signals — no configuration needed, no-op when absent:
+
+- **Gauges/counters:** `queue_autoscale.workers.target`, `queue_autoscale.sla.breach` (live breach state), `queue_autoscale.sla.predicted_pickup`, `queue_autoscale.capacity.max_workers`, `queue_autoscale.scaling.actions` and more — plus 8 observable cluster gauges in cluster mode
+- **Structured OTLP events:** scaling actions (with full reason context), SLA breaches/recoveries, manager lifecycle, leader changes
+- Deliberately no overlap with `queue_metrics.*` or laravel-telemetry's own queue instrumentation — see the README metric catalog
+- Disable with `QUEUE_AUTOSCALE_TELEMETRY_ENABLED=false`; check status via `php artisan queue:autoscale:debug`
+- Remember to schedule the telemetry package's `telemetry:flush` so stored metrics ship to your OTLP endpoint
+
+### What's Changed
+
+* chore(deps): bump actions/checkout from 6 to 7 by @dependabot[bot] in https://github.com/cboxdk/laravel-queue-autoscale/pull/35
+* Optional laravel-telemetry (OpenTelemetry) integration by @sylvesterdamgaard in https://github.com/cboxdk/laravel-queue-autoscale/pull/37
+
+**Full Changelog**: https://github.com/cboxdk/laravel-queue-autoscale/compare/v3.10.0...v3.11.0
+
 ## v3.10.0 - 2026-07-06
 
 ### ⚠️ Behavior change: the manager now honors `php artisan queue:restart`
@@ -154,6 +173,7 @@ The autoscale manager exits gracefully for a supervised restart when Laravel's n
           ],
       ],
   ],
+  
   
   
   
@@ -470,6 +490,7 @@ composer require php-tui/php-tui --dev
 
 
 
+
 ```
 ### Usage
 
@@ -482,6 +503,7 @@ php artisan queue:autoscale:debug
 
 # Dispatch test jobs
 php artisan queue:autoscale:test --jobs=10 --queue=default
+
 
 
 
@@ -520,6 +542,7 @@ First stable release of Queue Autoscale for Laravel with intelligent, predictive
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
+
 
 
 
