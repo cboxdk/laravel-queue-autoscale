@@ -37,14 +37,18 @@ use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Support\ManagerProcessLock;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
 use Cbox\LaravelQueueAutoscale\Telemetry\Contracts\ProvidesTelemetrySnapshot;
+use Cbox\LaravelQueueAutoscale\Telemetry\QueueAutoscaleTelemetryProvider;
 use Cbox\LaravelQueueAutoscale\Telemetry\QueueAutoscaleTelemetrySnapshot;
+use Cbox\LaravelQueueAutoscale\Telemetry\TelemetryEventSubscriber;
 use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\EmaSpawnLatencyTracker;
 use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\NullSpawnLatencyTracker;
 use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\SpawnLatencyRecorder;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
+use Cbox\Telemetry\TelemetryManager;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Queue\Events\JobProcessing;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 
 class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
@@ -175,6 +179,8 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
             JobProcessing::class,
             SpawnLatencyRecorder::class,
         );
+
+        $this->registerTelemetryIntegration();
     }
 
     private function resolvePickupTimeStoreClass(): string
@@ -203,5 +209,44 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
             'null' => NullSpawnLatencyTracker::class,
             default => $configured,
         };
+    }
+
+    /**
+     * Optional integration with cboxdk/laravel-telemetry: no-op unless the
+     * package is installed, enabled via config, and its manager is actually
+     * bound in the container. That last check matters even when the class
+     * exists: without it, subscribing to package events here would register
+     * listeners that resolve `TelemetryManager` from the container at
+     * dispatch time and blow up with a `BindingResolutionException` in any
+     * app that has the dependency present but hasn't booted its service
+     * provider (e.g. a narrower test harness).
+     *
+     * `TelemetryEventSubscriber` holds mutable debounce state, so it must be
+     * bound as a container singleton before `Event::subscribe()` registers
+     * it — Laravel's array-map subscriber path resolves a fresh instance
+     * from the container on every dispatch unless the class itself is a
+     * singleton.
+     */
+    protected function registerTelemetryIntegration(): void
+    {
+        if (! class_exists(TelemetryManager::class)) {
+            return;
+        }
+
+        if (! config('queue-autoscale.telemetry.enabled', true)) {
+            return;
+        }
+
+        if (! $this->app->bound(TelemetryManager::class)) {
+            return;
+        }
+
+        $this->app->make(TelemetryManager::class)->provider(
+            new QueueAutoscaleTelemetryProvider($this->app),
+        );
+
+        $this->app->singleton(TelemetryEventSubscriber::class);
+
+        Event::subscribe(TelemetryEventSubscriber::class);
     }
 }
