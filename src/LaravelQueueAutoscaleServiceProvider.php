@@ -219,7 +219,11 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
      * listeners that resolve `TelemetryManager` from the container at
      * dispatch time and blow up with a `BindingResolutionException` in any
      * app that has the dependency present but hasn't booted its service
-     * provider (e.g. a narrower test harness).
+     * provider (e.g. a narrower test harness). The bound() guard covers the
+     * subscription because event handlers resolve `TelemetryManager` per call,
+     * gated only by `queue-autoscale.telemetry.events` (default true) — with
+     * the class present but unbound, a dispatched event would otherwise crash
+     * the queue manager.
      *
      * `TelemetryEventSubscriber` holds mutable debounce state, so it must be
      * bound as a container singleton before `Event::subscribe()` registers
