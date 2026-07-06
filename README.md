@@ -495,6 +495,35 @@ foreach ($allQueues as $queue) {
 - ✅ Enforces resource constraints (CPU/memory limits)
 - ✅ Executes scaling policies and broadcasts events
 
+## OpenTelemetry via laravel-telemetry
+
+When [`cboxdk/laravel-telemetry`](https://github.com/cboxdk/laravel-telemetry) is installed, the autoscaler automatically publishes its scaling signals — no configuration needed. Disable with `QUEUE_AUTOSCALE_TELEMETRY_ENABLED=false`.
+
+| Metric | Type | Unit | Labels |
+| --- | --- | --- | --- |
+| `queue_autoscale.workers.target` | gauge | `{workers}` | `connection`, `queue` |
+| `queue_autoscale.sla.predicted_pickup` | gauge | `s` | `connection`, `queue` |
+| `queue_autoscale.sla.target` | gauge | `s` | `connection`, `queue` |
+| `queue_autoscale.sla.breach` | gauge | `1` | `connection`, `queue` |
+| `queue_autoscale.capacity.max_workers` | gauge | `{workers}` | `limiter` |
+| `queue_autoscale.scaling.actions` | counter | `{actions}` | `connection`, `queue`, `direction` |
+| `queue_autoscale.sla.breaches` | counter | `{breaches}` | `connection`, `queue` |
+| `queue_autoscale.cluster.leader_changes` | counter | `{changes}` | — |
+| `queue_autoscale.cluster.managers` | gauge (observable) | `{managers}` | — |
+| `queue_autoscale.cluster.workers` | gauge (observable) | `{workers}` | — |
+| `queue_autoscale.cluster.required_workers` | gauge (observable) | `{workers}` | — |
+| `queue_autoscale.cluster.capacity` | gauge (observable) | `{workers}` | — |
+| `queue_autoscale.cluster.utilization` | gauge (observable) | `%` | — |
+| `queue_autoscale.cluster.recommended_hosts` | gauge (observable) | `{hosts}` | — |
+| `queue_autoscale.cluster.host.workers` | gauge (observable) | `{workers}` | `host` |
+| `queue_autoscale.cluster.host.capacity` | gauge (observable) | `{workers}` | `host` |
+
+Scaling actions, SLA breaches/recoveries, manager start/stop and cluster leader changes are also emitted as structured OTLP events (`queue_autoscale.scaling.action`, `queue_autoscale.sla.breached`, …) carrying the full context (including the scaling `reason`, which is deliberately not a metric label).
+
+Deliberately **not** exported: queue depth, oldest-job age, health scores, worker busy/idle state and job baselines (owned by `cboxdk/laravel-queue-metrics`), and per-job durations/outcomes (covered by laravel-telemetry's own queue instrumentation). There is no active-worker gauge here — join `queue_metrics.queue.active_workers` against `queue_autoscale.workers.target` in your dashboards. Spawn-latency gauges are a possible future addition.
+
+Note: metrics are shipped to your OTLP endpoint by the telemetry package's `telemetry:flush` (cron or `--daemon`) — make sure one is scheduled.
+
 ## Comparison with Horizon
 
 | Feature | Laravel Horizon | Queue Autoscale |
