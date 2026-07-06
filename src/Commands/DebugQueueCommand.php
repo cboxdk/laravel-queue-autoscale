@@ -182,6 +182,10 @@ class DebugQueueCommand extends Command
             return 'not installed (composer require cboxdk/laravel-telemetry)';
         }
 
+        if (! $this->laravel->bound(TelemetryManager::class)) {
+            return 'installed but not booted (telemetry service provider not registered)';
+        }
+
         if (! config('queue-autoscale.telemetry.enabled', true)) {
             return 'disabled (queue-autoscale.telemetry.enabled)';
         }

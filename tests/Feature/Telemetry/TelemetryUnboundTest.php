@@ -7,10 +7,20 @@ namespace Cbox\LaravelQueueAutoscale\Tests\Feature\Telemetry;
 use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Tests\TestCase;
+use Cbox\Telemetry\TelemetryManager;
 use Illuminate\Support\Facades\Event;
 
 final class TelemetryUnboundTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        if (! class_exists(TelemetryManager::class)) {
+            $this->markTestSkipped('requires cboxdk/laravel-telemetry');
+        }
+
+        parent::setUp();
+    }
+
     public function getEnvironmentSetUp($app): void
     {
         parent::getEnvironmentSetUp($app);

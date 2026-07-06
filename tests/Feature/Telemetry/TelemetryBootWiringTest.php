@@ -17,6 +17,15 @@ use Mockery;
 
 final class TelemetryBootWiringTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        if (! class_exists(TelemetryManager::class)) {
+            $this->markTestSkipped('requires cboxdk/laravel-telemetry');
+        }
+
+        parent::setUp();
+    }
+
     protected function getPackageProviders($app)
     {
         return [TelemetryServiceProvider::class, ...parent::getPackageProviders($app)];
