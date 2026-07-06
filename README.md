@@ -520,7 +520,7 @@ When [`cboxdk/laravel-telemetry`](https://github.com/cboxdk/laravel-telemetry) i
 
 Scaling actions, SLA breaches/recoveries, manager start/stop and cluster leader changes are also emitted as structured OTLP events (`queue_autoscale.scaling.action`, `queue_autoscale.sla.breached`, …) carrying the full context (including the scaling `reason`, which is deliberately not a metric label).
 
-Deliberately **not** exported: queue depth, oldest-job age, health scores, worker busy/idle state and job baselines (owned by `cboxdk/laravel-queue-metrics`), and per-job durations/outcomes (covered by laravel-telemetry's own queue instrumentation). There is no active-worker gauge here — join `queue_metrics.queue.active_workers` against `queue_autoscale.workers.target` in your dashboards. Spawn-latency gauges are a possible future addition.
+Deliberately **not** exported: queue depth, oldest-job age, health scores, worker busy/idle state and job baselines (owned by `cboxdk/laravel-queue-metrics`), and per-job durations/outcomes (covered by laravel-telemetry's own queue instrumentation). There is no active-worker gauge here — queue-metrics' own telemetry integration (its `queue_metrics.queue.active_workers` gauge, available from the queue-metrics release that ships telemetry support) is the one to join against `queue_autoscale.workers.target` in your dashboards. Spawn-latency gauges are a possible future addition.
 
 Note: metrics are shipped to your OTLP endpoint by the telemetry package's `telemetry:flush` (cron or `--daemon`) — make sure one is scheduled.
 
