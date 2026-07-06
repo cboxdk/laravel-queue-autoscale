@@ -186,11 +186,16 @@ return [
     | restart_scope controls the cache key used by queue:autoscale:restart.
     | Leave unset unless multiple apps share the same cache backend.
     |
+    | honor_queue_restart makes the manager also exit gracefully when
+    | Laravel's own `php artisan queue:restart` signal is issued, so a
+    | standard deploy pipeline restarts the manager without extra steps.
+    |
     */
     'manager' => [
         'evaluation_interval_seconds' => 5,
         'log_channel' => env('QUEUE_AUTOSCALE_LOG_CHANNEL', 'stack'),
         'restart_scope' => env('QUEUE_AUTOSCALE_RESTART_SCOPE'),
+        'honor_queue_restart' => env('QUEUE_AUTOSCALE_HONOR_QUEUE_RESTART', true),
     ],
 
     /*

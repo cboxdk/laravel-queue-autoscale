@@ -230,13 +230,7 @@ sudo supervisorctl update
 sudo supervisorctl start queue-autoscale:*
 ```
 
-On deploy, prefer the Artisan restart signal instead of restarting Supervisor directly:
-
-```bash
-php artisan queue:autoscale:restart
-```
-
-The manager drains its spawned workers, exits, and Supervisor starts it again from the new release.
+On deploy, use your standard `php artisan queue:restart` step. The manager honors the signal on its next evaluation tick and exits gracefully, then Supervisor starts it again from the new release. Alternatively, use `php artisan queue:autoscale:restart` if you run separately-supervised `queue:work` daemons.
 
 ## Verification
 

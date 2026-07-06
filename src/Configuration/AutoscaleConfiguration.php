@@ -81,6 +81,11 @@ final readonly class AutoscaleConfiguration
         return Str::slug($appName, '-').'-'.$appEnv;
     }
 
+    public static function honorQueueRestart(): bool
+    {
+        return (bool) config('queue-autoscale.manager.honor_queue_restart', true);
+    }
+
     public static function pickupTimeStore(): string
     {
         $configured = config('queue-autoscale.pickup_time.store', 'auto');

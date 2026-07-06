@@ -56,3 +56,40 @@ it('ignores stale restart requests from before startup', function () {
 
     expect($signal->requestedAfter($startedAt))->toBeFalse();
 });
+
+it('detects a laravel queue:restart signal issued after startup', function () {
+    $signal = app(RestartSignal::class);
+    $startedAtMs = 1_000_000;
+
+    Cache::forever('illuminate:queue:restart', 2_000);
+
+    expect($signal->requestedAfter($startedAtMs))->toBeTrue();
+});
+
+it('ignores a laravel queue:restart signal from before startup', function () {
+    $signal = app(RestartSignal::class);
+    $startedAtMs = 3_000_000;
+
+    Cache::forever('illuminate:queue:restart', 2_000);
+
+    expect($signal->requestedAfter($startedAtMs))->toBeFalse();
+});
+
+it('ignores the laravel queue:restart signal when honor_queue_restart is disabled', function () {
+    config()->set('queue-autoscale.manager.honor_queue_restart', false);
+
+    $signal = app(RestartSignal::class);
+    $startedAtMs = 1_000_000;
+
+    Cache::forever('illuminate:queue:restart', 2_000);
+
+    expect($signal->requestedAfter($startedAtMs))->toBeFalse();
+});
+
+it('ignores non-numeric laravel queue:restart values', function () {
+    $signal = app(RestartSignal::class);
+
+    Cache::forever('illuminate:queue:restart', 'not-a-timestamp');
+
+    expect($signal->requestedAfter(0))->toBeFalse();
+});

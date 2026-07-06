@@ -82,17 +82,20 @@ sudo supervisorctl status queue-autoscale
 
 ## Zero-downtime deploys
 
-Your deploy script should trigger exactly one restart path:
+Either restart command works — most deploy scripts already run the first one:
 
 ```bash
-php artisan queue:autoscale:restart
+php artisan queue:restart            # standard Laravel deploy step, restarts workers AND the manager
+php artisan queue:autoscale:restart  # restarts only the autoscale manager
 ```
 
-`php artisan queue:autoscale:restart` works like Laravel's `queue:restart`: it writes a cache signal, the running manager notices it on the next evaluation tick, gracefully terminates all spawned `queue:work` processes, and exits. Your process supervisor then starts a fresh manager with the new code/config.
+Your existing deploy script's `php artisan queue:restart` step is enough: spawned workers finish their current job and exit, the manager notices the same signal on its next evaluation tick, gracefully terminates any remaining workers, and exits. Your process supervisor then starts a fresh manager with the new code/config.
+
+`php artisan queue:autoscale:restart` still works and restarts only the autoscale manager — useful when you also run separately-supervised `queue:work` daemons that should keep running.
 
 Direct `systemctl` / `supervisorctl` restarts are still fine as manual fallbacks; they send SIGTERM immediately, and the manager performs the same graceful shutdown path.
 
-**Do not also run `php artisan queue:restart`** — that's for separately-supervised `queue:work` daemons. Our spawned workers are killed directly when the manager shuts down.
+Set `QUEUE_AUTOSCALE_HONOR_QUEUE_RESTART=false` to restore the old behaviour where only `queue:autoscale:restart` restarts the manager.
 
 ## Log rotation
 
