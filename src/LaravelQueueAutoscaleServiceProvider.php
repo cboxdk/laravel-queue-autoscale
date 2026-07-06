@@ -36,6 +36,8 @@ use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Support\ManagerProcessLock;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
+use Cbox\LaravelQueueAutoscale\Telemetry\Contracts\ProvidesTelemetrySnapshot;
+use Cbox\LaravelQueueAutoscale\Telemetry\QueueAutoscaleTelemetrySnapshot;
 use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\EmaSpawnLatencyTracker;
 use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\NullSpawnLatencyTracker;
 use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\SpawnLatencyRecorder;
@@ -137,6 +139,12 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
         $this->app->singleton(RestartSignal::class);
         $this->app->singleton(SignalHandler::class);
         $this->app->singleton(AutoscaleManager::class);
+
+        // Register telemetry snapshot
+        $this->app->singleton(
+            ProvidesTelemetrySnapshot::class,
+            QueueAutoscaleTelemetrySnapshot::class,
+        );
     }
 
     public function boot(): void
