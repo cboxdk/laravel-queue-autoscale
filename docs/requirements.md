@@ -48,7 +48,7 @@ See [Installation](installation.md) for deployment shape options.
 
 In production, use **Supervisor** or **systemd** to keep the `php artisan queue:autoscale` manager process running and to restart it on failure. The autoscale manager replaces manual `queue:work` process management — you do not need Supervisor entries for individual queue workers.
 
-See [Deployment Guides](deployment-guides/docker.md) for platform-specific setup.
+See [Deployment Guides](deployment/docker.md) for platform-specific setup.
 
 ## SLA Timing Floor
 

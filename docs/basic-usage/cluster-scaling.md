@@ -1,6 +1,7 @@
 ---
 title: Cluster Scaling
 description: "Run Queue Autoscale on multiple replicas with Redis-backed leader election and host recommendations"
+weight: 18
 ---
 
 # Cluster Scaling
