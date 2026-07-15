@@ -5,6 +5,15 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.11.1 - 2026-07-15
+
+### Fixed
+- Corrected a dead link in the requirements page that pointed at `deployment-guides/docker.md`; it now links to the existing `deployment/docker.md` guide.
+
+### Changed
+- Documentation normalized for the docs site.
+- Bumped the `cboxdk/laravel-telemetry` dev requirement.
+
 ## v3.11.0 - 2026-07-06
 
 ### OpenTelemetry integration via cboxdk/laravel-telemetry
