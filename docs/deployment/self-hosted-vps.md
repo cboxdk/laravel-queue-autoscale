@@ -29,7 +29,7 @@ StandardOutput=append:/var/log/queue-autoscale.log
 StandardError=append:/var/log/queue-autoscale.err.log
 
 # Graceful shutdown: SIGTERM, wait up to 60s, then SIGKILL.
-# Match or exceed queue-autoscale.workers.shutdown_timeout_seconds.
+# Match or exceed the queue's workers.shutdown_timeout_seconds.
 TimeoutStopSec=60s
 KillSignal=SIGTERM
 

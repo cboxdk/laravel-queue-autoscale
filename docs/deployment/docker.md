@@ -30,7 +30,7 @@ services:
       # Same env as your app — REDIS_*, DB_*, APP_KEY, etc.
       - APP_ENV=production
     # Let the manager shut down cleanly before Docker kills the container.
-    # Must be >= queue-autoscale.workers.shutdown_timeout_seconds (default 30).
+    # Must be >= the queue's workers.shutdown_timeout_seconds (default 30).
     stop_grace_period: 60s
     # Forward signals to PID 1 so SIGTERM reaches PHP, not /bin/sh.
     init: true
@@ -79,7 +79,7 @@ spec:
 ```
 
 `terminationGracePeriodSeconds` belongs on the pod spec, not the container, and must be at least
-`queue-autoscale.workers.shutdown_timeout_seconds` (default 30) so the manager can drain its workers
+`the queue's workers.shutdown_timeout_seconds` (default 30) so the manager can drain its workers
 before the kubelet sends SIGKILL.
 
 For cluster mode, multiple replicas are valid. Each replica still runs exactly one local `queue:autoscale` process, and cluster coordination happens through Redis.

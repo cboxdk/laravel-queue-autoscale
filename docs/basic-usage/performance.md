@@ -41,7 +41,7 @@ The evaluation interval controls how often scaling decisions are made. **It is s
 php artisan queue:autoscale --interval=5   # 5 is the default
 ```
 
-> `queue-autoscale.manager.evaluation_interval_seconds` exists in the published config and is documented as 5 seconds, but nothing in the package reads it — `AutoscaleConfiguration::evaluationIntervalSeconds()` has no callers. Changing that key has **no effect**. Set the interval on the command line in your supervisor/systemd unit.
+> `queue-autoscale.manager.evaluation_interval_seconds` sets the default. The `--interval` flag overrides it when given, so the config key is the right place to set a fleet-wide value and the flag is the per-process exception.
 
 **Faster intervals (2-5s):**
 - Quicker response to traffic spikes
@@ -161,7 +161,7 @@ Per-worker runtime knobs live under the `workers` key of a queue config:
 'queues' => [
     'exports' => [
         'workers' => [
-            'timeout_seconds' => 300,  // --max-time= on queue:work
+            'max_time_seconds' => 300,  // --max-time: recycle the worker this often
             'sleep_seconds' => 3,      // --sleep= on queue:work
             'tries' => 3,              // --tries= on queue:work
         ],
@@ -169,9 +169,11 @@ Per-worker runtime knobs live under the `workers` key of a queue config:
 ],
 ```
 
-Note that `timeout_seconds` maps to `--max-time` (total worker lifetime before it exits and is respawned), **not** to `--timeout` (per-job limit). The spawner never passes `--timeout` or `--memory`; set those in `php.ini` or in your own worker supervision if you need them.
+`max_time_seconds` becomes `--max-time`, the worker process's total lifetime before it exits and is respawned; `timeout_seconds` becomes `--timeout`, how long one job may run. The spawner passes no `--memory` flag — set that in `php.ini` if you need it.
 
-**Tuning `timeout_seconds`** (how long a worker is kept alive before recycling). Look at recent job durations in your metrics store and set it comfortably above the longest job you expect a worker to be mid-way through when it recycles.
+**Tuning `max_time_seconds`** (how long a worker process is kept alive before recycling). Look at recent job durations in your metrics store and set it comfortably above the longest job a worker might be part-way through when it recycles.
+
+**Tuning `timeout_seconds`** (how long a single job may run). Set it above your slowest job and below `max_time_seconds`; configuration refuses the reverse.
 
 **Tuning `sleep_seconds`** (how long a worker sleeps when the queue is empty). Higher-frequency queues benefit from 1–2s; background queues save CPU with 5–10s.
 

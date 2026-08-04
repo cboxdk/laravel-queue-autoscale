@@ -100,7 +100,7 @@ Laravel omits it rather than failing, which means a delayed dispatch runs immedi
 **A stuck job blocks its whole group.** Because ordering is guaranteed, a message that keeps timing
 out holds up every message behind it in that group until it exhausts its attempts. On a standard
 queue that job would be one slow item among many; here it is a stopped line. Keep
-`workers.timeout_seconds` tight enough that a hung job fails rather than lingering, and watch the
+`workers.timeout_seconds` — the per-job limit — tight enough that a hung job fails rather than lingering, and watch the
 [failure fuse](../basic-usage/failure-fuse.md) — a FIFO backlog that stops draining looks exactly
 like the downstream outage the fuse exists to catch.
 

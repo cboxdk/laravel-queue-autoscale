@@ -263,7 +263,7 @@ public function pinnedCount(): int;   // returns $min; used when scalable=false
 
 Constructor guards throw `InvalidConfigurationException`, including `scalable=false` requiring `min === max` and `min >= 1`.
 
-> Only `min`, `max` and `scalable` affect a running worker. `WorkerSpawner` builds the `queue:work` command from the **global** `queue-autoscale.workers` block, so a per-queue `tries` / `timeout_seconds` / `sleep_seconds` / `shutdown_timeout_seconds` is validated but never used.
+> Every value here reaches the spawned worker. The global `queue-autoscale.workers` block that used to override them no longer exists.
 
 ### `ForecastConfiguration`
 
@@ -518,12 +518,13 @@ Spawns `queue:work` subprocesses. The command it builds is exactly:
 ```bash
 {PHP_BINARY} artisan queue:work {connection} \
     --queue={queue} \
-    --tries={queue-autoscale.workers.tries} \
-    --max-time={queue-autoscale.workers.timeout_seconds} \
-    --sleep={queue-autoscale.workers.sleep_seconds}
+    --tries={workers.tries} \
+    --max-time={workers.max_time_seconds} \
+    --timeout={workers.timeout_seconds} \
+    --sleep={workers.sleep_seconds}
 ```
 
-Those three values come from the **global** `queue-autoscale.workers` block, not from the queue's resolved `WorkerConfiguration`. `--timeout` and `--memory` are never passed.
+Every value comes from the queue's resolved `WorkerConfiguration`. `--memory` is never passed.
 
 The only environment variables injected into a worker are:
 

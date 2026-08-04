@@ -149,9 +149,10 @@ A fully-resolved queue configuration has five sections. You rarely need to see a
     'workers' => [
         'min' => 5,                  // floor — autoscaler won't drop below this
         'max' => 50,                 // ceiling — autoscaler won't exceed this
-        'tries' => 5,                // parsed and validated, but NOT used per queue
-        'timeout_seconds' => 3600,   // parsed and validated, but NOT used per queue
-        'sleep_seconds' => 1,        // parsed and validated, but NOT used per queue
+        'tries' => 5,                    // --tries on queue:work
+        'max_time_seconds' => 3600,      // --max-time: worker process lifetime
+        'timeout_seconds' => 900,        // --timeout: how long one job may run
+        'sleep_seconds' => 1,            // --sleep when the queue is empty
         'shutdown_timeout_seconds' => 30,  // ditto
         'scalable' => true,          // set false for pinned/exclusive queues
     ],
@@ -173,20 +174,13 @@ A fully-resolved queue configuration has five sections. You rarely need to see a
 
 The `fuse` block is optional — configs written before the fuse existed keep working on package defaults. See [Failure Fuse](failure-fuse.md) for what it does and how to tune it.
 
-> **Only `min`, `max` and `scalable` are used per queue.** `WorkerSpawner` builds the `queue:work` command from the **global** `queue-autoscale.workers` block, so `tries`, `timeout_seconds`, `sleep_seconds` and `shutdown_timeout_seconds` set inside a profile or a per-queue override are parsed and validated but never reach a spawned worker. Set those globally:
+> **Every worker setting is per queue.** There used to be a second, global `queue-autoscale.workers`
+> block holding the same keys, and only it reached a spawned worker — so a `tries` or
+> `sleep_seconds` set on a profile was validated and then ignored. The global block is gone and the
+> profile is the only surface, so what a queue declares is what its workers run with.
 >
-> ```php
-> 'workers' => [
->     'timeout_seconds' => 3600,   // --max-time= on queue:work (worker lifetime)
->     'tries' => 3,                // --tries=
->     'sleep_seconds' => 3,        // --sleep=
->     'shutdown_timeout_seconds' => 30,  // SIGTERM grace before SIGKILL
-> ],
-> ```
->
-> `workers.health_check_interval_seconds` is also in the published config, but like `manager.evaluation_interval_seconds` it has an accessor and no callers — worker liveness is checked once per evaluation cycle.
->
-> Note that `timeout_seconds` maps to `--max-time` (how long a worker lives before recycling), **not** to `--timeout` (per-job limit). The spawner passes neither `--timeout` nor `--memory`.
+> `workers.health_check_interval_seconds` is also in the published config but has no callers — worker
+> liveness is checked once per evaluation cycle.
 
 **The keys most operators touch:**
 
@@ -583,7 +577,8 @@ There is no whole-config validation pass, and **a bad config does not fail `php 
 `WorkerConfiguration`, `SlaConfiguration` and `GroupConfiguration` guard their own invariants and throw `InvalidConfigurationException`:
 
 - **`workers.min must be >= 0`** / **`workers.max (X) must be >= workers.min (Y)`** — inconsistent worker bounds.
-- **`workers.tries must be >= 1`**, **`workers.timeout_seconds must be > 0`**.
+- **`workers.tries must be >= 1`**, **`workers.max_time_seconds must be > 0`**, **`workers.timeout_seconds must be > 0`**.
+- **`workers.timeout_seconds must be less than workers.max_time_seconds`** — a job that may outlive its own worker process can never finish.
 - **`workers.scalable=false requires workers.min (X) to equal workers.max (Y)`** — non-scalable (pinned) configs must declare exactly one target count.
 - **`workers.scalable=false requires workers.min >= 1`** — a pinned queue needs at least one worker.
 - **`sla.target_seconds must be > 0`**, **`sla.percentile must be one of 50, 75, 90, 95, 99`**, **`sla.window_seconds must be >= 60`**, **`sla.min_samples must be >= 1`**.

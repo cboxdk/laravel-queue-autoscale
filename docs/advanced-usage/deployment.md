@@ -381,15 +381,18 @@ manager. Set the interval on the command line in your Supervisor or systemd unit
 php artisan queue:work {connection} \
     --queue={queue} \
     --tries={workers.tries} \
-    --max-time={workers.timeout_seconds} \
+    --max-time={workers.max_time_seconds} \
+    --timeout={workers.timeout_seconds} \
     --sleep={workers.sleep_seconds}
 ```
 
-Those five flags are the complete list. In particular:
+Those six flags are the complete list. In particular:
 
-- **`workers.timeout_seconds` maps to `--max-time`, not `--timeout`.** It bounds the worker's
-  *lifetime* (default `3600` seconds), not how long a single job may run. Per-job timeouts remain a
-  Laravel concern — set `$timeout` on the job class or `retry_after` on the connection.
+- **The two time limits are separate.** `workers.max_time_seconds` becomes `--max-time` and bounds
+  the worker process's *lifetime* (default `3600` seconds); `workers.timeout_seconds` becomes
+  `--timeout` and bounds how long a *single job* may run (default `900`). Configuration refuses a job
+  timeout that is not shorter than the process lifetime, since a job that outlives its worker can
+  never finish.
 - **There is no memory flag.** The spawner never passes `--memory`. Worker memory is bounded by
   PHP's own `memory_limit` and by the manager's `limits.max_memory_percent` ceiling, which stops new
   workers being spawned rather than stopping existing ones.
