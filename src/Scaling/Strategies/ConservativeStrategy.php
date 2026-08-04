@@ -33,7 +33,7 @@ use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
  * - Queues with low priority
  * - When resource efficiency is critical
  */
-final class ConservativeStrategy implements ScalingStrategyContract
+class ConservativeStrategy implements ScalingStrategyContract
 {
     private const SAFETY_BUFFER = 1.25; // 25% extra workers
 

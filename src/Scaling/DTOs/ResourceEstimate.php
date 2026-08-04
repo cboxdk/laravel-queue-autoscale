@@ -6,7 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Scaling\DTOs;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 
-final readonly class ResourceEstimate
+readonly class ResourceEstimate
 {
     public function __construct(
         public float $cpuCoresPerWorker,

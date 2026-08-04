@@ -6,7 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Output\DataTransferObjects;
 
 use DateTimeImmutable;
 
-final readonly class JobActivity
+readonly class JobActivity
 {
     /**
      * @param  string  $status  'processing', 'processed', 'failed'

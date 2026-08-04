@@ -26,7 +26,7 @@ use Illuminate\Support\Facades\Cache;
  * shared cache backend works; the array driver confines the fuse to one
  * process, which is only correct in tests.
  */
-final class CacheFailureWindowStore implements FailureWindowStoreContract
+class CacheFailureWindowStore implements FailureWindowStoreContract
 {
     private const int STATE_TTL_SECONDS = 86400;
 

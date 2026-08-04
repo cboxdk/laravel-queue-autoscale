@@ -9,7 +9,7 @@ use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\OutputData;
 use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\QueueStats;
 use Symfony\Component\Console\Output\OutputInterface;
 
-final class VerboseOutputRenderer implements OutputRendererContract
+class VerboseOutputRenderer implements OutputRendererContract
 {
     private int $verbosityLevel;
 

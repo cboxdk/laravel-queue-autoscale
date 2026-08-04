@@ -12,7 +12,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
-final readonly class ScalingEngine
+readonly class ScalingEngine
 {
     /**
      * The fuse lives here rather than inside a strategy so every strategy —

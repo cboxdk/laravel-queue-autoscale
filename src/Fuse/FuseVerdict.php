@@ -7,7 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Fuse;
 /**
  * The fuse's view of one queue at one evaluation cycle.
  */
-final readonly class FuseVerdict
+readonly class FuseVerdict
 {
     public function __construct(
         public FuseState $state,

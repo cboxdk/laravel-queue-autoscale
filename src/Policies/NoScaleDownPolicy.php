@@ -29,7 +29,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
  * - Excellent reliability (zero cold start delays)
  * - Predictable performance
  */
-final readonly class NoScaleDownPolicy implements ScalingPolicy
+readonly class NoScaleDownPolicy implements ScalingPolicy
 {
     public function __construct(
         private CapacityCalculator $capacity,

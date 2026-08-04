@@ -7,7 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Configuration;
 use Cbox\LaravelQueueAutoscale\Fuse\ConfigurableFailureClassifier;
 use Illuminate\Support\Str;
 
-final readonly class AutoscaleConfiguration
+readonly class AutoscaleConfiguration
 {
     public static function applicationScopeId(): string
     {

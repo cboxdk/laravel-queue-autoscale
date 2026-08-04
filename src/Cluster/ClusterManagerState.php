@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Cluster;
 
-final readonly class ClusterManagerState
+readonly class ClusterManagerState
 {
     /**
      * @param  array<string, int>  $queueWorkers

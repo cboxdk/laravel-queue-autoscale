@@ -6,7 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies;
 
 use Cbox\LaravelQueueAutoscale\Contracts\ForecastPolicyContract;
 
-final readonly class HintForecastPolicy implements ForecastPolicyContract
+readonly class HintForecastPolicy implements ForecastPolicyContract
 {
     public function minRSquared(): float
     {

@@ -220,8 +220,8 @@ class DebugQueueCommand extends Command
                 $createdAt = is_numeric($job->created_at) ? (int) $job->created_at : 0;
                 $reservedAgo = (int) now()->timestamp - $reservedAt;
                 $rows[] = [
-                    (string) $job->id,
-                    (string) $job->attempts,
+                    is_scalar($job->id) ? (string) $job->id : '?',
+                    is_scalar($job->attempts) ? (string) $job->attempts : '?',
                     "{$reservedAgo}s ago",
                     date('H:i:s', $createdAt),
                 ];

@@ -11,7 +11,7 @@ use Illuminate\Queue\SerializesModels;
 /**
  * Fired when the probe succeeded and normal autoscaling resumes.
  */
-final class FuseRecovered
+class FuseRecovered
 {
     use Dispatchable;
     use InteractsWithSockets;

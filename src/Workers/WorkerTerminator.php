@@ -7,7 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Workers;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Illuminate\Support\Facades\Log;
 
-final readonly class WorkerTerminator
+readonly class WorkerTerminator
 {
     public function requestTermination(WorkerProcess $worker): bool
     {

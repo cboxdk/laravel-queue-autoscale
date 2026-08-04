@@ -15,7 +15,7 @@ use Illuminate\Queue\SerializesModels;
  * usually a downstream dependency is down and scaling up would only increase
  * pressure on it. Treat this as an incident signal, not a scaling signal.
  */
-final class FuseTripped
+class FuseTripped
 {
     use Dispatchable;
     use InteractsWithSockets;

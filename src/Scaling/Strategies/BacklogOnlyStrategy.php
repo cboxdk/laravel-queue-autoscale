@@ -27,7 +27,7 @@ use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
  * - Proactive scaling needs
  * - Workloads requiring trend predictions
  */
-final class BacklogOnlyStrategy implements ScalingStrategyContract
+class BacklogOnlyStrategy implements ScalingStrategyContract
 {
     /**
      * @var array<string, float|int|string>

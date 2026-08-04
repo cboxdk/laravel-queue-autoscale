@@ -13,7 +13,7 @@ namespace Cbox\LaravelQueueAutoscale\Configuration;
  * fuse trips and the queue is held at workers.min until $cooldownSeconds have
  * passed and a probe confirms recovery.
  */
-final readonly class FuseConfiguration
+readonly class FuseConfiguration
 {
     public function __construct(
         public bool $enabled,

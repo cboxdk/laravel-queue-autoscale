@@ -8,7 +8,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ProfileContract;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\HintForecastPolicy;
 
-final readonly class BackgroundProfile implements ProfileContract
+readonly class BackgroundProfile implements ProfileContract
 {
     public function resolve(): array
     {

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Configuration;
 
-final readonly class SpawnCompensationConfiguration
+readonly class SpawnCompensationConfiguration
 {
     public function __construct(
         public bool $enabled,

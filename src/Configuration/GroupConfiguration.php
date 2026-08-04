@@ -22,7 +22,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ProfileContract;
  * Laravel's worker iterates that comma-separated list per poll cycle and
  * takes the first job it finds, which yields strict-priority semantics.
  */
-final readonly class GroupConfiguration
+readonly class GroupConfiguration
 {
     public const MODE_PRIORITY = 'priority';
 
@@ -137,7 +137,7 @@ final readonly class GroupConfiguration
         $profileClass = $config['profile'] ?? null;
 
         $profileResolved = self::resolveProfile($profileClass);
-        $overrides = is_array($config['overrides'] ?? null) ? $config['overrides'] : [];
+        $overrides = self::stringKeyed($config['overrides'] ?? null);
         $merged = self::deepMerge($profileResolved, $overrides);
 
         /** @var array{
@@ -279,6 +279,29 @@ final readonly class GroupConfiguration
         }
 
         return [];
+    }
+
+    /**
+     * Config arrays are string-keyed by construction; filtering rather than
+     * asserting keeps a malformed positional entry out of the merge.
+     *
+     * @return array<string, mixed>
+     */
+    private static function stringKeyed(mixed $value): array
+    {
+        if (! is_array($value)) {
+            return [];
+        }
+
+        $resolved = [];
+
+        foreach ($value as $key => $entry) {
+            if (is_string($key)) {
+                $resolved[$key] = $entry;
+            }
+        }
+
+        return $resolved;
     }
 
     /**

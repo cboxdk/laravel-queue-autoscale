@@ -15,7 +15,7 @@ use Illuminate\Queue\SerializesModels;
  * autoscaler can find out whether the downstream recovered. The next
  * evaluation with enough samples either closes the fuse or trips it again.
  */
-final class FuseProbing
+class FuseProbing
 {
     use Dispatchable;
     use InteractsWithSockets;

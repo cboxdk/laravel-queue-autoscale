@@ -28,7 +28,7 @@ use Illuminate\Support\Facades\Log;
  * the fuse would still be in view when the probe is evaluated and would
  * re-trip it immediately, so the fuse could never close.
  */
-final readonly class FailureFuse
+readonly class FailureFuse
 {
     /**
      * @param  (\Closure(): float)|null  $clock  Overridable wall clock, matching

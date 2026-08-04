@@ -7,7 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Scaling;
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
 
-final readonly class ScalingDecision
+readonly class ScalingDecision
 {
     public function __construct(
         public string $connection,

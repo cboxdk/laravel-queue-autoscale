@@ -12,7 +12,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
  * Recording is dropped and the window always reads empty, so FailureFuse never
  * accumulates the min_samples it needs to trip and every queue stays Closed.
  */
-final class NullFailureWindowStore implements FailureWindowStoreContract
+class NullFailureWindowStore implements FailureWindowStoreContract
 {
     public function recordOutcome(string $connection, string $queue, bool $failed, int $windowSeconds): void {}
 

@@ -6,7 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Support;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 
-final class ManagerProcessLock
+class ManagerProcessLock
 {
     public function acquire(bool $replace = false): HeldManagerProcessLock
     {

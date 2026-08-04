@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Cluster;
 
-final readonly class ClusterRecommendation
+readonly class ClusterRecommendation
 {
     /**
      * @param  array<string, int>  $workloads

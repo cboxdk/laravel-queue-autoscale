@@ -21,7 +21,7 @@ use Throwable;
  * The list is matched by instanceof, so listing a base class covers its
  * subclasses.
  */
-final class ConfigurableFailureClassifier implements FailureClassifierContract
+class ConfigurableFailureClassifier implements FailureClassifierContract
 {
     /**
      * @param  list<class-string<Throwable>>|null  $ignored  Null reads the list from config on

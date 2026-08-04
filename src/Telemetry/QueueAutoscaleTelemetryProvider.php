@@ -15,7 +15,7 @@ use Illuminate\Contracts\Container\Container;
  * queue depth, worker state and job metrics are owned by queue-metrics and
  * telemetry's own queue instrumentation.
  */
-final readonly class QueueAutoscaleTelemetryProvider implements TelemetryProvider
+readonly class QueueAutoscaleTelemetryProvider implements TelemetryProvider
 {
     public function __construct(private Container $container) {}
 

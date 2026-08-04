@@ -7,7 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Support;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Illuminate\Support\Facades\Cache;
 
-final class RestartSignal
+class RestartSignal
 {
     public function issue(): int
     {

@@ -8,7 +8,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ForecasterContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ForecastPolicyContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ProfileContract;
 
-final readonly class QueueConfiguration
+readonly class QueueConfiguration
 {
     /**
      * @param  list<string>  $memberQueues  When this configuration represents a group, lists the real
@@ -109,7 +109,22 @@ final readonly class QueueConfiguration
             return $instance->resolve();
         }
 
-        return is_array($value) ? $value : [];
+        if (! is_array($value)) {
+            return [];
+        }
+
+        // Config arrays are string-keyed by construction; filtering rather
+        // than asserting keeps a malformed positional entry from silently
+        // becoming a config key.
+        $resolved = [];
+
+        foreach ($value as $key => $entry) {
+            if (is_string($key)) {
+                $resolved[$key] = $entry;
+            }
+        }
+
+        return $resolved;
     }
 
     /**

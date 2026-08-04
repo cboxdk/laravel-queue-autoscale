@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Manager;
 
-final class SignalHandler
+class SignalHandler
 {
     private bool $shouldStop = false;
 

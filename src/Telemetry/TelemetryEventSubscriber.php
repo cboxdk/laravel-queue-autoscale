@@ -34,7 +34,7 @@ use Illuminate\Contracts\Container\Container;
  * binding, every dispatch would construct a new instance with
  * `$lastFlushAt = 0.0`, and every decision would flush.
  */
-final class TelemetryEventSubscriber
+class TelemetryEventSubscriber
 {
     /**
      * The fuse reports as one gauge with an encoded state rather than a

@@ -52,6 +52,7 @@ use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\SpawnLatencyRecorder;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
 use Cbox\Telemetry\TelemetryManager;
+use Illuminate\Contracts\Container\Container;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobProcessed;
@@ -128,7 +129,7 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
 
         // Resolved through the container rather than instantiated directly so
         // a custom classifier can take constructor dependencies.
-        $this->app->singleton(FailureClassifierContract::class, function ($app) {
+        $this->app->singleton(FailureClassifierContract::class, function (Container $app) {
             $classifierClass = AutoscaleConfiguration::fuseClassifier();
 
             if (! class_exists($classifierClass) || ! is_subclass_of($classifierClass, FailureClassifierContract::class)) {
@@ -156,7 +157,7 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
         });
 
         // Register scaling strategy from config
-        $this->app->singleton(ScalingStrategyContract::class, function ($app) {
+        $this->app->singleton(ScalingStrategyContract::class, function (Container $app) {
             $strategyClass = AutoscaleConfiguration::strategyClass();
 
             return $app->make($strategyClass);

@@ -6,7 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Pickup;
 
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 
-final class NullPickupTimeStore implements PickupTimeStoreContract
+class NullPickupTimeStore implements PickupTimeStoreContract
 {
     public function record(string $connection, string $queue, float $timestamp, float $pickupSeconds): void
     {

@@ -46,7 +46,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Console\Output\OutputInterface;
 
-final class AutoscaleManager
+class AutoscaleManager
 {
     private WorkerPool $pool;
 

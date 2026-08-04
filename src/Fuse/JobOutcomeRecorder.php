@@ -27,7 +27,7 @@ use Illuminate\Queue\Events\JobProcessed;
  * Which exceptions count is the classifier's decision — see
  * FailureClassifierContract.
  */
-final class JobOutcomeRecorder
+class JobOutcomeRecorder
 {
     /**
      * Window size per queue, memoised because this runs on every job.

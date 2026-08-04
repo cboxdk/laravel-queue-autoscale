@@ -7,7 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Pickup;
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Illuminate\Support\Facades\Redis;
 
-final class RedisPickupTimeStore implements PickupTimeStoreContract
+class RedisPickupTimeStore implements PickupTimeStoreContract
 {
     public function __construct(
         private readonly int $maxSamplesPerQueue = 1000,

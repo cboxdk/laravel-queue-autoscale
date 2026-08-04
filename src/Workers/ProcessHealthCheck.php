@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Workers;
 
-final readonly class ProcessHealthCheck
+readonly class ProcessHealthCheck
 {
     /**
      * Check if a process is still alive

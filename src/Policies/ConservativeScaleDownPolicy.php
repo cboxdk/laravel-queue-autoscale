@@ -28,7 +28,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
  * - Slower cost reduction when load drops
  * - May maintain excess workers longer than needed
  */
-final readonly class ConservativeScaleDownPolicy implements ScalingPolicy
+readonly class ConservativeScaleDownPolicy implements ScalingPolicy
 {
     public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
     {

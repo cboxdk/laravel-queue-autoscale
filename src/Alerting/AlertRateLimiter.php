@@ -29,7 +29,7 @@ use Illuminate\Support\Facades\Cache;
  * The limiter is safe for concurrent callers: Cache::lock() is atomic
  * across processes/servers when using a shared backend (Redis, database).
  */
-final readonly class AlertRateLimiter
+readonly class AlertRateLimiter
 {
     /**
      * @param  int  $cooldownSeconds  How long a unique key must wait before

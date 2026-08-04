@@ -21,7 +21,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\DisabledForecastPoli
  * it dies. The SLA/forecast fields are kept so observability still works —
  * they just never drive a scaling decision.
  */
-final readonly class ExclusiveProfile implements ProfileContract
+readonly class ExclusiveProfile implements ProfileContract
 {
     public function resolve(): array
     {

@@ -7,7 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Pickup;
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Illuminate\Queue\Events\JobProcessing;
 
-final class PickupTimeRecorder
+class PickupTimeRecorder
 {
     public function __construct(
         private readonly PickupTimeStoreContract $store,

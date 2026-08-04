@@ -8,7 +8,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ProfileContract;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\AggressiveForecastPolicy;
 
-final readonly class CriticalProfile implements ProfileContract
+readonly class CriticalProfile implements ProfileContract
 {
     public function resolve(): array
     {

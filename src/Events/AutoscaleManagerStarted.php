@@ -8,7 +8,7 @@ use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-final class AutoscaleManagerStarted
+class AutoscaleManagerStarted
 {
     use Dispatchable;
     use InteractsWithSockets;

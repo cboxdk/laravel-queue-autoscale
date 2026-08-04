@@ -8,7 +8,7 @@ use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-final class ClusterSummaryPublished
+class ClusterSummaryPublished
 {
     use Dispatchable;
     use InteractsWithSockets;

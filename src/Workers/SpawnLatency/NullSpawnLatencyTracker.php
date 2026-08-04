@@ -7,7 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Workers\SpawnLatency;
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 
-final class NullSpawnLatencyTracker implements SpawnLatencyTrackerContract
+class NullSpawnLatencyTracker implements SpawnLatencyTrackerContract
 {
     public function recordSpawn(string $workerId, string $connection, string $queue, SpawnCompensationConfiguration $config): void
     {

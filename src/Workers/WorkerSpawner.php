@@ -11,7 +11,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Process\Process;
 
-final readonly class WorkerSpawner
+readonly class WorkerSpawner
 {
     public function __construct(
         private SpawnLatencyTrackerContract $spawnLatencyTracker,
@@ -34,7 +34,7 @@ final readonly class WorkerSpawner
         SpawnCompensationConfiguration $spawnConfig,
         ?string $group = null,
     ): Collection {
-        $workers = collect();
+        $workers = new Collection;
 
         for ($i = 0; $i < $count; $i++) {
             $process = new Process([

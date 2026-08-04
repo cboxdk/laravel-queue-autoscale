@@ -16,7 +16,7 @@ namespace Cbox\LaravelQueueAutoscale\Scaling\DTOs;
  * - Optimizing infrastructure allocation
  * - Transparent scaling decisions
  */
-final readonly class CapacityCalculationResult
+readonly class CapacityCalculationResult
 {
     /**
      * @param  int  $maxWorkersByCpu  Maximum workers based on CPU constraints

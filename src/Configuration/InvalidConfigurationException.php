@@ -6,4 +6,4 @@ namespace Cbox\LaravelQueueAutoscale\Configuration;
 
 use InvalidArgumentException;
 
-final class InvalidConfigurationException extends InvalidArgumentException {}
+class InvalidConfigurationException extends InvalidArgumentException {}

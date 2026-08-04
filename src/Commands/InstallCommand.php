@@ -7,7 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 
-final class InstallCommand extends Command
+class InstallCommand extends Command
 {
     protected $signature = 'queue:autoscale:install
                             {--topology= : Installation preset: single-low, single-redis, or cluster}
