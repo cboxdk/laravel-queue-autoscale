@@ -70,3 +70,32 @@ jobs:
 
       - name: Run Pint
         run: vendor/bin/pint --test
+
+  qa:
+    runs-on: ubuntu-latest
+    name: Supply Chain
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: 8.4
+          coverage: none
+
+      # The supply-chain checks deliberately run against the committed
+      # composer.lock and never install or update dependencies: a `composer
+      # update` here would rewrite the lock file and make the SBOM drift check
+      # report false positives.
+      - name: Audit dependencies for known vulnerabilities
+        run: composer audit --no-dev --locked
+
+      - name: Check dependency licences
+        run: php bin/check-licenses.php
+
+      - name: Check sbom.json is up to date
+        run: |
+          php bin/generate-sbom.php
+          git diff --exit-code sbom.json
