@@ -369,6 +369,14 @@ readonly class AutoscaleConfiguration
         $queuesConfig = config('queue-autoscale.queues', []);
         $result = [];
 
+        // A glob key governs queues; it is not one. Left in, the manager would
+        // discover a queue literally named "tenant.*" and hold workers on it.
+        $queuesConfig = array_filter(
+            $queuesConfig,
+            static fn (mixed $key): bool => ! is_string($key) || ! QueueConfigResolver::isPattern($key),
+            ARRAY_FILTER_USE_KEY,
+        );
+
         foreach ($queuesConfig as $queueName => $config) {
             if (! is_string($queueName)) {
                 throw new \InvalidArgumentException(
@@ -402,7 +410,7 @@ readonly class AutoscaleConfiguration
      */
     public static function queueResources(string $queue): array
     {
-        $queueConfig = config("queue-autoscale.queues.{$queue}");
+        $queueConfig = QueueConfigResolver::overrideFor($queue);
 
         if (! is_array($queueConfig)) {
             return [];

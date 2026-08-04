@@ -49,7 +49,7 @@ readonly class QueueConfiguration
     public static function fromConfig(string $connection, string $queue): self
     {
         $defaults = self::resolveProfileOrArray(config('queue-autoscale.sla_defaults'));
-        $override = config("queue-autoscale.queues.{$queue}", []);
+        $override = QueueConfigResolver::overrideFor($queue);
 
         $overrideArray = self::resolveProfileOrArray($override);
 
@@ -103,15 +103,33 @@ readonly class QueueConfiguration
      */
     private static function resolveProfileOrArray(mixed $value): array
     {
-        if (is_string($value) && class_exists($value) && is_subclass_of($value, ProfileContract::class)) {
-            /** @var ProfileContract $instance */
-            $instance = new $value;
-
-            return $instance->resolve();
+        if (self::isProfileClass($value)) {
+            return (new $value)->resolve();
         }
 
         if (! is_array($value)) {
             return [];
+        }
+
+        // A 'profile' key names the baseline and the rest of the array refines
+        // it, matching how groups already accept a profile alongside their
+        // own settings. Without this a caller wanting one shipped profile with
+        // a single value changed had to restate every field it contains.
+        if (isset($value['profile'])) {
+            $profile = $value['profile'];
+            unset($value['profile']);
+
+            if (! self::isProfileClass($profile)) {
+                throw new InvalidConfigurationException(
+                    "queue-autoscale.queues 'profile' must be a class implementing ProfileContract, got: "
+                    .(is_string($profile) ? $profile : get_debug_type($profile))
+                );
+            }
+
+            return self::deepMerge(
+                (new $profile)->resolve(),
+                self::resolveProfileOrArray($value),
+            );
         }
 
         // Config arrays are string-keyed by construction; filtering rather
@@ -126,6 +144,16 @@ readonly class QueueConfiguration
         }
 
         return $resolved;
+    }
+
+    /**
+     * @phpstan-assert-if-true class-string<ProfileContract> $value
+     */
+    private static function isProfileClass(mixed $value): bool
+    {
+        return is_string($value)
+            && class_exists($value)
+            && is_subclass_of($value, ProfileContract::class);
     }
 
     /**

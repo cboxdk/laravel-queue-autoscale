@@ -218,9 +218,10 @@ readonly class GroupConfiguration
      */
     public static function assertNoQueueConflicts(array $groups): void
     {
-        /** @var array<string, array<string, mixed>> $perQueueConfig */
-        $perQueueConfig = config('queue-autoscale.queues', []);
-        $flatQueues = array_keys($perQueueConfig);
+        // Only literal names can conflict. A glob is a fallback for queues
+        // nothing else claims, so a group member matching one is governed by
+        // the group and the pattern simply never applies to it.
+        $flatQueues = array_keys(QueueConfigResolver::literal());
 
         foreach ($groups as $group) {
             foreach ($group->queues as $q) {
