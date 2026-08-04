@@ -7,6 +7,9 @@ namespace Cbox\LaravelQueueAutoscale\Telemetry;
 use Cbox\LaravelQueueAutoscale\Events\AutoscaleManagerStarted;
 use Cbox\LaravelQueueAutoscale\Events\AutoscaleManagerStopped;
 use Cbox\LaravelQueueAutoscale\Events\ClusterLeaderChanged;
+use Cbox\LaravelQueueAutoscale\Events\FuseProbing;
+use Cbox\LaravelQueueAutoscale\Events\FuseRecovered;
+use Cbox\LaravelQueueAutoscale\Events\FuseTripped;
 use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 use Cbox\LaravelQueueAutoscale\Events\SlaBreached;
 use Cbox\LaravelQueueAutoscale\Events\SlaRecovered;
@@ -33,6 +36,19 @@ use Illuminate\Contracts\Container\Container;
  */
 final class TelemetryEventSubscriber
 {
+    /**
+     * The fuse reports as one gauge with an encoded state rather than a
+     * boolean per state, so a dashboard reads the current state from a single
+     * series instead of reconciling several that can disagree mid-transition.
+     */
+    private const float FUSE_STATE_CLOSED = 0.0;
+
+    private const float FUSE_STATE_HALF_OPEN = 1.0;
+
+    private const float FUSE_STATE_OPEN = 2.0;
+
+    private const string FUSE_STATE_DESCRIPTION = 'Failure fuse state: 0 closed, 1 half-open (probing), 2 open (holding at workers.min)';
+
     private float $lastFlushAt = 0.0;
 
     public function __construct(
@@ -53,6 +69,9 @@ final class TelemetryEventSubscriber
             AutoscaleManagerStarted::class => 'handleAutoscaleManagerStarted',
             AutoscaleManagerStopped::class => 'handleAutoscaleManagerStopped',
             ClusterLeaderChanged::class => 'handleClusterLeaderChanged',
+            FuseTripped::class => 'handleFuseTripped',
+            FuseProbing::class => 'handleFuseProbing',
+            FuseRecovered::class => 'handleFuseRecovered',
         ];
     }
 
@@ -214,6 +233,75 @@ final class TelemetryEventSubscriber
             'cluster_id' => $event->clusterId,
             'previous_leader_id' => $event->previousLeaderId ?? '',
             'current_leader_id' => $event->currentLeaderId ?? '',
+        ]);
+
+        $telemetry->flush();
+    }
+
+    public function handleFuseTripped(FuseTripped $event): void
+    {
+        if (! $this->enabled()) {
+            return;
+        }
+
+        $telemetry = $this->telemetry();
+        $labels = ['connection' => $event->connection, 'queue' => $event->queue];
+
+        $telemetry->gauge('queue_autoscale.fuse.state', description: self::FUSE_STATE_DESCRIPTION, unit: '1')
+            ->set(self::FUSE_STATE_OPEN, $labels);
+
+        $telemetry->counter('queue_autoscale.fuse.trips', 'Failure fuse trips', unit: '{trips}')
+            ->inc(1, $labels);
+
+        $telemetry->event('queue_autoscale.fuse.tripped', [
+            ...$labels,
+            'failure_rate' => $event->failureRate,
+            'threshold_percent' => $event->thresholdPercent,
+            'samples' => $event->samples,
+            'failures' => $event->failures,
+            'held_at_workers' => $event->heldAtWorkers,
+        ]);
+
+        $telemetry->flush();
+    }
+
+    public function handleFuseProbing(FuseProbing $event): void
+    {
+        if (! $this->enabled()) {
+            return;
+        }
+
+        $telemetry = $this->telemetry();
+        $labels = ['connection' => $event->connection, 'queue' => $event->queue];
+
+        $telemetry->gauge('queue_autoscale.fuse.state', description: self::FUSE_STATE_DESCRIPTION, unit: '1')
+            ->set(self::FUSE_STATE_HALF_OPEN, $labels);
+
+        $telemetry->event('queue_autoscale.fuse.probing', [
+            ...$labels,
+            'probe_workers' => $event->probeWorkers,
+            'cooldown_seconds' => $event->cooldownSeconds,
+        ]);
+
+        $telemetry->flush();
+    }
+
+    public function handleFuseRecovered(FuseRecovered $event): void
+    {
+        if (! $this->enabled()) {
+            return;
+        }
+
+        $telemetry = $this->telemetry();
+        $labels = ['connection' => $event->connection, 'queue' => $event->queue];
+
+        $telemetry->gauge('queue_autoscale.fuse.state', description: self::FUSE_STATE_DESCRIPTION, unit: '1')
+            ->set(self::FUSE_STATE_CLOSED, $labels);
+
+        $telemetry->event('queue_autoscale.fuse.recovered', [
+            ...$labels,
+            'failure_rate' => $event->failureRate,
+            'samples' => $event->samples,
         ]);
 
         $telemetry->flush();
