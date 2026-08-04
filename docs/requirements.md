@@ -12,8 +12,8 @@ Before installing Queue Autoscale for Laravel, ensure your environment meets the
 
 | Requirement | Version |
 |---|---|
-| **PHP** | 8.3, 8.4, or 8.5 |
-| **Laravel** | 11.0+, 12.0+, or 13.0+ |
+| **PHP** | 8.4 or 8.5 |
+| **Laravel** | 12.0+ or 13.0+ |
 | **Composer** | Latest version recommended |
 
 ## PHP Extensions

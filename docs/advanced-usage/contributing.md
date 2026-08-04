@@ -60,7 +60,7 @@ Feature ideas go to GitHub Discussions (the *Ideas* category) — the issue form
 
 ### Prerequisites
 
-- PHP 8.3, 8.4 or 8.5 with the `pcntl` and `posix` extensions
+- PHP 8.4 or 8.5 with the `pcntl` and `posix` extensions
 - Composer
 - Git
 

@@ -10,7 +10,7 @@ Zero to a working autoscaled queue in about 5 minutes. Every command and file pa
 
 ## Prerequisites
 
-- PHP 8.3+ and Laravel 11+, with `ext-pcntl` and `ext-posix` available
+- PHP 8.4+ and Laravel 12+, with `ext-pcntl` and `ext-posix` available
 - Redis configured in `config/database.php` only if you plan to use the Redis or cluster presets
 - `cboxdk/laravel-queue-metrics` already set up — see [Installation](basic-usage/installation.md)
 

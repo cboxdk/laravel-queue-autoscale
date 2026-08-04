@@ -14,10 +14,10 @@ From the package's `composer.json`:
 
 | Requirement | Constraint |
 |---|---|
-| PHP | `^8.3 \| ^8.4 \| ^8.5` |
+| PHP | `^8.4 \| ^8.5` |
 | `ext-pcntl` | required — the manager uses POSIX signals |
 | `ext-posix` | required — worker liveness checks and termination |
-| `illuminate/contracts` | `^11.0 \|\| ^12.0 \|\| ^13.0` |
+| `illuminate/contracts` | `^12.0 \|\| ^13.0` |
 | `cboxdk/laravel-queue-metrics` | `^3.0` |
 | `symfony/process` | `^7.0 \|\| ^8.0` |
 | `spatie/laravel-package-tools` | `^1.16` |

@@ -36,8 +36,8 @@ capacity on the host.
 
 ## Requirements
 
-- PHP 8.3, 8.4 or 8.5
-- Laravel 11, 12 or 13
+- PHP 8.4 or 8.5
+- Laravel 12 or 13
 - `ext-pcntl` and `ext-posix` (the manager is a signal-handling daemon)
 - [`cboxdk/laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics) `^3.0`
 
@@ -536,9 +536,8 @@ When [`cboxdk/laravel-telemetry`](https://github.com/cboxdk/laravel-telemetry) i
 autoscaler publishes its scaling signals automatically — no configuration needed. Disable with
 `QUEUE_AUTOSCALE_TELEMETRY_ENABLED=false`.
 
-`cboxdk/laravel-telemetry` requires Laravel 12+. This package still supports Laravel 11, but the
-telemetry integration is simply unavailable there — `queue:autoscale:debug` reports
-`Telemetry: not installed` in that case.
+When it is not installed, `queue:autoscale:debug` reports `Telemetry: not installed` and everything
+else carries on unchanged — the integration is optional, not a dependency.
 
 | Metric | Type | Unit | Labels |
 | --- | --- | --- | --- |

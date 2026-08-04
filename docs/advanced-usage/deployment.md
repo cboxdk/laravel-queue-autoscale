@@ -16,10 +16,10 @@ the operational details that apply across all platforms.
 
 From `composer.json`:
 
-- PHP **8.3, 8.4 or 8.5** (`"php": "^8.3|^8.4|^8.5"`)
+- PHP **8.4 or 8.5** (`"php": "^8.4|^8.5"`)
 - The **pcntl** and **posix** extensions (signal handling and process ownership — both are hard
   requirements, not suggestions)
-- Laravel 11, 12 or 13 (`illuminate/contracts: ^11.0||^12.0||^13.0`)
+- Laravel 12 or 13 (`illuminate/contracts: ^12.0||^13.0`)
 - `cboxdk/laravel-queue-metrics: ^3.0` — installed automatically as a dependency
 - A queue backend the metrics package can observe (Redis or database)
 - A process supervisor for the manager daemon (Supervisor or systemd)
@@ -236,7 +236,7 @@ sudo journalctl -u queue-autoscale -f
 ### Option 3: Docker
 
 ```dockerfile
-FROM php:8.3-cli
+FROM php:8.4-cli
 
 RUN apt-get update && apt-get install -y supervisor \
     && docker-php-ext-install pcntl \
@@ -252,7 +252,7 @@ COPY docker/supervisor-autoscale.conf /etc/supervisor/conf.d/
 CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]
 ```
 
-The base image must be PHP 8.3 or newer — `php:8.2-cli` cannot install this package. `posix` is
+The base image must be PHP 8.4 or newer — `php:8.3-cli` cannot install this package. `posix` is
 enabled by default in the official images; `pcntl` is not, hence the `docker-php-ext-install` line.
 
 `docker/supervisor-autoscale.conf`:
@@ -542,7 +542,7 @@ worker. In addition, `RestartSignal` watches the `illuminate:queue:restart` cach
 
 ## Deployment checklist
 
-- [ ] PHP 8.3+ with `pcntl` and `posix` enabled
+- [ ] PHP 8.4+ with `pcntl` and `posix` enabled
 - [ ] `laravel-queue-metrics` configured and returning data from `getAllQueuesWithMetrics()`
 - [ ] `config/queue-autoscale.php` published, profiles chosen per queue
 - [ ] `workers.max` set deliberately for every queue that matters
