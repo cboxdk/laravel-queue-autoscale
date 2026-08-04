@@ -73,7 +73,7 @@
             "@analyse",
             "@test",
             "@license-check",
-            "@composer audit --no-dev --locked"
+            "@composer audit --no-dev"
         ]
     },
     "config": {
