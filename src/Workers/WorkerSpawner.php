@@ -6,6 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Workers;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
@@ -25,6 +26,7 @@ readonly class WorkerSpawner
      * @param  int  $count  Number of workers to spawn
      * @param  SpawnCompensationConfiguration  $spawnConfig  Spawn compensation settings
      * @param  string|null  $group  Optional group name — tags spawned WorkerProcess instances
+     * @param  WorkerConfiguration|null  $workerConfig  Per-queue worker settings; falls back to the global block
      * @return Collection<int, WorkerProcess> Spawned workers
      */
     public function spawn(
@@ -33,8 +35,17 @@ readonly class WorkerSpawner
         int $count,
         SpawnCompensationConfiguration $spawnConfig,
         ?string $group = null,
+        ?WorkerConfiguration $workerConfig = null,
     ): Collection {
         $workers = new Collection;
+
+        // Per-queue settings when the caller resolved them, otherwise the
+        // global block. These used to be parsed per queue and then silently
+        // ignored — the spawner only ever read the global values, so a
+        // profile's tries/sleep/timeout never reached a worker.
+        $tries = $workerConfig !== null ? $workerConfig->tries : AutoscaleConfiguration::workerTries();
+        $maxTime = $workerConfig !== null ? $workerConfig->timeoutSeconds : AutoscaleConfiguration::workerTimeoutSeconds();
+        $sleep = $workerConfig !== null ? $workerConfig->sleepSeconds : AutoscaleConfiguration::workerSleepSeconds();
 
         for ($i = 0; $i < $count; $i++) {
             $process = new Process([
@@ -43,9 +54,9 @@ readonly class WorkerSpawner
                 'queue:work',
                 $connection,
                 '--queue='.$queue,
-                '--tries='.AutoscaleConfiguration::workerTries(),
-                '--max-time='.AutoscaleConfiguration::workerTimeoutSeconds(),
-                '--sleep='.AutoscaleConfiguration::workerSleepSeconds(),
+                '--tries='.$tries,
+                '--max-time='.$maxTime,
+                '--sleep='.$sleep,
             ]);
 
             // Inject environment variables for monitoring

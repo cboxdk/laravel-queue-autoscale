@@ -36,6 +36,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerOutputBuffer;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerPool;
+use Cbox\LaravelQueueAutoscale\Workers\WorkerProcess;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
 use Cbox\LaravelQueueMetrics\Actions\CalculateQueueMetricsAction;
@@ -695,6 +696,14 @@ class AutoscaleManager
 
         foreach ($groups as $group) {
             $target = $recommendation->targetForGroup($group->connection, $group->name);
+
+            // A workload the leader did not publish is one it does not know
+            // about, not one it wants scaled to zero. Leave it alone rather
+            // than draining it.
+            if ($target === null) {
+                continue;
+            }
+
             $this->reconcileGroupTarget($group, $target);
         }
     }
@@ -1983,6 +1992,7 @@ class AutoscaleManager
             $toAdd,
             $group->spawnCompensation,
             group: $group->name,
+            workerConfig: $group->workers,
         );
 
         foreach ($workers as $worker) {
@@ -2213,6 +2223,7 @@ class AutoscaleManager
             $decision->queue,
             $toAdd,
             $spawnConfig,
+            workerConfig: QueueConfiguration::fromConfig($decision->connection, $decision->queue)->workers,
         );
 
         foreach ($workers as $worker) {
@@ -2221,14 +2232,37 @@ class AutoscaleManager
 
         $this->pool->addMany($workers);
 
+        // Report what actually started, not what was asked for. The spawner
+        // drops workers that fail to launch, so trusting the requested count
+        // meant a run where every spawn failed still logged and emitted
+        // "scaled 0 -> 5" while the pool gained nothing.
+        $spawned = $workers->count();
+        $reached = $decision->currentWorkers + $spawned;
+
+        if ($spawned < $toAdd) {
+            Log::channel(AutoscaleConfiguration::logChannel())->warning(
+                'Fewer workers started than requested',
+                [
+                    'connection' => $decision->connection,
+                    'queue' => $decision->queue,
+                    'requested' => $toAdd,
+                    'started' => $spawned,
+                ]
+            );
+        }
+
+        if ($spawned === 0) {
+            return;
+        }
+
         Log::channel(AutoscaleConfiguration::logChannel())->info(
             'Scaled up workers',
             [
                 'connection' => $decision->connection,
                 'queue' => $decision->queue,
                 'from' => $decision->currentWorkers,
-                'to' => $decision->targetWorkers,
-                'added' => $toAdd,
+                'to' => $reached,
+                'added' => $spawned,
                 'reason' => $decision->reason,
             ]
         );
@@ -2237,7 +2271,7 @@ class AutoscaleManager
             connection: $decision->connection,
             queue: $decision->queue,
             from: $decision->currentWorkers,
-            to: $decision->targetWorkers,
+            to: $reached,
             action: 'up',
             reason: $decision->reason
         ));
@@ -2302,6 +2336,16 @@ class AutoscaleManager
 
         foreach ($dead as $worker) {
             $this->pool->removeWorker($worker);
+
+            // The output buffer keeps a partial-line fragment per PID and
+            // nothing ever cleared it, so a long-lived manager accumulated one
+            // entry per worker it had ever run — and a recycled PID inherited
+            // the previous worker's dangling line.
+            $pid = $worker->pid();
+
+            if ($pid !== null) {
+                $this->outputBuffer->clearBuffer($pid);
+            }
 
             $this->verbose("   💀 Removed dead worker: PID {$worker->pid()}", 'warn');
 
@@ -2382,10 +2426,9 @@ class AutoscaleManager
             'Shutting down autoscale manager, terminating all workers'
         );
 
-        foreach ($this->pool->all() as $worker) {
+        $this->terminator->terminateAll($this->pool->all(), function (WorkerProcess $worker): void {
             $this->verbose("   ✓ Terminating worker: PID {$worker->pid()}", 'info');
-            $this->terminator->terminate($worker);
-        }
+        });
 
         $this->renderer?->shutdown();
 

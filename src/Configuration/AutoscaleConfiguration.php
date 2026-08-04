@@ -24,18 +24,31 @@ readonly class AutoscaleConfiguration
         return (bool) config('queue-autoscale.enabled', true);
     }
 
+    /**
+     * Memoised because the derived form does a DNS lookup (measured ~262 us)
+     * and is called inside per-manager loops in the evaluation cycle. Process
+     * identity cannot change within a process, so the only thing the repeated
+     * work bought was a blocking resolver call in the manager's control loop —
+     * which stalls scaling cluster-wide when DNS is slow or unreachable.
+     */
     public static function managerId(): string
     {
+        static $memoised = null;
+
         $configured = config('queue-autoscale.manager_id');
 
         if (is_string($configured) && trim($configured) !== '') {
             return trim($configured);
         }
 
+        if (is_string($memoised)) {
+            return $memoised;
+        }
+
         $host = self::hostLabel();
         $source = self::managerIdentitySource();
 
-        return sprintf(
+        return $memoised = sprintf(
             '%s-%s',
             Str::slug($host, '-'),
             substr(sha1($source), 0, 12),
