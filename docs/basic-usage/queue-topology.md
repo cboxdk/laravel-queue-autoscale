@@ -1,12 +1,12 @@
 ---
 title: "Queue Topology"
-description: "How Laravel multi-queue workers work, how Horizon groups them, and how this package chooses workers per queue, per group, or excluded"
+description: "How multi-queue workers behave, and how to choose between per-queue, group, exclusive and excluded queues"
 weight: 5
 ---
 
 # Queue Topology
 
-Before you configure autoscaling, it helps to be precise about **which worker listens to which queue**. This page explains the three models you have available, when to use each, and how they compare to Laravel's native `queue:work` and Horizon.
+Before you configure autoscaling, it helps to be precise about **which worker listens to which queue**. This page explains the models you have available and when to use each.
 
 Read this once; it removes 90% of the confusion about worker behaviour.
 
@@ -47,9 +47,7 @@ This is **strict priority, checked per-poll**. Two consequences:
 - A burst on `default` still gets processed as long as there are gaps in `critical`'s arrivals.
 - A queue that constantly produces jobs faster than the worker can drain **will** starve later queues in the list.
 
-This is exactly what Horizon calls `balance: false`. It is the **only** Horizon mode where a single worker polls multiple queues — in `balance: simple` and `balance: auto`, Horizon spawns one process per queue and just decides how many to run for each.
-
-That subtle distinction is the whole reason this package exists in per-queue form by default.
+That distinction — one process polling several queues, versus one pool per queue — is what the choice between [worker groups](#worker-groups) and [per-queue workers](#per-queue-workers-default) comes down to.
 
 ---
 
@@ -76,8 +74,6 @@ That subtle distinction is the whole reason this package exists in per-queue for
 - **Spawn latency on bursts.** When `payments` suddenly needs more workers, we predict, forecast, and spawn — which takes seconds. A shared worker would have absorbed the spike immediately.
 
 **Use this when:** queues have different job durations, different SLA targets, or different failure characteristics. This is the right default for the vast majority of queues.
-
-> This model is approximately equivalent to Horizon's `balance: auto`, but with a smarter scaling engine (Little's Law, p95 pickup times, trend forecasting) than Horizon's `time`/`size` strategies.
 
 ---
 
@@ -107,12 +103,16 @@ That subtle distinction is the whole reason this package exists in per-queue for
 - **Group-level signal only.** Pickup-time percentiles (p95) are computed across the union of all members' samples, and `oldest_job_age` uses the worst member. You lose per-queue precision — if one member is slow and three are fast, the group's p95 reflects the blend, not the slow queue's own SLA.
 - **All members share one SLA target.** Not suitable for mixing `payments` (10s SLA) with `analytics` (hour-long SLA).
 
-**Rules enforced at startup:**
+**Rules the group configuration enforces** (all throw `InvalidConfigurationException`, from `GroupConfiguration`):
 
-- A queue may appear in `queues` **or** in a group's `queues` list — never both.
-- A queue may appear in at most one group.
-- Only `mode: 'priority'` is supported (the only mode that actually shares a worker across queues).
-- Groups cannot use `ExclusiveProfile` (a pinned group makes no sense — use a per-queue exclusive config).
+- The group must declare at least one queue.
+- A queue may appear in `queues` **or** in a group's `queues` list — never both (`assertNoQueueConflicts()`).
+- A queue may appear in at most one group (`assertNoQueueConflicts()`).
+- `mode` must be `'priority'`. It is the only supported value, and the only mode that actually shares a worker across queues.
+- A group may not list the same queue twice.
+- A group cannot use a non-scalable profile — pointing it at `ExclusiveProfile` (or any profile with `workers.scalable = false`) is rejected. Use a per-queue exclusive config instead.
+
+These are checked on the manager's first evaluation cycle, not at command startup. If a conflict is found, the manager logs `Group configuration is invalid — groups disabled until manager restart` at critical level and **keeps running with all groups disabled**; per-queue autoscaling is unaffected. Fix the config and restart the manager.
 
 **Use this when:** several queues are closely related (same failure domain, similar job duration, correlated traffic), you want burst absorption, and per-queue SLA precision is not worth the resource cost.
 
@@ -171,8 +171,8 @@ This is deliberately conservative. The autoscaler will spawn extra workers if **
 
 **Why you need this:**
 
-- **Horizon is already managing it.** Two autoscalers on one queue will fight each other.
-- **A sidecar tool runs it.** Custom supervisord, systemd timers, manual `queue:work` in screen — all valid.
+- **Another supervisor is already managing it.** Two autoscalers on one queue will fight each other.
+- **A sidecar tool runs it.** Custom supervisord, systemd timers, manual `queue:work` in a session — all valid.
 - **It's a throwaway queue** for a migration or test, and you do not want the autoscaler inventing a `BalancedProfile` worker pool for it.
 
 **Glob support:** patterns use `fnmatch()` semantics. `legacy-*` matches `legacy-sync`, `legacy-reports`, etc. `test-?` matches `test-1` but not `test-12`.
@@ -186,7 +186,7 @@ This is deliberately conservative. The autoscaler will spawn extra workers if **
 Use this when deciding where a new queue should live.
 
 ```text
-Is another tool (Horizon, custom) managing it?
+Is another supervisor already managing it?
 ├── Yes → add it to 'excluded'
 └── No
     │
@@ -213,19 +213,6 @@ Is another tool (Horizon, custom) managing it?
 | Starvation possible | ❌ | ⚠️ Yes, if sized too small | ❌ | n/a |
 | Respawns on worker death | ✅ | ✅ | ✅ | ❌ |
 | SLA breach events | ✅ | ✅ (group) | ✅ | ❌ |
-
----
-
-## Comparison With Horizon
-
-| This package | Horizon equivalent | Notes |
-|---|---|---|
-| Per-queue (default) | `balance: auto` | Both: one pool per queue, dynamic scaling. Our scaling math is more sophisticated (Little's Law + forecasting vs. `time`/`size`). |
-| Group (`mode: 'priority'`) | `balance: false` | Both: one worker process, multiple queues, strict priority per poll. |
-| Exclusive profile | `balance: false`, fixed processes | Horizon has no built-in "pin to N" — you'd mimic it with `minProcesses = maxProcesses = 1`. Our profile makes it a first-class declaration with supervisor-style respawn. |
-| Excluded | n/a | Horizon does not have a "leave this queue alone" concept; you either manage a queue or you don't. |
-
-Horizon has `balance: simple` (fixed processes split evenly across queues). We deliberately do not expose this: it's strictly worse than either per-queue (better scaling) or groups (better resource sharing), and offering it would invite confusion.
 
 ---
 

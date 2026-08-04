@@ -20,7 +20,7 @@ use Illuminate\Queue\Events\JobProcessing;
  * key exists for the given worker ID (e.g. after the first pickup has already
  * been recorded, or for workers spawned outside the autoscaler).
  */
-final class SpawnLatencyRecorder
+class SpawnLatencyRecorder
 {
     public function __construct(
         private readonly SpawnLatencyTrackerContract $tracker,

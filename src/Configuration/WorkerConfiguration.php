@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Configuration;
 
-final readonly class WorkerConfiguration
+readonly class WorkerConfiguration
 {
     public function __construct(
         public int $min,

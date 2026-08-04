@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Support;
 
-final class HeldManagerProcessLock
+class HeldManagerProcessLock
 {
     /** @var resource|null */
     private mixed $handle;

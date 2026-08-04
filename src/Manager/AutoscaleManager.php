@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Manager;
 
+use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterRecommendation;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
@@ -27,6 +28,7 @@ use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\QueueStats;
 use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\WorkerStatus;
 use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\ResourceEstimate;
 use Cbox\LaravelQueueAutoscale\Scaling\FairShareAllocator;
 use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
@@ -35,6 +37,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerOutputBuffer;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerPool;
+use Cbox\LaravelQueueAutoscale\Workers\WorkerProcess;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
 use Cbox\LaravelQueueMetrics\Actions\CalculateQueueMetricsAction;
@@ -45,7 +48,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Console\Output\OutputInterface;
 
-final class AutoscaleManager
+class AutoscaleManager
 {
     private WorkerPool $pool;
 
@@ -117,6 +120,7 @@ final class AutoscaleManager
         private readonly ClusterStore $clusterStore,
         private readonly CapacityCalculator $capacity,
         private readonly ResourceEstimateResolver $resolver,
+        private readonly AlertRateLimiter $alerts = new AlertRateLimiter,
     ) {
         $this->pool = new WorkerPool;
         $this->outputBuffer = new WorkerOutputBuffer;
@@ -125,6 +129,77 @@ final class AutoscaleManager
     public function configure(int $interval): void
     {
         $this->interval = $interval;
+    }
+
+    /**
+     * Keep a fuse-held queue visible in the log for as long as it is held.
+     *
+     * Scaling actions are logged when they happen, but a held queue only
+     * scales once — down to workers.min on the trip — and then holds. Without
+     * this, the log falls silent for the rest of the outage, which is exactly
+     * when an operator goes looking for it. Rate-limited the same way SLA
+     * breach risk is, so a long outage produces a periodic line rather than
+     * one per evaluation cycle.
+     */
+    /**
+     * Trim a spawn request to what the host-wide ceiling still allows.
+     *
+     * Capacity is enforced per queue, and workers.min is applied AFTER the
+     * CPU/memory clamp so a floor always beats measured capacity. That is
+     * deliberate for one queue, but queues are DISCOVERED from metrics rather
+     * than only read from config: an app with per-tenant queue names presents
+     * thousands of queues, each of which is then raised to its floor. Nothing
+     * bounded the sum. This is that bound.
+     */
+    private function clampToHostCeiling(int $requested): int
+    {
+        $ceiling = AutoscaleConfiguration::maxTotalWorkers();
+
+        if ($ceiling === null || $requested <= 0) {
+            return max(0, $requested);
+        }
+
+        $headroom = max(0, $ceiling - $this->pool->totalCount());
+
+        if ($headroom >= $requested) {
+            return $requested;
+        }
+
+        if ($this->alerts->allow('host_ceiling:'.AutoscaleConfiguration::hostLabel())) {
+            Log::channel(AutoscaleConfiguration::logChannel())->warning(
+                'Host worker ceiling reached; spawn request trimmed',
+                [
+                    'ceiling' => $ceiling,
+                    'running' => $this->pool->totalCount(),
+                    'requested' => $requested,
+                    'granted' => $headroom,
+                ]
+            );
+        }
+
+        return $headroom;
+    }
+
+    private function logFuseHold(ScalingDecision $decision): void
+    {
+        if ($decision->capacity?->limitingFactor !== LimitingFactor::Fuse) {
+            return;
+        }
+
+        if (! $this->alerts->allow("fuse_hold:{$decision->connection}:{$decision->queue}")) {
+            return;
+        }
+
+        Log::channel(AutoscaleConfiguration::logChannel())->warning(
+            'Autoscaling held back by failure fuse',
+            [
+                'connection' => $decision->connection,
+                'queue' => $decision->queue,
+                'current_workers' => $decision->currentWorkers,
+                'target_workers' => $decision->targetWorkers,
+                'reason' => $decision->reason,
+            ]
+        );
     }
 
     public function setOutput(OutputInterface $output): void
@@ -285,7 +360,7 @@ final class AutoscaleManager
             totalWorkers: $this->pool->totalCount(),
             maxWorkers: $capacity->finalMaxWorkers,
             availableWorkerCapacity: max($capacity->finalMaxWorkers - $this->pool->totalCount(), 0),
-            capacityLimiter: $this->clusterString($capacity->limitingFactor, 'unknown'),
+            capacityLimiter: $capacity->limitingFactor->value,
             cpuPercent: $this->clusterFloat($cpuDetails['current_cpu_percent'] ?? 0.0),
             cpuCores: is_numeric($cpuDetails['total_cores'] ?? null) ? (float) $cpuDetails['total_cores'] : 0.0,
             cpuUsableCores: is_numeric($cpuDetails['usable_cores'] ?? null) ? (float) $cpuDetails['usable_cores'] : 0.0,
@@ -661,6 +736,14 @@ final class AutoscaleManager
 
         foreach ($groups as $group) {
             $target = $recommendation->targetForGroup($group->connection, $group->name);
+
+            // A workload the leader did not publish is one it does not know
+            // about, not one it wants scaled to zero. Leave it alone rather
+            // than draining it.
+            if ($target === null) {
+                continue;
+            }
+
             $this->reconcileGroupTarget($group, $target);
         }
     }
@@ -1609,6 +1692,7 @@ final class AutoscaleManager
         // 6. Display decision
         $this->verbose("  📊 Decision: {$currentWorkers} → {$decision->targetWorkers} workers", 'info');
         $this->verbose("     Reason: {$decision->reason}", 'info');
+        $this->logFuseHold($decision);
 
         if ($decision->predictedPickupTime !== null) {
             $this->verbose("     Predicted pickup time: {$decision->predictedPickupTime}s (SLA: {$decision->slaTarget}s)", 'info');
@@ -1622,14 +1706,22 @@ final class AutoscaleManager
             }
 
             // Explain the capacity factor
+            // Exhaustive: a new limiting factor is a compile error here
+            // rather than a silently missing explanation. The fuse case used
+            // to be absent, so verbose mode printed nothing at all while a
+            // queue was being held down.
             $factor = $decision->capacity->limitingFactor;
-            if ($factor === 'cpu' || $factor === 'memory') {
-                $this->verbose("     ⚠️  Constrained by system capacity: {$factor}", 'warn');
-            } elseif ($factor === 'config') {
-                $this->verbose('     ⚠️  Constrained by workers.max config limit', 'warn');
-            } elseif ($factor === 'strategy') {
-                $this->verbose('     ✓ Optimal worker count determined by demand analysis', 'debug');
-            }
+            [$level, $icon] = match ($factor) {
+                LimitingFactor::Cpu,
+                LimitingFactor::Memory,
+                LimitingFactor::Balanced,
+                LimitingFactor::SystemMetricsUnavailable => ['warn', '⚠️ '],
+                LimitingFactor::Fuse => ['warn', '🔌'],
+                LimitingFactor::Config => ['warn', '⚠️ '],
+                LimitingFactor::Strategy => ['debug', '✓'],
+            };
+
+            $this->verbose("     {$icon} ".ucfirst($factor->description()), $level);
         }
 
         // 6b. Store queue stats for renderer
@@ -1767,6 +1859,7 @@ final class AutoscaleManager
 
         $this->verbose("  📊 Group decision: {$currentWorkers} → {$decision->targetWorkers} workers", 'info');
         $this->verbose("     Reason: {$decision->reason}", 'info');
+        $this->logFuseHold($decision);
 
         $slaStatus = $isBreaching ? 'breached' : ($aggregated->oldestJobAge > $group->sla->targetSeconds * 0.8 ? 'warning' : 'ok');
         $this->currentQueueStats[$key] = new QueueStats(
@@ -1928,7 +2021,11 @@ final class AutoscaleManager
 
     private function scaleUpGroup(GroupConfiguration $group, ScalingDecision $decision): void
     {
-        $toAdd = $decision->workersToAdd();
+        $toAdd = $this->clampToHostCeiling($decision->workersToAdd());
+
+        if ($toAdd === 0) {
+            return;
+        }
 
         $this->verbose("  ⬆️  Scaling group UP: spawning {$toAdd} worker(s) for [{$group->queueArgument()}]", 'info');
 
@@ -1947,6 +2044,7 @@ final class AutoscaleManager
             $toAdd,
             $group->spawnCompensation,
             group: $group->name,
+            workerConfig: $group->workers,
         );
 
         foreach ($workers as $worker) {
@@ -2155,7 +2253,11 @@ final class AutoscaleManager
 
     private function scaleUp(ScalingDecision $decision): void
     {
-        $toAdd = $decision->workersToAdd();
+        $toAdd = $this->clampToHostCeiling($decision->workersToAdd());
+
+        if ($toAdd === 0) {
+            return;
+        }
 
         $this->verbose("  ⬆️  Scaling UP: spawning {$toAdd} worker(s)", 'info');
 
@@ -2177,6 +2279,7 @@ final class AutoscaleManager
             $decision->queue,
             $toAdd,
             $spawnConfig,
+            workerConfig: QueueConfiguration::fromConfig($decision->connection, $decision->queue)->workers,
         );
 
         foreach ($workers as $worker) {
@@ -2185,14 +2288,37 @@ final class AutoscaleManager
 
         $this->pool->addMany($workers);
 
+        // Report what actually started, not what was asked for. The spawner
+        // drops workers that fail to launch, so trusting the requested count
+        // meant a run where every spawn failed still logged and emitted
+        // "scaled 0 -> 5" while the pool gained nothing.
+        $spawned = $workers->count();
+        $reached = $decision->currentWorkers + $spawned;
+
+        if ($spawned < $toAdd) {
+            Log::channel(AutoscaleConfiguration::logChannel())->warning(
+                'Fewer workers started than requested',
+                [
+                    'connection' => $decision->connection,
+                    'queue' => $decision->queue,
+                    'requested' => $toAdd,
+                    'started' => $spawned,
+                ]
+            );
+        }
+
+        if ($spawned === 0) {
+            return;
+        }
+
         Log::channel(AutoscaleConfiguration::logChannel())->info(
             'Scaled up workers',
             [
                 'connection' => $decision->connection,
                 'queue' => $decision->queue,
                 'from' => $decision->currentWorkers,
-                'to' => $decision->targetWorkers,
-                'added' => $toAdd,
+                'to' => $reached,
+                'added' => $spawned,
                 'reason' => $decision->reason,
             ]
         );
@@ -2201,7 +2327,7 @@ final class AutoscaleManager
             connection: $decision->connection,
             queue: $decision->queue,
             from: $decision->currentWorkers,
-            to: $decision->targetWorkers,
+            to: $reached,
             action: 'up',
             reason: $decision->reason
         ));
@@ -2266,6 +2392,16 @@ final class AutoscaleManager
 
         foreach ($dead as $worker) {
             $this->pool->removeWorker($worker);
+
+            // The output buffer keeps a partial-line fragment per PID and
+            // nothing ever cleared it, so a long-lived manager accumulated one
+            // entry per worker it had ever run — and a recycled PID inherited
+            // the previous worker's dangling line.
+            $pid = $worker->pid();
+
+            if ($pid !== null) {
+                $this->outputBuffer->clearBuffer($pid);
+            }
 
             $this->verbose("   💀 Removed dead worker: PID {$worker->pid()}", 'warn');
 
@@ -2346,10 +2482,9 @@ final class AutoscaleManager
             'Shutting down autoscale manager, terminating all workers'
         );
 
-        foreach ($this->pool->all() as $worker) {
+        $this->terminator->terminateAll($this->pool->all(), function (WorkerProcess $worker): void {
             $this->verbose("   ✓ Terminating worker: PID {$worker->pid()}", 'info');
-            $this->terminator->terminate($worker);
-        }
+        });
 
         $this->renderer?->shutdown();
 

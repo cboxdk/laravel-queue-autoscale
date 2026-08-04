@@ -72,13 +72,15 @@ spec:
     type: Recreate
   template:
     spec:
+      terminationGracePeriodSeconds: 60
       containers:
         - name: queue-autoscale
           command: ["php", "artisan", "queue:autoscale"]
-          terminationGracePeriodSeconds: 60
 ```
 
-For cluster mode, multiple replicas are valid. Each replica still runs exactly one local `queue:autoscale` process, and cluster coordination happens through Redis.
+`terminationGracePeriodSeconds` belongs on the pod spec, not the container, and must be at least
+`queue-autoscale.workers.shutdown_timeout_seconds` (default 30) so the manager can drain its workers
+before the kubelet sends SIGKILL.
 
 For cluster mode, multiple replicas are valid. Each replica still runs exactly one local `queue:autoscale` process, and cluster coordination happens through Redis.
 
@@ -106,4 +108,5 @@ Or point at Loki/Fluent/CloudWatch via `logging.driver`.
 docker compose logs -f queue-autoscale
 ```
 
-Should show `Autoscale manager started` within a second, then worker-spawn activity as soon as jobs arrive.
+Should show `Starting Queue Autoscale Manager` with the manager ID, mode and evaluation interval
+within a second, then worker-spawn activity as soon as jobs arrive.

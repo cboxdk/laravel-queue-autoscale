@@ -29,9 +29,26 @@ Six profiles ship with the package:
 | **BackgroundProfile** | 300s | 0 | 5 | p95 | Hint-only | Cleanup, analytics |
 | **ExclusiveProfile** (v3) | 60s | 1 (pinned) | 1 (pinned) | p95 | Disabled | Sequential integrations |
 
+Each profile also ships [failure fuse](failure-fuse.md) tuning matched to its traffic shape:
+
+| Profile | Fuse threshold | Min samples | Window | Cooldown |
+|---|---|---|---|---|
+| **CriticalProfile** | 40% | 10 | 30s | 30s |
+| **HighVolumeProfile** | 50% | 100 | 60s | 60s |
+| **BalancedProfile** ⭐ | 50% | 20 | 60s | 60s |
+| **BurstyProfile** | 50% | 20 | 120s | 60s |
+| **BackgroundProfile** | 60% | 10 | 300s | 300s |
+| **ExclusiveProfile** | — | — | — | disabled |
+
+Higher-volume profiles demand more samples before acting; lower-volume ones widen the window so `min_samples` is reachable at all. `ExclusiveProfile` disables the fuse because a pinned queue has no scale-up to hold back.
+
 `BalancedProfile` is the default `sla_defaults`. Change it only if your typical queue has a tighter or looser SLA than 30 seconds.
 
 ## Using a profile
+
+A **per-queue** entry under `queues` accepts exactly two shapes, and nothing else. `QueueConfiguration::resolveProfileOrArray()` checks whether the value is a `ProfileContract` class string; if not, it treats the value as a literal partial-override array.
+
+### Shape 1 — a profile class string
 
 ```php
 use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
@@ -44,7 +61,7 @@ use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
 ],
 ```
 
-Or override a single key on top of a profile:
+### Shape 2 — a literal partial-override array
 
 ```php
 'queues' => [
@@ -55,7 +72,38 @@ Or override a single key on top of a profile:
 ],
 ```
 
-The deep merge keeps every value the profile defines except what you explicitly overrode.
+The array is deep-merged over whatever `sla_defaults` resolves to. Every value the default profile defines survives except the keys you explicitly overrode.
+
+> ### The trap: `profile` + `overrides` do not work per queue
+>
+> ```php
+> // ❌ SILENTLY DOES NOTHING under 'queues'
+> 'queues' => [
+>     'webhooks' => [
+>         'profile' => BalancedProfile::class,
+>         'overrides' => ['workers' => ['min' => 0]],
+>     ],
+> ],
+> ```
+>
+> `resolveProfileOrArray()` sees an array, so it treats the whole thing as literal overrides. The keys `profile` and `overrides` are not part of the resolved config shape, so they are merged in as junk and ignored. The queue silently keeps the plain `sla_defaults` values — no error, no warning.
+>
+> `profile` + `overrides` is a **groups-only** shape, read by `GroupConfiguration::fromConfig()`:
+>
+> ```php
+> // ✅ Correct — under 'groups'
+> 'groups' => [
+>     'notifications' => [
+>         'queues' => ['email', 'sms', 'push'],
+>         'profile' => BalancedProfile::class,
+>         'overrides' => ['workers' => ['min' => 0]],
+>     ],
+> ],
+> ```
+>
+> To base a single queue on a non-default profile *and* tweak it, either write the overridden keys as a literal array (Shape 2, merged over `sla_defaults`), or write a small [custom profile class](#custom-profiles) that starts from the profile you want.
+
+> **Removed in v3:** `ProfilePresets` no longer exists. Calls like `ProfilePresets::balanced()` will fatal. Use the profile classes directly.
 
 ## The five autoscaling profiles
 
@@ -74,8 +122,8 @@ Each profile below lists the exact values from its `resolve()` method. All setti
     'window_seconds' => 120,
     'min_samples' => 20,
 ],
-'workers' => ['min' => 5, 'max' => 50, 'sleep_seconds' => 1],
-'forecast' => ['policy' => AggressiveForecastPolicy::class, 'horizon_seconds' => 60],
+'workers' => ['min' => 5, 'max' => 50, 'sleep_seconds' => 1, 'tries' => 5],
+'forecast' => ['policy' => AggressiveForecastPolicy::class, 'horizon_seconds' => 60, 'history_seconds' => 300],
 'spawn_compensation' => ['min_samples' => 3, 'ema_alpha' => 0.3],
 ```
 
@@ -152,7 +200,8 @@ Longer forecast horizon (120s) so the aggressive forecast catches ramps earlier.
     'min_samples' => 20,
 ],
 'workers' => ['min' => 0, 'max' => 5, 'sleep_seconds' => 10],
-'forecast' => ['policy' => HintForecastPolicy::class, 'horizon_seconds' => 300],
+'forecast' => ['policy' => HintForecastPolicy::class, 'horizon_seconds' => 300, 'history_seconds' => 900],
+'spawn_compensation' => ['fallback_seconds' => 3.0],
 ```
 
 `HintForecastPolicy` barely influences the scaling decision — for a 5-minute SLA queue, reactive scaling is fine, and the extra prediction machinery isn't worth the compute. `sleep_seconds = 10` also reduces idle-worker CPU.
@@ -214,18 +263,7 @@ An SLA target should be **at least 2–3x the wakeup latency** to avoid false br
 
 ### Configuration
 
-Override `workers.min` on any scalable profile:
-
-```php
-'queues' => [
-    'webhooks' => [
-        'profile' => BalancedProfile::class,
-        'overrides' => ['workers' => ['min' => 0]],
-    ],
-],
-```
-
-Or set it directly:
+Override `workers.min` with a literal partial-override array:
 
 ```php
 'queues' => [
@@ -235,6 +273,16 @@ Or set it directly:
     ],
 ],
 ```
+
+Do **not** reach for `['profile' => ..., 'overrides' => [...]]` here — see [Using a profile](#using-a-profile). If you want a whole profile's shape plus one change, either pick the profile class outright:
+
+```php
+'queues' => [
+    'webhooks' => BurstyProfile::class,   // already min = 0
+],
+```
+
+or write a [custom profile](#custom-profiles).
 
 Scale-to-zero is **not compatible** with `ExclusiveProfile` or any non-scalable configuration (`scalable = false`), which requires at least one worker at all times.
 

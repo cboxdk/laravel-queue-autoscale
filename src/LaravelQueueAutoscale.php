@@ -7,7 +7,7 @@ namespace Cbox\LaravelQueueAutoscale;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 
-final readonly class LaravelQueueAutoscale
+readonly class LaravelQueueAutoscale
 {
     public function __construct(
         private ClusterStore $clusterStore,

@@ -1,117 +1,144 @@
 ---
 title: "Security"
-description: "Queue Autoscale for Laravel security policy and vulnerability reporting"
+description: "How to report a vulnerability in Queue Autoscale, plus the security-relevant behaviour of worker spawning and configuration"
 weight: 33
 ---
 
-# Security Policy
+# Security
 
-## Supported Versions
+## Reporting a vulnerability
 
-We release patches for security vulnerabilities for the following versions:
+**Please do not open a public GitHub issue for a security problem.**
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+Report it through **GitHub Private Vulnerability Reporting** on the repository:
 
-## Reporting a Vulnerability
+[Report a vulnerability](https://github.com/cboxdk/laravel-queue-autoscale/security/advisories/new)
 
-**Please do not report security vulnerabilities through public GitHub issues.**
+(Repository → **Security** tab → **Report a vulnerability**.)
 
-Instead, please report them via email to **security@cbox.dk**.
+The report stays private between you and the maintainers until a fix is published. If Private
+Vulnerability Reporting is not enabled on the repository at the time you look, open a normal issue
+that says only that you have a security report and asks for a private channel — do not include the
+details in it.
 
-You should receive a response within 48 hours. If for some reason you do not, please follow up via email to ensure we received your original message.
+This is a small open-source package maintained on a best-effort basis. There is no staffed security
+desk, no guaranteed response window and no bug-bounty programme. Reports are triaged as maintainer
+time allows, and confirmed issues are fixed and released as promptly as they can be.
 
-### What to Include
+### What to include
 
-Please include the following information in your report:
+- The type of issue (for example: command injection, privilege escalation, resource exhaustion)
+- The affected version or commit
+- The file and code path involved
+- Configuration required to reproduce it
+- Step-by-step reproduction, and a proof of concept if you have one
+- What an attacker gains
 
-- Type of issue (e.g., command injection, process escape, resource exhaustion)
-- Full paths of source file(s) related to the manifestation of the issue
-- The location of the affected source code (tag/branch/commit or direct URL)
-- Any special configuration required to reproduce the issue
-- Step-by-step instructions to reproduce the issue
-- Proof-of-concept or exploit code (if possible)
-- Impact of the issue, including how an attacker might exploit it
+### Supported versions
 
-This information will help us triage your report more quickly.
+Fixes are made on the **current major line (v3.x)** against the latest release. Older majors do not
+receive backported patches. Upgrading to the latest v3 release is the supported remediation path.
 
-## Security Considerations
+### Disclosure
 
-### Worker Process Management
+When a report is confirmed, the maintainers aim to fix it, publish a release, note it in
+`CHANGELOG.md`, and — where the impact warrants it — publish a GitHub Security Advisory on the
+repository. Reporters who ask to be credited will be.
 
-- **Process Spawning**: Workers are spawned via Symfony Process with explicit command arrays (no shell execution)
-- **Signal Handling**: Proper SIGTERM and SIGINT handling prevents orphaned processes
-- **Graceful Shutdown**: 10-second timeout for graceful termination before SIGKILL
-- **PID Tracking**: All worker processes tracked to prevent leaks
+## Security-relevant behaviour
 
-### Resource Limits
+These are properties of the code that matter when you threat-model a deployment. Each is stated from
+the implementation, not from intent.
 
-- **CPU/Memory Constraints**: System resource limits enforced via `system-metrics` package
-- **Worker Caps**: Configurable min/max worker limits per queue
-- **Cooldown Periods**: Prevents rapid scaling that could overwhelm system
+### Process spawning
 
-### Configuration Security
+`WorkerSpawner` builds each worker with `Symfony\Component\Process\Process` using an **explicit
+argument array**:
 
-- **No Arbitrary Execution**: Configuration uses class names, not executable strings
-- **Validated Inputs**: All configuration values validated and type-checked
-- **Safe Defaults**: Sensible defaults that prioritize stability
+```php
+new Process([
+    PHP_BINARY,
+    base_path('artisan'),
+    'queue:work',
+    $connection,
+    '--queue='.$queue,
+    '--tries='.AutoscaleConfiguration::workerTries(),
+    '--max-time='.AutoscaleConfiguration::workerTimeoutSeconds(),
+    '--sleep='.AutoscaleConfiguration::workerSleepSeconds(),
+]);
+```
 
-### Known Limitations
+No shell is involved, so queue and connection names are passed as single arguments rather than being
+interpolated into a command line. Queue names still originate from your queue backend by way of the
+metrics package — treat them as data you control, not as attacker-supplied input.
 
-1. **Local Execution Only**: Autoscaler must run on same server as queue workers
-2. **Process Permissions**: Requires permissions to spawn and terminate processes
-3. **Signal Handling**: Relies on OS signal handling (POSIX systems)
-4. **No Sandboxing**: Worker processes run with same permissions as autoscaler
+Exactly three environment variables are injected into a spawned worker:
+`LARAVEL_AUTOSCALE_WORKER`, `AUTOSCALE_MANAGER_ID`, and — for group workers only —
+`AUTOSCALE_WORKER_GROUP`. The worker otherwise inherits the manager's environment, which means it
+inherits the manager's credentials and file permissions.
 
-### Best Practices
+### Configuration is executable by design
 
-When deploying Queue Autoscale for Laravel:
+Several config keys are **class names that the container instantiates**: `strategy`, every entry in
+`policies`, `sla_defaults` and per-queue profiles, `forecast.forecaster`, `forecast.policy`,
+`pickup_time.percentile_calculator`, `fuse.classifier`, and the `'auto'|'redis'|'null'|FQCN` store
+options. Anyone who can write `config/queue-autoscale.php` (or the env file feeding it) can cause
+arbitrary classes to be constructed and invoked inside the manager process.
 
-1. **Run as Non-Root**: Never run autoscaler as root user
-2. **Limit Permissions**: Use dedicated user with minimal permissions
-3. **Monitor Logs**: Regularly review autoscaler logs for anomalies
-4. **Resource Quotas**: Set appropriate worker limits based on system capacity
-5. **Supervisor Configuration**: Use Supervisor or similar for process management
-6. **Secure Metrics**: Ensure `laravel-queue-metrics` package is properly secured
-7. **Network Isolation**: Queue backend (Redis/Database) should be network-isolated
+Treat the config file as code:
 
-### Security Checklist
+```bash
+# Owned by deploy, readable by the runtime user, writable by neither at runtime
+chown root:www-data config/queue-autoscale.php
+chmod 640 config/queue-autoscale.php
+```
 
-- [ ] Autoscaler runs as non-root user
-- [ ] Worker limits configured appropriately
-- [ ] Supervisor manages autoscaler process
-- [ ] Logs reviewed regularly
-- [ ] Queue backend secured and isolated
-- [ ] System metrics package up to date
-- [ ] Custom strategies reviewed for security issues
-- [ ] Policies don't expose sensitive information
+`AutoscaleConfiguration::policyClasses()` filters `policies` to strings that pass `class_exists()`,
+which prevents malformed entries from being resolved — it is not a security boundary.
 
-## Disclosure Policy
+### Resource limits are advisory, not enforced
 
-When we receive a security bug report, we will:
+`limits.max_cpu_percent`, `limits.max_memory_percent`, `limits.worker_memory_mb_estimate` and
+`limits.worker_cpu_core_estimate` feed `CapacityCalculator`, which caps how many **new** workers the
+autoscaler will start. They do not constrain workers that are already running, and they are not
+kernel-enforced limits. If `SystemMetrics::limits()` cannot be read, `CapacityCalculator` falls back
+to a conservative hardcoded result with `limitingFactor: 'system_metrics_unavailable'` rather than
+assuming unlimited capacity.
 
-1. Confirm the problem and determine affected versions
-2. Audit code to find any similar problems
-3. Prepare fixes for all supported versions
-4. Release new security patch versions as quickly as possible
+A scaling policy can return a target above every one of these ceilings, and nothing re-clamps it —
+see [Policy Execution Internals](scaling-policies.md). Review custom policies as carefully as you
+review the config.
 
-## Past Security Advisories
+### Signals and process ownership
 
-None yet. This is the initial release.
+The package requires `ext-pcntl` and `ext-posix`. The manager installs signal handlers for graceful
+shutdown and terminates its workers within `workers.shutdown_timeout_seconds` (default `30`).
+`ManagerProcessLock` holds an exclusive `flock` per host, so a second manager on the same host is
+refused unless started with `--replace`.
 
-## Contact
+Because the manager sends signals to processes it spawned, it needs no elevated privileges beyond
+those of its own user.
 
-- **Security Email**: security@cbox.dk
-- **GPG Key**: Available on request
-- **Response Time**: Within 48 hours
+### Shared state
 
-## Acknowledgments
+In cluster mode, manager heartbeats, leader election, recommendations and the cluster summary are
+stored in your cache/Redis backend. Anything that can write those keys can influence worker targets
+across the cluster. The failure-fuse and pickup-time stores use the same backend. Keep the cache
+backend on a private network with authentication enabled, exactly as you would for the queue itself.
 
-We appreciate security researchers who responsibly disclose vulnerabilities to us. Contributors who report valid security issues will be acknowledged in:
+## Hardening checklist
 
-- Security advisory
-- CHANGELOG.md
-- GitHub security advisory page
+- [ ] Manager runs as a dedicated non-root user
+- [ ] `config/queue-autoscale.php` is not writable by the runtime user
+- [ ] `workers.max` is set explicitly on every queue rather than relying on defaults
+- [ ] `limits.worker_memory_mb_estimate` matches measured worker RSS
+- [ ] Custom strategies and policies are code-reviewed like application code
+- [ ] Redis/cache backend is authenticated and network-isolated
+- [ ] The autoscaler's log channel is retained and monitored
+- [ ] Dependencies kept current — `composer audit` in CI
 
-Thank you for helping keep Queue Autoscale for Laravel secure!
+## See Also
+
+- [Production Deployment Reference](deployment.md) - Supervision, permissions and the runbook
+- [Policy Execution Internals](scaling-policies.md) - Why policies bypass the capacity clamps
+- [Configuration](../basic-usage/configuration.md) - Every key described above

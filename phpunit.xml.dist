@@ -20,6 +20,27 @@
             <directory>tests</directory>
         </testsuite>
     </testsuites>
+    <php>
+        <!--
+            Pinned because many specs use the cache (alert rate limiting, the
+            restart signal, the failure fuse) and there is no cache table in
+            the in-memory test database. Without this the suite inherits
+            whatever CACHE_STORE the testbench skeleton .env carries, which
+            defaults to "database" — and that file appears the first time
+            anyone runs vendor/bin/testbench.
+        -->
+        <!--
+            The suite boots a fresh Testbench application per test and peaks
+            around 135 MB, so it sat just above PHP's 128 MB default and
+            passed or died depending on the random execution order. Declared
+            rather than left to the environment.
+        -->
+        <ini name="memory_limit" value="512M"/>
+        <env name="CACHE_STORE" value="array"/>
+        <!-- Same reason: the skeleton .env sets this to "database", and the
+             test database has no jobs table. -->
+        <env name="QUEUE_CONNECTION" value="sync"/>
+    </php>
     <logging>
         <junit outputFile="build/report.junit.xml"/>
     </logging>

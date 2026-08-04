@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Cache;
  * The snapshot is cached briefly so concurrent scrapes do not all hit the
  * cluster store at once. Single-host mode yields an empty cluster snapshot.
  */
-final readonly class QueueAutoscaleTelemetrySnapshot implements ProvidesTelemetrySnapshot
+readonly class QueueAutoscaleTelemetrySnapshot implements ProvidesTelemetrySnapshot
 {
     public function __construct(private Container $container) {}
 

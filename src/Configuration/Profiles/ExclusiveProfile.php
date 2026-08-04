@@ -21,7 +21,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\DisabledForecastPoli
  * it dies. The SLA/forecast fields are kept so observability still works —
  * they just never drive a scaling decision.
  */
-final readonly class ExclusiveProfile implements ProfileContract
+readonly class ExclusiveProfile implements ProfileContract
 {
     public function resolve(): array
     {
@@ -52,6 +52,15 @@ final readonly class ExclusiveProfile implements ProfileContract
                 'fallback_seconds' => 2.0,
                 'min_samples' => 5,
                 'ema_alpha' => 0.2,
+            ],
+            'fuse' => [
+                // A pinned queue runs exactly one worker by definition, so there
+                // is no scale-up for the fuse to hold back.
+                'enabled' => false,
+                'failure_threshold_percent' => 50.0,
+                'min_samples' => 20,
+                'window_seconds' => 60,
+                'cooldown_seconds' => 60,
             ],
         ];
     }

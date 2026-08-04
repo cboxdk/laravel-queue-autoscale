@@ -9,7 +9,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Illuminate\Support\Facades\Log;
 
-final readonly class PolicyExecutor
+readonly class PolicyExecutor
 {
     /** @var array<int, ScalingPolicy> */
     private array $policies;
@@ -73,11 +73,23 @@ final readonly class PolicyExecutor
     /** @return array<int, ScalingPolicy> */
     private function loadPolicies(): array
     {
-        $policyClasses = AutoscaleConfiguration::policyClasses();
+        $policies = [];
 
-        return array_map(
-            fn (string $class) => app($class),
-            $policyClasses
-        );
+        foreach (AutoscaleConfiguration::policyClasses() as $class) {
+            $policy = app($class);
+
+            if (! $policy instanceof ScalingPolicy) {
+                Log::channel(AutoscaleConfiguration::logChannel())->warning(
+                    'Configured scaling policy does not implement ScalingPolicy and was skipped',
+                    ['policy' => $class]
+                );
+
+                continue;
+            }
+
+            $policies[] = $policy;
+        }
+
+        return $policies;
     }
 }

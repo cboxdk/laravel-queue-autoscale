@@ -1,834 +1,490 @@
 ---
-title: "Scaling Policies"
-description: "Complete guide to implementing and using scaling policies in Queue Autoscale for Laravel"
+title: "Policy Execution Internals"
+description: "How PolicyExecutor resolves, chains and isolates scaling policies, and exactly what the four shipped policies do"
 weight: 31
 ---
 
-# Scaling Policies
+# Policy Execution Internals
 
-Complete guide to implementing and using scaling policies in Queue Autoscale for Laravel.
+This page documents the machinery around `Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy`:
+where policies run in the evaluation pipeline, how they are resolved and chained, what happens when
+one throws, and the exact arithmetic inside the four shipped policies.
 
-## Table of Contents
-- [Overview](#overview)
-- [Policy Contract](#policy-contract)
-- [Implementation Steps](#implementation-steps)
-- [Policy Examples](#policy-examples)
-- [Testing Policies](#testing-policies)
-- [Best Practices](#best-practices)
-- [Common Use Cases](#common-use-cases)
+For the introduction — what a policy is, when to reach for one, and how to write your first
+one — start with [Scaling Policies](../basic-usage/scaling-policies.md).
 
-## Overview
-
-Scaling policies add cross-cutting concerns to the autoscaling process. They execute **before** and **after** scaling decisions, allowing you to:
-- Send notifications (Slack, email, PagerDuty)
-- Log metrics and decisions
-- Enforce resource constraints
-- Implement custom validation
-- Track scaling history
-- Integrate with external systems
-
-### When to Use Policies
-
-Use policies when you need to:
-- **React to scaling events** (notifications, alerts)
-- **Enforce constraints** (budget limits, resource caps)
-- **Collect data** (metrics, analytics, audit trails)
-- **Integrate systems** (monitoring, incident management)
-- **Validate decisions** (compliance, safety checks)
-
-### Policy vs Strategy
-
-**Strategies** calculate **how many workers** are needed.
-**Policies** add **behavior around** scaling decisions.
-
-```
-┌─────────────────────────────────────┐
-│      Scaling Decision Flow          │
-├─────────────────────────────────────┤
-│                                     │
-│  1. Policies: beforeScaling()       │ ← Validate, log, prepare
-│                                     │
-│  2. Strategy: calculateWorkers()    │ ← Core calculation
-│                                     │
-│  3. Policies: afterScaling()        │ ← Notify, record, cleanup
-│                                     │
-└─────────────────────────────────────┘
-```
-
-## Policy Contract
-
-All policies must implement `ScalingPolicyContract`:
+## The contract
 
 ```php
-<?php
-
 namespace Cbox\LaravelQueueAutoscale\Contracts;
 
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
-interface ScalingPolicyContract
+interface ScalingPolicy
 {
-    /**
-     * Execute before scaling decision is made
-     *
-     * @param object $metrics Queue metrics
-     * @param QueueConfiguration $config Queue configuration
-     * @param int $currentWorkers Current worker count
-     * @return void
-     */
-    public function beforeScaling(object $metrics, QueueConfiguration $config, int $currentWorkers): void;
+    public function beforeScaling(ScalingDecision $decision): ?ScalingDecision;
 
-    /**
-     * Execute after scaling decision is made
-     *
-     * @param ScalingDecision $decision The scaling decision
-     * @param QueueConfiguration $config Queue configuration
-     * @param int $currentWorkers Current worker count
-     * @return void
-     */
-    public function afterScaling(ScalingDecision $decision, QueueConfiguration $config, int $currentWorkers): void;
+    public function afterScaling(ScalingDecision $decision): void;
 }
 ```
 
-### Method Responsibilities
+Both hooks receive a `ScalingDecision` and nothing else. There is no metrics object and no
+`QueueConfiguration` in the signature — everything a policy can react to must be reachable from the
+decision itself:
 
-#### `beforeScaling()`
-Called **before** the strategy calculates workers.
+| Property | Type | Notes |
+|---|---|---|
+| `connection` | `string` | |
+| `queue` | `string` | Group decisions carry the group name here |
+| `currentWorkers` | `int` | |
+| `targetWorkers` | `int` | Already clamped by capacity, config bounds and the fuse |
+| `reason` | `string` | Composed by the engine from the strategy and fuse |
+| `predictedPickupTime` | `?float` | `ScalingStrategyContract::getLastPrediction()` |
+| `slaTarget` | `int` | `sla.target_seconds`, default `30` |
+| `capacity` | `?CapacityCalculationResult` | |
+| `spawnCompensation` | `?SpawnCompensationConfiguration` | |
 
-Use for:
-- Logging decision start
-- Validating preconditions
-- Preparing external systems
-- Recording metrics state
+Helper methods: `shouldScaleUp()`, `shouldScaleDown()`, `shouldHold()`, `workersToAdd()`,
+`workersToRemove()`, `action()` (`'scale_up' | 'scale_down' | 'hold'`) and `isSlaBreachRisk()`
+(`predictedPickupTime > slaTarget`).
 
-#### `afterScaling()`
-Called **after** the strategy calculates workers.
+`ScalingDecision` is `readonly`. A policy never mutates a decision — it returns a **new** one, or
+`null` to leave the incoming decision untouched.
 
-Use for:
-- Sending notifications
-- Recording decisions
-- Updating external systems
-- Logging outcomes
+## Where policies run
 
-## Implementation Steps
+Policies run **after** the strategy and the engine, on a finished `ScalingDecision`. They do not
+feed the calculation; they adjust its result.
 
-### Step 1: Create Policy Class
-
-```php
-<?php
-
-namespace App\Autoscale\Policies;
-
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
-use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
-
-class CustomPolicy implements ScalingPolicyContract
-{
-    public function beforeScaling(object $metrics, QueueConfiguration $config, int $currentWorkers): void
-    {
-        // Your before logic here
-    }
-
-    public function afterScaling(ScalingDecision $decision, QueueConfiguration $config, int $currentWorkers): void
-    {
-        // Your after logic here
-    }
-}
+```text
+metrics (QueueMetricsData)
+  └─ ScalingStrategyContract::calculateTargetWorkers()   ← the demand calculation
+       └─ ScalingEngine::evaluate()
+            ├─ min(target, this queue's share of system capacity)
+            ├─ clamp to [workers.min, workers.max]
+            └─ apply failure-fuse ceiling
+                 └─ ScalingDecision
+                      ├─ PolicyExecutor::beforeScaling()  ← policies, chained
+                      ├─ spawn / terminate workers
+                      ├─ PolicyExecutor::afterScaling()
+                      └─ ScalingDecisionMade / SlaBreachPredicted events
 ```
 
-### Step 2: Register Policy
+Two consequences worth internalising:
 
-Add to `config/queue-autoscale.php`:
+- **The anti-flapping cooldown runs before the policies.** `AutoscaleManager::evaluateQueue()`
+  returns early when a decision would reverse direction inside
+  `queue-autoscale.scaling.cooldown_seconds`, so on a suppressed cycle neither hook is called at all.
+- **`ScalingDecisionMade` and `SlaBreachPredicted` carry the post-policy decision.** They are
+  dispatched after `afterScaling()`, so listeners see what a policy actually produced.
+
+## Registration and resolution
+
+Policies are configured as a list of **class strings** in `config/queue-autoscale.php`:
 
 ```php
 'policies' => [
     \Cbox\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy::class,
     \Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy::class,
-
-    // Your custom policies
-    \App\Autoscale\Policies\CustomPolicy::class,
+    \App\Autoscale\Policies\BusinessHoursPolicy::class,
 ],
 ```
 
-### Step 3: Test Policy
+`AutoscaleConfiguration::policyClasses()` maps every entry through
+`is_string($policy) && class_exists($policy)` and drops everything else. That has one sharp edge:
 
 ```php
-use App\Autoscale\Policies\CustomPolicy;
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
+// ❌ Silently ignored — never constructed, never called, no warning is logged.
+'policies' => [
+    new \App\Autoscale\Policies\SlackNotificationPolicy('https://hooks.slack.com/...'),
+    fn (ScalingDecision $decision) => $decision,
+],
+```
 
-it('executes policy hooks', function () {
-    $policy = new CustomPolicy();
+A pre-built **instance**, a closure, or a class string that does not autoload is filtered out
+before `PolicyExecutor` ever sees it. Only class strings work.
 
-    $metrics = (object) ['processingRate' => 10.0];
-    $config = new QueueConfiguration(
-        connection: 'redis',
-        queue: 'default',
-        maxPickupTimeSeconds: 60,
-        minWorkers: 1,
-        maxWorkers: 10,
+Each surviving class string is resolved with `app($class)`, so constructor injection works — that is
+how `NoScaleDownPolicy` receives its `CapacityCalculator`. Pass your own configuration by binding the
+policy in a service provider:
+
+```php
+// AppServiceProvider::register()
+$this->app->bind(\App\Autoscale\Policies\SlackNotificationPolicy::class, function (): object {
+    return new \App\Autoscale\Policies\SlackNotificationPolicy(
+        webhookUrl: config('services.slack.autoscale_webhook'),
+        minWorkerChange: 5,
     );
-
-    // Test before hook
-    $policy->beforeScaling($metrics, $config, 5);
-
-    // Test after hook
-    $decision = new ScalingDecision(
-        targetWorkers: 10,
-        reason: 'Test scaling',
-        confidence: 0.9,
-        predictedPickupTime: 5.0
-    );
-
-    $policy->afterScaling($decision, $config, 5);
-
-    // Assert your expectations
 });
 ```
 
-## Policy Examples
+If a resolved object does not implement `ScalingPolicy` it is skipped and a warning is written to
+`AutoscaleConfiguration::logChannel()` (`queue-autoscale.manager.log_channel`, default `stack`).
 
-### Example 1: Slack Notification Policy
+`PolicyExecutor` is registered as a container **singleton** and loads its policy list once, in its
+constructor. Changing `queue-autoscale.policies` at runtime has no effect until the manager restarts.
 
-Send scaling notifications to Slack:
+## Chaining semantics
+
+`PolicyExecutor::beforeScaling()` threads one decision through every policy in configuration order:
 
 ```php
-<?php
+$currentDecision = $decision;
 
-namespace App\Autoscale\Policies;
+foreach ($this->policies as $policy) {
+    $modifiedDecision = $policy->beforeScaling($currentDecision);
 
-use Illuminate\Support\Facades\Http;
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
+    if ($modifiedDecision !== null) {
+        $currentDecision = $modifiedDecision;
+    }
+}
+
+return $currentDecision;
+```
+
+- Returning `null` means "no opinion" — the chain continues with the decision unchanged.
+- Returning a `ScalingDecision` replaces the working decision for **every later policy** and for the
+  scaling action itself.
+- Order therefore matters. A policy that widens a scale-down placed after one that narrows it wins,
+  which is exactly how `AggressiveScaleDownPolicy` is meant to override
+  `ConservativeScaleDownPolicy`.
+
+`afterScaling()` is different: it is a plain fan-out. Every policy receives the same final decision,
+return values are ignored, and nothing can be changed at that point.
+
+### Rebuilding a decision correctly
+
+The constructor takes named arguments and defaults the last four. Anything you do not copy across is
+silently reset — most commonly `capacity` and `spawnCompensation`, and dropping the latter means the
+spawn path falls back to `QueueConfiguration::fromConfig()` to recover it.
+
+```php
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
-class SlackNotificationPolicy implements ScalingPolicyContract
+final class MinimumDuringBusinessHoursPolicy implements ScalingPolicy
 {
-    public function __construct(
-        private readonly string $webhookUrl,
-        private readonly int $minWorkerChange = 5  // Only notify for significant changes
-    ) {}
+    public function __construct(private readonly int $floor = 5) {}
 
-    public function beforeScaling(object $metrics, QueueConfiguration $config, int $currentWorkers): void
+    public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
     {
-        // No action needed before scaling
-    }
+        $hour = now()->hour;
 
-    public function afterScaling(ScalingDecision $decision, QueueConfiguration $config, int $currentWorkers): void
-    {
-        $workerChange = abs($decision->targetWorkers - $currentWorkers);
-
-        // Only notify for significant changes
-        if ($workerChange < $this->minWorkerChange) {
-            return;
+        if ($hour < 9 || $hour > 17 || $decision->targetWorkers >= $this->floor) {
+            return null;
         }
 
-        $direction = $decision->targetWorkers > $currentWorkers ? '⬆️ SCALE UP' : '⬇️ SCALE DOWN';
-        $color = $decision->targetWorkers > $currentWorkers ? '#36a64f' : '#ff9900';
+        return new ScalingDecision(
+            connection: $decision->connection,
+            queue: $decision->queue,
+            currentWorkers: $decision->currentWorkers,
+            targetWorkers: $this->floor,
+            reason: sprintf(
+                'BusinessHoursPolicy raised target to %d (original: %s)',
+                $this->floor,
+                $decision->reason,
+            ),
+            predictedPickupTime: $decision->predictedPickupTime,
+            slaTarget: $decision->slaTarget,
+            capacity: $decision->capacity,
+            spawnCompensation: $decision->spawnCompensation,
+        );
+    }
 
-        $message = [
-            'attachments' => [
-                [
-                    'color' => $color,
-                    'title' => "{$direction}: {$config->queue} queue",
-                    'fields' => [
-                        [
-                            'title' => 'Worker Change',
-                            'value' => "{$currentWorkers} → {$decision->targetWorkers}",
-                            'short' => true,
-                        ],
-                        [
-                            'title' => 'Pending Jobs',
-                            'value' => $metrics->depth->pending ?? 'N/A',
-                            'short' => true,
-                        ],
-                        [
-                            'title' => 'Reason',
-                            'value' => $decision->reason,
-                            'short' => false,
-                        ],
-                        [
-                            'title' => 'Predicted Pickup Time',
-                            'value' => $decision->predictedPickupTime
-                                ? sprintf('%.1fs', $decision->predictedPickupTime)
-                                : 'N/A',
-                            'short' => true,
-                        ],
-                        [
-                            'title' => 'Confidence',
-                            'value' => sprintf('%.1f%%', $decision->confidence * 100),
-                            'short' => true,
-                        ],
-                    ],
-                    'footer' => 'Queue Autoscale for Laravel',
-                    'ts' => time(),
-                ],
-            ],
-        ];
-
-        Http::post($this->webhookUrl, $message);
+    public function afterScaling(ScalingDecision $decision): void
+    {
+        // No side effects.
     }
 }
 ```
 
-Usage:
+## Error isolation
+
+Both hooks are wrapped per policy:
+
+```php
+try {
+    $modifiedDecision = $policy->beforeScaling($currentDecision);
+    // ...
+} catch (\Throwable $e) {
+    Log::channel(AutoscaleConfiguration::logChannel())->error('Policy beforeScaling failed', [
+        'policy' => get_class($policy),
+        'error' => $e->getMessage(),
+    ]);
+}
+```
+
+A throwing policy is logged and skipped. The chain continues with the last good decision, the
+remaining policies still run, and scaling proceeds. You never need a `try`/`catch` inside a policy to
+protect the autoscaler — add one only when you want a narrower log line or a fallback value.
+
+The corollary: a policy that throws on every cycle is invisible unless you watch the configured log
+channel. `grep 'Policy beforeScaling failed'` (and `afterScaling`) belongs in your log alerting.
+
+## Policies override the safety clamps
+
+The engine clamps to capacity, then to `[workers.min, workers.max]`, then to the fuse ceiling — and
+then hands the decision to the policies. **Nothing re-clamps afterwards.** `scaleUp()` spawns
+`workersToAdd()` processes for whatever target comes back.
+
+So a policy returning `targetWorkers: 500` will spawn towards 500 regardless of `workers.max`, the
+CPU/memory ceiling, and a tripped fuse. If your policy raises a target, clamp it yourself:
+
+```php
+$config = \Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration::fromConfig(
+    $decision->connection,
+    $decision->queue,
+);
+
+$target = min(max($proposed, $config->workers->min), $config->workers->max);
+```
+
+This matters most for the failure fuse. When the fuse is open the engine has already pinned the
+target down to the fuse ceiling and set `$decision->capacity->limitingFactor === 'fuse'`. A policy
+that unconditionally raises the target will scale workers into the downstream outage the fuse was
+protecting you from. Check the limiting factor before overriding:
+
+```php
+if ($decision->capacity?->limitingFactor === 'fuse') {
+    return null; // Leave a fuse-limited decision alone.
+}
+```
+
+### Reading `$decision->capacity`
+
+`CapacityCalculationResult` on a decision reports:
+
+| Field | Meaning |
+|---|---|
+| `maxWorkersByCpu` | Host CPU ceiling from `CapacityCalculator` |
+| `maxWorkersByMemory` | Host memory ceiling from `CapacityCalculator` |
+| `maxWorkersByConfig` | `workers.max` for this queue |
+| `finalMaxWorkers` | The engine's final target — **the same number as `targetWorkers`**, not the raw system maximum |
+| `limitingFactor` | `'config' \| 'strategy' \| 'cpu' \| 'memory' \| 'balanced' \| 'fuse' \| 'system_metrics_unavailable'` |
+| `details` | Raw sample values used for the calculation |
+
+If you need the untouched host ceiling rather than the final target, resolve
+`CapacityCalculator` yourself — see `NoScaleDownPolicy` below.
+
+## The shipped policies
+
+Defaults in `config/queue-autoscale.php` are `ConservativeScaleDownPolicy` followed by
+`BreachNotificationPolicy`.
+
+### ConservativeScaleDownPolicy
+
+Ignores anything that is not a scale-down. For scale-downs it computes
+
+```php
+$maxRemovable = max(1, (int) ceil($decision->currentWorkers * 0.25));
+```
+
+— **25% of the current worker count, with a floor of 1** — and if the decision removes more than
+that, rebuilds it with `targetWorkers: currentWorkers - $maxRemovable`. Otherwise it returns `null`.
+
+Convergence towards an idle target is therefore geometric, not one worker per cycle. Starting from
+40 workers with a strategy target of 0:
+
+```text
+40 → 30 → 22 → 16 → 12 → 9 → 6 → 4 → 3 → 2 → 1 → 0
+```
+
+The tail is where the `max(1, ...)` floor takes over: below 4 workers, 25% rounds up to exactly one
+worker per cycle.
+
+The rebuilt decision copies `predictedPickupTime` and `slaTarget` but **not** `capacity` or
+`spawnCompensation`, so a decision modified by this policy reaches later policies with
+`capacity === null`. Guard with `$decision->capacity?->` when you place a policy after it.
+
+`afterScaling()` does nothing.
+
+### AggressiveScaleDownPolicy
+
+Also scale-down only. It forces the strategy's exact target when both of these hold:
+
+- `predictedPickupTime` is `null` or `0.0` (nothing is waiting), and
+- `targetWorkers <= 1`.
+
+In that case it returns a decision with `targetWorkers` unchanged from the incoming value but a new
+reason — the point being that it **replaces** a target that an earlier `ConservativeScaleDownPolicy`
+narrowed. In every other case it returns `null`, which is what lets a full-size scale-down through
+when Conservative is not in the list.
+
+That is why the class is designed to sit **after** Conservative rather than instead of being its
+peer, and why listing it alone is the normal configuration:
 
 ```php
 'policies' => [
-    new \App\Autoscale\Policies\SlackNotificationPolicy(
-        webhookUrl: config('services.slack.autoscale_webhook'),
-        minWorkerChange: 5
-    ),
+    \Cbox\LaravelQueueAutoscale\Policies\AggressiveScaleDownPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy::class,
 ],
 ```
 
-### Example 2: Metrics Logging Policy
+It copies `capacity` onto the decision it returns. `afterScaling()` does nothing.
 
-Log detailed metrics for analysis:
+### NoScaleDownPolicy
+
+Blocks scale-down by returning a decision with `targetWorkers: $decision->currentWorkers`, with one
+deliberate exception. It receives a `CapacityCalculator` through constructor injection and asks it
+for the host ceiling on every scale-down:
 
 ```php
-<?php
+$capacityResult = $this->capacity->calculateMaxWorkers(
+    $decision->currentWorkers,
+    ResourceEstimate::globalDefault(),
+);
 
-namespace App\Autoscale\Policies;
-
-use Illuminate\Support\Facades\DB;
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
-use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
-
-class MetricsLoggingPolicy implements ScalingPolicyContract
-{
-    public function beforeScaling(object $metrics, QueueConfiguration $config, int $currentWorkers): void
-    {
-        // Log pre-scaling metrics
-        DB::table('autoscale_metrics')->insert([
-            'connection' => $config->connection,
-            'queue' => $config->queue,
-            'event_type' => 'before_scaling',
-            'current_workers' => $currentWorkers,
-            'pending_jobs' => $metrics->depth->pending ?? null,
-            'oldest_job_age' => $metrics->depth->oldestJobAgeSeconds ?? null,
-            'processing_rate' => $metrics->processingRate ?? null,
-            'trend_direction' => $metrics->trend->direction ?? null,
-            'trend_forecast' => $metrics->trend->forecast ?? null,
-            'cpu_percent' => $metrics->resources->cpuPercent ?? null,
-            'memory_percent' => $metrics->resources->memoryPercent ?? null,
-            'recorded_at' => now(),
-        ]);
-    }
-
-    public function afterScaling(ScalingDecision $decision, QueueConfiguration $config, int $currentWorkers): void
-    {
-        // Log scaling decision
-        DB::table('autoscale_decisions')->insert([
-            'connection' => $config->connection,
-            'queue' => $config->queue,
-            'current_workers' => $currentWorkers,
-            'target_workers' => $decision->targetWorkers,
-            'worker_change' => $decision->targetWorkers - $currentWorkers,
-            'reason' => $decision->reason,
-            'confidence' => $decision->confidence,
-            'predicted_pickup_time' => $decision->predictedPickupTime,
-            'max_pickup_time_sla' => $config->maxPickupTimeSeconds,
-            'decision_at' => now(),
-        ]);
-    }
+if ($decision->currentWorkers > $capacityResult->finalMaxWorkers) {
+    return null; // Resource-forced scale-down proceeds.
 }
 ```
 
-Create migration:
+If the host can no longer support the workers that are already running, the scale-down is let
+through to keep the machine stable. Everything else is held.
+
+Note that it evaluates capacity with `ResourceEstimate::globalDefault()` — the global
+`limits.worker_cpu_core_estimate` / `limits.worker_memory_mb_estimate` values — not any per-queue
+`resources` override.
+
+Because `CapacityCalculator` caches system metrics for a few seconds, this adds no measurable cost
+per cycle. It is not registered by default; add the class string to `policies` to enable it.
+
+### BreachNotificationPolicy
+
+`beforeScaling()` always returns `null` — this policy never modifies a decision. All of its work is
+in `afterScaling()`:
+
+- When `$decision->isSlaBreachRisk()` is true it logs `SLA BREACH RISK DETECTED` at **warning**
+  level with connection, queue, predicted pickup time, SLA target, current/target workers and reason.
+- When `predictedPickupTime !== null` and `predictedPickupTime / slaTarget >= 0.90` it logs
+  `High SLA utilization: NN.N%` at **notice** level.
+
+Both are gated through `AlertRateLimiter` on keys `breach_risk:{connection}:{queue}` and
+`high_util:{connection}:{queue}`, using `queue-autoscale.alerting.cooldown_seconds` (default `300`).
+Without that gate a persistent breach would log on every evaluation cycle; with it you get at most
+one line per queue per condition per cooldown window.
+
+Everything goes to `AutoscaleConfiguration::logChannel()`.
+
+To add your own delivery channel, **write a second policy alongside it** rather than extending it —
+inheriting from a shipped class couples you to its internals, and its `AlertRateLimiter` is a
+private promoted property a subclass could not reuse anyway. The reusable piece is
+`AlertRateLimiter` itself: `allow(string $key)` returns `false` while the key is still inside its
+cooldown, backed by an atomic `Cache::lock`, so it is safe across processes and hosts.
 
 ```php
-Schema::create('autoscale_metrics', function (Blueprint $table) {
-    $table->id();
-    $table->string('connection');
-    $table->string('queue');
-    $table->string('event_type');
-    $table->integer('current_workers');
-    $table->integer('pending_jobs')->nullable();
-    $table->float('oldest_job_age')->nullable();
-    $table->float('processing_rate')->nullable();
-    $table->string('trend_direction')->nullable();
-    $table->float('trend_forecast')->nullable();
-    $table->float('cpu_percent')->nullable();
-    $table->float('memory_percent')->nullable();
-    $table->timestamp('recorded_at');
-    $table->index(['connection', 'queue', 'recorded_at']);
-});
-
-Schema::create('autoscale_decisions', function (Blueprint $table) {
-    $table->id();
-    $table->string('connection');
-    $table->string('queue');
-    $table->integer('current_workers');
-    $table->integer('target_workers');
-    $table->integer('worker_change');
-    $table->text('reason');
-    $table->float('confidence');
-    $table->float('predicted_pickup_time')->nullable();
-    $table->integer('max_pickup_time_sla');
-    $table->timestamp('decision_at');
-    $table->index(['connection', 'queue', 'decision_at']);
-});
-```
-
-### Example 3: Budget Enforcement Policy
-
-Prevent cost overruns:
-
-```php
-<?php
-
-namespace App\Autoscale\Policies;
-
-use Illuminate\Support\Facades\Cache;
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
+use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Illuminate\Support\Facades\Http;
 
-class BudgetEnforcementPolicy implements ScalingPolicyContract
+final readonly class SlackBreachNotificationPolicy implements ScalingPolicy
 {
     public function __construct(
-        private readonly float $hourlyBudget = 100.00,
-        private readonly float $workerCostPerHour = 0.50
+        private AlertRateLimiter $limiter = new AlertRateLimiter(cooldownSeconds: 900),
     ) {}
 
-    public function beforeScaling(object $metrics, QueueConfiguration $config, int $currentWorkers): void
+    public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
     {
-        // No validation needed before
+        return null;
     }
 
-    public function afterScaling(ScalingDecision $decision, QueueConfiguration $config, int $currentWorkers): void
+    public function afterScaling(ScalingDecision $decision): void
     {
-        $currentHour = now()->format('Y-m-d-H');
-        $cacheKey = "autoscale:budget:{$currentHour}";
-
-        // Calculate cost for this hour
-        $currentSpend = Cache::get($cacheKey, 0.0);
-        $projectedCost = $decision->targetWorkers * $this->workerCostPerHour;
-
-        if ($currentSpend + $projectedCost > $this->hourlyBudget) {
-            // Reduce workers to fit budget
-            $maxAffordableWorkers = (int) floor(($this->hourlyBudget - $currentSpend) / $this->workerCostPerHour);
-
-            // Update decision (reflection hack for readonly properties)
-            $reflection = new \ReflectionProperty($decision, 'targetWorkers');
-            $reflection->setAccessible(true);
-            $reflection->setValue($decision, max($config->minWorkers, $maxAffordableWorkers));
-
-            $reflection = new \ReflectionProperty($decision, 'reason');
-            $reflection->setAccessible(true);
-            $reflection->setValue(
-                $decision,
-                "Budget constraint: reduced to {$maxAffordableWorkers} workers (original: {$decision->reason})"
-            );
-
-            // Log budget event
-            logger()->warning('Autoscale budget constraint applied', [
-                'queue' => $config->queue,
-                'original_workers' => $decision->targetWorkers,
-                'budget_workers' => $maxAffordableWorkers,
-                'current_spend' => $currentSpend,
-                'budget' => $this->hourlyBudget,
-            ]);
+        if (! $decision->isSlaBreachRisk()) {
+            return;
         }
 
-        // Track spending
-        Cache::put($cacheKey, $currentSpend + $projectedCost, now()->addHours(2));
-    }
-}
-```
-
-### Example 4: PagerDuty Integration
-
-Alert on-call for critical scaling events:
-
-```php
-<?php
-
-namespace App\Autoscale\Policies;
-
-use Illuminate\Support\Facades\Http;
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
-use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
-
-class PagerDutyAlertPolicy implements ScalingPolicyContract
-{
-    public function __construct(
-        private readonly string $integrationKey,
-        private readonly float $slaBreachThreshold = 0.9  // Alert at 90% of SLA
-    ) {}
-
-    public function beforeScaling(object $metrics, QueueConfiguration $config, int $currentWorkers): void
-    {
-        $oldestJobAge = $metrics->depth->oldestJobAgeSeconds ?? 0;
-        $slaLimit = $config->maxPickupTimeSeconds;
-
-        // Check for imminent SLA breach
-        if ($oldestJobAge > ($slaLimit * $this->slaBreachThreshold)) {
-            $this->triggerAlert(
-                severity: 'warning',
-                summary: "Queue SLA breach imminent: {$config->queue}",
-                details: [
-                    'queue' => $config->queue,
-                    'oldest_job_age' => $oldestJobAge,
-                    'sla_limit' => $slaLimit,
-                    'pending_jobs' => $metrics->depth->pending ?? 0,
-                    'current_workers' => $currentWorkers,
-                ]
-            );
+        if (! $this->limiter->allow("slack:breach:{$decision->connection}:{$decision->queue}")) {
+            return;
         }
-    }
 
-    public function afterScaling(ScalingDecision $decision, QueueConfiguration $config, int $currentWorkers): void
-    {
-        // Alert if we hit max workers (capacity limit)
-        if ($decision->targetWorkers >= $config->workers->max) {
-            $this->triggerAlert(
-                severity: 'error',
-                summary: "Queue at maximum capacity: {$config->queue}",
-                details: [
-                    'queue' => $config->queue,
-                    'workers_max' => $config->workers->max,
-                    'current_workers' => $currentWorkers,
-                    'reason' => $decision->reason,
-                ]
-            );
-        }
-    }
-
-    private function triggerAlert(string $severity, string $summary, array $details): void
-    {
-        Http::post('https://events.pagerduty.com/v2/enqueue', [
-            'routing_key' => $this->integrationKey,
-            'event_action' => 'trigger',
-            'payload' => [
-                'summary' => $summary,
-                'severity' => $severity,
-                'source' => 'laravel-queue-autoscale',
-                'custom_details' => $details,
-            ],
+        Http::timeout(5)->post(config('services.slack.autoscale_webhook'), [
+            'text' => sprintf(
+                '%s:%s predicted pickup %.1fs exceeds SLA %ds',
+                $decision->connection,
+                $decision->queue,
+                $decision->predictedPickupTime ?? 0.0,
+                $decision->slaTarget,
+            ),
         ]);
     }
 }
 ```
 
-### Example 5: Cooldown Tracking Policy
-
-Track and enforce cooldown periods:
-
 ```php
-<?php
-
-namespace App\Autoscale\Policies;
-
-use Illuminate\Support\Facades\Cache;
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicyContract;
-use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
-
-class CooldownTrackingPolicy implements ScalingPolicyContract
-{
-    public function beforeScaling(object $metrics, QueueConfiguration $config, int $currentWorkers): void
-    {
-        $cacheKey = "autoscale:cooldown:{$config->connection}:{$config->queue}";
-        $lastScaleTime = Cache::get($cacheKey);
-
-        if ($lastScaleTime && now()->timestamp - $lastScaleTime < $config->scaleCooldownSeconds) {
-            $remainingCooldown = $config->scaleCooldownSeconds - (now()->timestamp - $lastScaleTime);
-
-            logger()->info('Scaling suppressed by cooldown', [
-                'queue' => $config->queue,
-                'remaining_seconds' => $remainingCooldown,
-            ]);
-        }
-    }
-
-    public function afterScaling(ScalingDecision $decision, QueueConfiguration $config, int $currentWorkers): void
-    {
-        // Only update cooldown if workers actually changed
-        if ($decision->targetWorkers !== $currentWorkers) {
-            $cacheKey = "autoscale:cooldown:{$config->connection}:{$config->queue}";
-            Cache::put($cacheKey, now()->timestamp, $config->scaleCooldownSeconds);
-
-            logger()->info('Cooldown period started', [
-                'queue' => $config->queue,
-                'duration_seconds' => $config->scaleCooldownSeconds,
-                'worker_change' => $decision->targetWorkers - $currentWorkers,
-            ]);
-        }
-    }
-}
+'policies' => [
+    \Cbox\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy::class,
+    \Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy::class,
+    \App\Autoscale\Policies\SlackBreachNotificationPolicy::class,
+],
 ```
 
-## Testing Policies
+Both policies then run in `afterScaling()`, each with its own cooldown. Alternatively, skip the
+policy layer entirely and listen for `SlaBreachPredicted` — see
+[Event Handling](../basic-usage/event-handling.md).
 
-### Unit Tests
+## Testing a policy
 
-Test policy behavior in isolation:
+Policies are plain objects over a readonly DTO, so they unit-test without the container:
 
 ```php
-use App\Autoscale\Policies\SlackNotificationPolicy;
-use Illuminate\Support\Facades\Http;
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use App\Autoscale\Policies\MinimumDuringBusinessHoursPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
-describe('SlackNotificationPolicy', function () {
-    beforeEach(function () {
-        Http::fake();
+it('raises a low target during business hours', function (): void {
+    $this->travelTo(now()->setTime(10, 0));
 
-        $this->policy = new SlackNotificationPolicy(
-            webhookUrl: 'https://hooks.slack.com/test',
-            minWorkerChange: 5
-        );
-
-        $this->config = new QueueConfiguration(
-            connection: 'redis',
-            queue: 'default',
-            maxPickupTimeSeconds: 60,
-            minWorkers: 1,
-            maxWorkers: 20,
-        );
-    });
-
-    it('sends notification for significant worker increase', function () {
-        $decision = new ScalingDecision(
-            targetWorkers: 15,
-            reason: 'High load detected',
-            confidence: 0.9,
-            predictedPickupTime: 30.0
-        );
-
-        $metrics = (object) [
-            'depth' => (object) ['pending' => 100],
-        ];
-
-        $this->policy->afterScaling($decision, $this->config, 5);
-
-        Http::assertSent(function ($request) {
-            return $request->url() === 'https://hooks.slack.com/test'
-                && str_contains($request['attachments'][0]['title'], 'SCALE UP');
-        });
-    });
-
-    it('does not send notification for small changes', function () {
-        $decision = new ScalingDecision(
-            targetWorkers: 7,
-            reason: 'Minor adjustment',
-            confidence: 0.8,
-            predictedPickupTime: 45.0
-        );
-
-        $metrics = (object) ['depth' => (object) ['pending' => 10]];
-
-        $this->policy->afterScaling($decision, $this->config, 5);
-
-        Http::assertNothingSent();
-    });
-});
-```
-
-### Integration Tests
-
-Test policy interaction with scaling engine:
-
-```php
-use App\Autoscale\Policies\MetricsLoggingPolicy;
-use Illuminate\Support\Facades\DB;
-use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
-
-it('logs metrics during scaling evaluation', function () {
-    DB::shouldReceive('table->insert')->twice();  // before + after
-
-    $policy = new MetricsLoggingPolicy();
-
-    // Register policy with engine
-    $engine = app(ScalingEngine::class);
-    // ... configure engine with policy
-
-    $metrics = (object) [
-        'processingRate' => 10.0,
-        'activeWorkerCount' => 5,
-        'depth' => (object) ['pending' => 100, 'oldestJobAgeSeconds' => 5],
-    ];
-
-    $config = new QueueConfiguration(
+    $decision = new ScalingDecision(
         connection: 'redis',
         queue: 'default',
-        maxPickupTimeSeconds: 60,
-        minWorkers: 1,
-        maxWorkers: 20,
+        currentWorkers: 2,
+        targetWorkers: 2,
+        reason: 'steady state',
+        predictedPickupTime: 4.0,
+        slaTarget: 30,
     );
 
-    $engine->evaluate($metrics, $config, 5);
+    $result = (new MinimumDuringBusinessHoursPolicy(floor: 5))->beforeScaling($decision);
 
-    // Both before and after should have been logged
+    expect($result)->not->toBeNull()
+        ->and($result->targetWorkers)->toBe(5)
+        ->and($result->reason)->toContain('BusinessHoursPolicy');
 });
 ```
 
-## Best Practices
-
-### 1. Keep Policies Focused
-
-Each policy should have a single responsibility:
+To exercise the chain, resolve the executor after setting the config:
 
 ```php
-// ✅ Good: Single responsibility
-class SlackNotificationPolicy implements ScalingPolicyContract { }
-class MetricsLoggingPolicy implements ScalingPolicyContract { }
+use Cbox\LaravelQueueAutoscale\Policies\ConservativeScaleDownPolicy;
+use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
-// ❌ Bad: Multiple responsibilities
-class NotificationAndLoggingPolicy implements ScalingPolicyContract { }
+it('limits scale-down to 25 percent of current workers', function (): void {
+    config()->set('queue-autoscale.policies', [ConservativeScaleDownPolicy::class]);
+
+    $decision = new ScalingDecision(
+        connection: 'redis',
+        queue: 'default',
+        currentWorkers: 40,
+        targetWorkers: 4,
+        reason: 'queue drained',
+    );
+
+    $final = app(PolicyExecutor::class)->beforeScaling($decision);
+
+    expect($final->targetWorkers)->toBe(30);
+});
 ```
 
-### 2. Handle Failures Gracefully
-
-Don't let policy failures break scaling:
-
-```php
-public function afterScaling(ScalingDecision $decision, QueueConfiguration $config, int $currentWorkers): void
-{
-    try {
-        Http::timeout(5)->post($this->webhookUrl, $this->buildMessage($decision));
-    } catch (\Exception $e) {
-        // Log but don't throw - don't break scaling
-        logger()->error('Slack notification failed', [
-            'error' => $e->getMessage(),
-            'queue' => $config->queue,
-        ]);
-    }
-}
-```
-
-### 3. Use Dependency Injection
-
-Make policies testable:
-
-```php
-public function __construct(
-    private readonly HttpClient $http,
-    private readonly Logger $logger
-) {}
-
-// Test with mocks
-$policy = new SlackNotificationPolicy(
-    http: $mockHttp,
-    logger: $mockLogger
-);
-```
-
-### 4. Respect Performance
-
-Policies execute on every evaluation - keep them fast:
-
-```php
-// ✅ Good: Fast, async
-Http::async()->post($url, $data);
-
-// ❌ Bad: Slow, synchronous
-sleep(5);
-Http::retry(3, 10000)->post($url, $data);
-```
-
-### 5. Make Policies Configurable
-
-Use constructor parameters:
-
-```php
-public function __construct(
-    private readonly int $minWorkerChange = 5,
-    private readonly array $notifyChannels = ['slack', 'email'],
-    private readonly bool $enableDebugLogging = false
-) {}
-```
-
-## Common Use Cases
-
-### Use Case 1: Multi-Channel Notifications
-
-Notify different channels based on severity:
-
-```php
-class MultiChannelNotificationPolicy implements ScalingPolicyContract
-{
-    public function afterScaling(ScalingDecision $decision, QueueConfiguration $config, int $currentWorkers): void
-    {
-        $workerChange = abs($decision->targetWorkers - $currentWorkers);
-
-        if ($workerChange >= 20) {
-            // Critical: PagerDuty + Slack + Email
-            $this->pagerDuty->alert(...);
-            $this->slack->notify(...);
-            $this->email->send(...);
-        } elseif ($workerChange >= 10) {
-            // Warning: Slack + Email
-            $this->slack->notify(...);
-            $this->email->send(...);
-        } elseif ($workerChange >= 5) {
-            // Info: Slack only
-            $this->slack->notify(...);
-        }
-    }
-}
-```
-
-### Use Case 2: Audit Trail
-
-Maintain compliance audit trail:
-
-```php
-class AuditTrailPolicy implements ScalingPolicyContract
-{
-    public function afterScaling(ScalingDecision $decision, QueueConfiguration $config, int $currentWorkers): void
-    {
-        DB::table('autoscale_audit_log')->insert([
-            'user_id' => auth()->id() ?? null,
-            'action' => 'scaling_decision',
-            'queue' => $config->queue,
-            'before_workers' => $currentWorkers,
-            'after_workers' => $decision->targetWorkers,
-            'reason' => $decision->reason,
-            'decision_data' => json_encode($decision),
-            'ip_address' => request()->ip(),
-            'user_agent' => request()->userAgent(),
-            'created_at' => now(),
-        ]);
-    }
-}
-```
-
-### Use Case 3: External Metrics Integration
-
-Send to Datadog, Prometheus, etc:
-
-```php
-class DatadogMetricsPolicy implements ScalingPolicyContract
-{
-    public function afterScaling(ScalingDecision $decision, QueueConfiguration $config, int $currentWorkers): void
-    {
-        $this->datadog->gauge('queue.autoscale.workers', $decision->targetWorkers, [
-            'queue' => $config->queue,
-            'connection' => $config->connection,
-        ]);
-
-        $this->datadog->gauge('queue.autoscale.predicted_pickup_time', $decision->predictedPickupTime ?? 0, [
-            'queue' => $config->queue,
-        ]);
-
-        $this->datadog->increment('queue.autoscale.decisions', 1, [
-            'queue' => $config->queue,
-            'direction' => $decision->targetWorkers > $currentWorkers ? 'up' : 'down',
-        ]);
-    }
-}
-```
+`PolicyExecutor` is a singleton that reads the policy list in its constructor, so set the config
+**before** the first `app(PolicyExecutor::class)` call in the test (or call
+`app()->forgetInstance(PolicyExecutor::class)`).
 
 ## See Also
 
-- [Custom Strategies](custom-strategies.md) - Implementing custom strategies
-- [Event Handling](../basic-usage/event-handling.md) - Using Laravel events
-- [Monitoring](../basic-usage/monitoring.md) - Monitoring and observability
-- [API Reference](../api-reference/_index.md) - Complete API documentation
+- [Scaling Policies](../basic-usage/scaling-policies.md) - Introduction and the shipped policy catalogue
+- [Custom Strategies](custom-strategies.md) - The other extension point, running before the engine
+- [Failure Fuse](../basic-usage/failure-fuse.md) - What the fuse ceiling protects
+- [Event Handling](../basic-usage/event-handling.md) - Reacting to decisions without a policy
+- [Architecture](../algorithms/architecture.md) - The full evaluation pipeline

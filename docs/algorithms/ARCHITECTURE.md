@@ -1,56 +1,95 @@
 ---
 title: "Architecture"
-description: "Deep dive into the Queue Autoscale for Laravel architecture, scaling algorithm, and design decisions"
+description: "Deep dive into the scaling pipeline: signals, the two-calculation hybrid, capacity, the fuse, policies and worker lifecycle"
 weight: 50
 ---
 
 # Architecture
 
-This document provides a deep dive into the Queue Autoscale for Laravel architecture, scaling algorithm, and design decisions.
+A walk through what actually happens between "metrics arrived" and "a worker process started",
+with the real formulas from `src/`.
 
 ## Table of Contents
 
 - [Overview](#overview)
-- [Theoretical Foundation](#theoretical-foundation)
-- [Hybrid Algorithm](#hybrid-algorithm)
-- [System Architecture](#system-architecture)
-- [Data Flow](#data-flow)
-- [Scaling Decision Process](#scaling-decision-process)
-- [Resource Management](#resource-management)
-- [Extension Points](#extension-points)
-- [Performance Considerations](#performance-considerations)
+- [Package boundary](#package-boundary)
+- [Theoretical foundation](#theoretical-foundation)
+- [The hybrid strategy](#the-hybrid-strategy)
+- [Input signals](#input-signals)
+- [Decision pipeline](#decision-pipeline)
+- [Component map](#component-map)
+- [Resource capacity](#resource-capacity)
+- [The failure fuse](#the-failure-fuse)
+- [Anti-flapping cooldown](#anti-flapping-cooldown)
+- [Worker lifecycle](#worker-lifecycle)
+- [Extension points](#extension-points)
+- [Performance considerations](#performance-considerations)
+- [Design decisions](#design-decisions)
 
 ## Overview
 
-Queue Autoscale for Laravel uses a **hybrid predictive algorithm** that combines three complementary approaches:
+The default strategy, `HybridStrategy`, combines **two** worker calculations:
 
-1. **Rate-Based Scaling** (Little's Law) - Steady-state calculation
-2. **Trend-Based Scaling** (Predictive) - Proactive forecasting
-3. **Backlog-Based Scaling** (SLA Protection) - Breach prevention
+1. **Rate-based** — Little's Law over the estimated arrival rate (`LittlesLawCalculator`)
+2. **Backlog-based** — SLA breach prevention with a progressive aggressiveness multiplier
+   (`BacklogDrainCalculator`)
 
-The system takes the **maximum** of all three calculations to ensure SLA compliance while being resource-aware.
-
-## Theoretical Foundation
-
-### Little's Law (L = λW)
-
-The foundation of our rate-based scaling is **Little's Law**, a fundamental theorem in queueing theory:
-
-```
-L = λ × W
-
-Where:
-- L = Average number of items in system (workers needed)
-- λ = Arrival rate (jobs/second)
-- W = Average time in system (seconds/job)
+```php
+$targetWorkers = max($steadyStateWorkers, $backlogDrainWorkers);
 ```
 
-**Why Little's Law?**
-- Mathematically proven relationship between queue length, arrival rate, and processing time
-- Works for any stable queueing system regardless of arrival distribution
-- Provides theoretical minimum workers needed for steady-state operation
+Forecasting is not a third term. It feeds the arrival rate that goes into term 1 — see
+[Trend Prediction](trend-prediction.md).
 
-**Our Implementation:**
+Everything else in the pipeline is a **constraint on** that target: system capacity, config bounds,
+the failure fuse, and finally the scaling policies.
+
+## Package boundary
+
+```text
+┌────────────────────────────────────────────────────────────┐
+│        laravel-queue-metrics (dependency)                  │
+│                                                            │
+│  • Scans queue connections (redis, database, sqs)          │
+│  • Discovers active queues                                 │
+│  • Collects depth, age, throughput, duration, failures     │
+│  • Returns Collection<QueueMetricsData>                    │
+└──────────────────────────┬─────────────────────────────────┘
+                           │
+                           ▼
+┌────────────────────────────────────────────────────────────┐
+│        laravel-queue-autoscale (this package)              │
+│                                                            │
+│  • Estimates arrival rate and forecasts it                 │
+│  • Runs the two scaling calculations                       │
+│  • Applies capacity, config, fuse and policy constraints   │
+│  • Spawns and terminates queue:work processes              │
+│  • Emits events and telemetry                              │
+│                                                            │
+│  DOES NOT: scan connections, discover queues, or collect   │
+│  queue metrics                                             │
+└────────────────────────────────────────────────────────────┘
+```
+
+`QueueMetricsData` carries `connection`, `queue`, `depth`, `pending`, `scheduled`, `reserved`,
+`oldestJobAge`, `ageStatus`, `throughputPerMinute`, `avgDuration`, `failureRate`,
+`utilizationRate`, `activeWorkers`, `driver`, `health` and `calculatedAt`. There is no `trend`
+object and no `depth->pending` nesting — the fields are flat.
+
+`AutoscaleManager::mapMetricsFields()` converts `avgDuration` from milliseconds to **seconds**
+before the DTO reaches the strategy.
+
+## Theoretical foundation
+
+### Little's Law (L = lambda W)
+
+```text
+L = lambda x W
+
+L      = jobs in service at any instant = workers required
+lambda = arrival rate (jobs/second)
+W      = time one job occupies one worker (seconds)
+```
 
 ```php
 public function calculate(float $arrivalRate, float $avgProcessingTime): float
@@ -63,710 +102,450 @@ public function calculate(float $arrivalRate, float $avgProcessingTime): float
 }
 ```
 
-**Example:**
-- Processing rate: 10 jobs/sec
-- Average job time: 2 seconds
-- Workers needed: 10 × 2 = 20 workers
+Full derivation and worked examples: [Little's Law](littles-law.md).
 
-### SLA/SLO-Based Approach
+### SLA-based targets
 
-Instead of targeting worker counts, we target **service level objectives**:
+The configured objective is a pickup-time SLA (`sla.target_seconds`), not a worker count. Worker
+counts are derived; the SLA is the thing an operator states and an alert can be written against.
 
-```
-SLA: Jobs must be picked up within sla.target_seconds
-```
+## The hybrid strategy
 
-This transforms the scaling problem from:
-- ❌ "How many workers should we have?" (infrastructure-focused)
-- ✅ "How can we meet our SLA?" (business-focused)
+`HybridStrategy::calculateTargetWorkers()`, in execution order:
 
-**Benefits:**
-- Business-aligned metrics instead of technical ones
-- Easier to reason about and communicate
-- Natural scaling boundaries (SLA compliance vs violation)
-- Predictable system behavior
-
-## Hybrid Algorithm
-
-### Algorithm Overview
-
-```
-target_workers = max(
-    steady_state_workers,    // Little's Law with current rate
-    predictive_workers,      // Little's Law with predicted rate
-    backlog_drain_workers    // SLA breach prevention
-)
-
-final_workers = constrain(
-    target_workers,
-    min: config.workers.min,
-    max: min(config.workers.max, system_capacity)
-)
+```text
+ 1. processingRate = metrics.throughputPerMinute / 60
+ 2. avgJobTime     = determineJobTime(metrics)
+ 3. configure the forecaster from this queue's forecast config
+ 4. arrivalRate    = ArrivalRateEstimator::estimate(...) behind a confidence gate
+ 5. if arrivalRate == 0: estimateFallbackArrivalRate(...)
+ 6. subtract retry noise when failureRate > 5%
+ 7. effectiveSla   = max(1.0, sla.target_seconds - spawnLatency)
+ 8. slaSignal      = p95 pickup time, else metrics.oldestJobAge
+ 9. steadyState    = littles.calculate(arrivalRate, avgJobTime)
+10. backlogDrain   = backlog.calculateRequiredWorkers(pending, (int) slaSignal,
+                         sla.target_seconds, avgJobTime, breachThreshold, effectiveSla)
+11. target         = max(steadyState, backlogDrain)
+12. saturation boost
+13. target         = max(workers.min, min(workers.max, ceil(target)))
+14. target         = TargetSmoother::smooth(queueKey, target, throughputPerMinute), re-clamped
 ```
 
-### 1. Rate-Based Scaling (Steady State)
+### Backlog drain, in full
 
-**Purpose:** Calculate workers needed for current load.
+```text
+if backlog == 0 or avgJobTime <= 0:            return 0.0
 
-**Algorithm:**
-```
-steady_state_workers = processing_rate × avg_job_time
-```
+effectiveSla = effectiveSlaSeconds ?? slaTarget
 
-**When it dominates:**
-- Stable workload with no trend
-- Normal operating conditions
-- Queue is near equilibrium
+if oldestJobAge == 0 and backlog > 0:          # age signal unavailable
+    jobsPerWorker = max(effectiveSla / avgJobTime, 1.0)
+    return backlog / jobsPerWorker             # no multiplier on this path
 
-**Example:**
-```
-Processing rate: 5 jobs/sec
-Avg job time: 2 sec
-Workers: 5 × 2 = 10 workers
-```
+slaProgress = min(oldestJobAge / effectiveSla, 1.5)
+if slaProgress < breachThreshold:              return 0.0
 
-### 2. Trend-Based Scaling (Predictive)
+timeUntilBreach = effectiveSla - oldestJobAge
+baseWorkers = timeUntilBreach > 0
+    ? backlog / max(timeUntilBreach / avgJobTime, 1.0)
+    : backlog / max(avgJobTime, 0.1)
 
-**Purpose:** Scale proactively based on predicted demand.
-
-**Algorithm:**
-```
-predicted_rate = current_rate × trend_adjustment
-
-Where trend_adjustment:
-- trend='up' with forecast: use forecast directly
-- trend='up' without forecast: multiply by 1.2 (20% increase)
-- trend='down': multiply by 0.8 (20% decrease)
-- trend='stable' or null: use current rate (no adjustment)
-
-predictive_workers = predicted_rate × avg_job_time
+multiplier = min(1.0 + 8.0 * (slaProgress - 0.5)^2, 5.0)
+return baseWorkers * multiplier
 ```
 
-**When it dominates:**
-- Upward trending workload
-- Predictable traffic patterns (time of day, day of week)
-- Before load spikes occur
+`breachThreshold` is `scaling.breach_threshold`, **default 0.5** (50% of the SLA window).
 
-**Example:**
-```
-Current rate: 10 jobs/sec
-Trend: up, forecast: 15 jobs/sec
-Avg job time: 2 sec
-Workers: 15 × 2 = 30 workers (vs 20 for steady state)
-```
+The **progressive aggressiveness multiplier** is the most consequential part of this calculation and
+is easy to miss:
 
-**Benefit:** Scales up *before* queue depth increases, preventing SLA violations.
+| SLA progress | Multiplier |
+|---|---|
+| 50% (threshold) | 1.00x |
+| 70% | 1.32x |
+| 80% | 1.72x |
+| 100% (at SLA) | 3.00x |
+| 120% | 4.92x |
+| ~121% and beyond | 5.00x (cap) |
 
-### 3. Backlog-Based Scaling (SLA Protection)
+There is no branch that jumps to `workers.max` on breach, and no `ceil(maxWorkers * 0.8)` fallback.
+Full derivation: [Backlog Drain](backlog-drain.md).
 
-**Purpose:** Aggressively prevent SLA breaches when backlog exists.
-
-**Algorithm:**
-```
-time_until_breach = sla_target - oldest_job_age
-action_threshold = sla_target × breach_threshold (default 0.8)
-
-if oldest_job_age < action_threshold:
-    return 0  // No urgent action
-
-if time_until_breach <= 0:
-    // Already breached - aggressive scaling
-    return ceil(backlog / max(avg_job_time, 0.1))
-
-// Calculate workers to drain backlog before breach
-jobs_per_worker = max(time_until_breach / avg_job_time, 1.0)
-return backlog / jobs_per_worker
-```
-
-**When it dominates:**
-- Backlog exists and oldest job approaching SLA
-- Recovery from downtime or scaling lag
-- Burst traffic exceeding predictions
-
-**Example 1: Approaching Breach**
-```
-SLA target: 30 sec
-Oldest job: 25 sec (exceeds 80% threshold of 24 sec)
-Time until breach: 5 sec
-Backlog: 100 jobs
-Avg job time: 2 sec
-Jobs per worker: 5 / 2 = 2.5 jobs
-Workers: 100 / 2.5 = 40 workers (aggressively scales)
-```
-
-**Example 2: Already Breached**
-```
-SLA target: 30 sec
-Oldest job: 35 sec (breached!)
-Backlog: 100 jobs
-Avg job time: 2 sec
-Workers: ceil(100 / 2) = 50 workers (maximum aggression)
-```
-
-**Protection:** Prevents cascade failures where SLA breach → more backlog → worse breach.
-
-### Why Maximum?
-
-We take the **maximum** of all three approaches:
+### Saturation boost
 
 ```php
-$targetWorkers = max(
-    $steadyStateWorkers,
-    $predictiveWorkers,
-    $backlogDrainWorkers,
-);
-```
-
-**Reasoning:**
-- **Conservative approach** - Better to slightly over-scale than violate SLA
-- **Covers different scenarios** - Each calculator handles specific conditions
-- **Graceful degradation** - If one approach fails/misses, others provide backup
-- **SLA compliance prioritized** - Backlog drain ensures we never breach
-
-**Trade-off:** May occasionally over-scale, but:
-- Resource constraints prevent waste
-- Cooldown periods prevent thrashing
-- Extra capacity quickly absorbed by variability in job processing
-
-## System Architecture
-
-### Component Diagram
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    AutoscaleManager                         │
-│  ┌───────────────────────────────────────────────────┐     │
-│  │ Main Control Loop (every 5 seconds)               │     │
-│  │ 1. Get all queues from laravel-queue-metrics      │     │
-│  │ 2. For each queue: evaluate & scale               │     │
-│  │ 3. Cleanup dead workers                           │     │
-│  │ 4. Check for SIGTERM/SIGINT                      │     │
-│  └───────────────────────────────────────────────────┘     │
-└──────────────────┬──────────────────────────────────────────┘
-                   │
-         ┌─────────┴──────────┐
-         │                    │
-    ┌────▼─────┐         ┌────▼────────┐
-    │ Scaling  │         │   Worker    │
-    │  Engine  │         │ Management  │
-    └────┬─────┘         └────┬────────┘
-         │                    │
-    ┌────▼──────────────┐     │
-    │ ScalingStrategy   │     │
-    │ (PredictiveStrat) │     │
-    └────┬──────────────┘     │
-         │                    │
-    ┌────▼──────────────┐     │
-    │ Calculators:      │     │
-    │ • LittlesLaw      │     │
-    │ • ArrivalRate     │     │
-    │ • BacklogDrain    │     │
-    │ • Capacity        │     │
-    └───────────────────┘     │
-                              │
-                  ┌───────────▼────────────┐
-                  │ Worker Components:     │
-                  │ • WorkerSpawner        │
-                  │ • WorkerTerminator     │
-                  │ • WorkerPool           │
-                  │ • WorkerProcess        │
-                  └────────────────────────┘
-```
-
-### Class Responsibilities
-
-#### AutoscaleManager
-- Main daemon process
-- Coordinates entire scaling lifecycle
-- Manages control loop timing
-- Handles signals (SIGTERM/SIGINT)
-- Orchestrates worker pool
-
-#### ScalingEngine
-- Evaluates scaling decisions
-- Applies constraints (capacity, config)
-- Creates ScalingDecision DTOs
-- Delegates to strategy
-
-#### HybridStrategy
-- Implements the hybrid algorithm (v2 default)
-- Calls Little's Law, arrival-rate forecasting, and backlog-drain calculators
-- Takes the maximum of their results
-- Provides human-readable reasons
-- Estimates pickup time predictions
-
-#### Calculators
-- **LittlesLawCalculator:** Pure L = λW implementation
-- **ArrivalRateEstimator:** Sliding window arrival rate estimation from backlog changes
-- **BacklogDrainCalculator:** SLA breach prevention math
-- **CapacityCalculator:** System resource limits
-
-#### Worker Management
-- **WorkerSpawner:** Creates queue:work processes
-- **WorkerTerminator:** Graceful SIGTERM → SIGKILL shutdown
-- **WorkerPool:** Tracks running workers
-- **WorkerProcess:** Wraps Symfony Process with metadata
-
-## Data Flow
-
-### Package Boundary and Data Flow
-
-```
-┌────────────────────────────────────────────────────────────┐
-│        laravel-queue-metrics (Dependency Package)          │
-│                                                             │
-│  • Scans all queue connections (redis, database, sqs)      │
-│  • Discovers active queues automatically                   │
-│  • Collects queue depth and age metrics                    │
-│  • Calculates processing rates                             │
-│  • Analyzes trends and creates forecasts                   │
-│  • Aggregates all data into QueueMetricsData objects       │
-│                                                             │
-│  Public API:                                                │
-│  QueueMetrics::getAllQueuesWithMetrics()                   │
-│         ↓                                                   │
-└─────────┼──────────────────────────────────────────────────┘
-          │
-          │ Returns: Collection<QueueMetricsData>
-          │
-          ↓
-┌─────────┴──────────────────────────────────────────────────┐
-│      laravel-queue-autoscale (This Package)                │
-│                                                             │
-│  • Receives pre-calculated metrics from facade             │
-│  • Applies scaling algorithms (Little's Law, Trend,        │
-│    Backlog Drain)                                          │
-│  • Makes SLA-based scaling decisions                       │
-│  • Manages worker pool lifecycle (spawn/terminate)         │
-│  • Enforces resource constraints (CPU/memory limits)       │
-│  • Executes scaling policies and broadcasts events         │
-│                                                             │
-│  DOES NOT:                                                  │
-│  ✗ Scan queue connections                                  │
-│  ✗ Discover queues                                         │
-│  ✗ Collect queue metrics                                   │
-│  ✗ Calculate processing rates or trends                    │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Key Principle: Single Responsibility**
-- **laravel-queue-metrics**: Queue discovery and metrics collection
-- **laravel-queue-autoscale**: Scaling decisions and worker management
-
-### 1. Metrics Collection (External Package)
-
-```
-laravel-queue-metrics (external package)
-    ↓
-QueueMetrics::getAllQueuesWithMetrics()
-    ↓
-Returns: Collection<QueueMetricsData>
-    {
-        connection: 'redis',
-        queue: 'default',
-        processingRate: 10.5,  // jobs/sec (pre-calculated)
-        activeWorkerCount: 20,
-        depth: {
-            pending: 150,
-            oldestJobAgeSeconds: 25,
-        },
-        trend: {
-            direction: 'up',
-            forecast: 15.0,  // (pre-calculated)
-        },
+if ($activeWorkers > 0 && $utilizationRate > 0) {
+    if ($utilizationRate >= 90.0 && $targetWorkers <= $activeWorkers) {
+        $targetWorkers = $activeWorkers + 1;
     }
-```
-
-### 2. Scaling Evaluation
-
-```
-AutoscaleManager
-    ↓
-For each queue metrics:
-    ↓
-ScalingEngine::evaluate(metrics, config, currentWorkers)
-    ↓
-HybridStrategy::calculateTargetWorkers(metrics, config)
-    ↓
-┌──────────────────────────────┐
-│ Run 3 Calculators:           │
-│ 1. LittlesLaw(rate, time)    │
-│ 2. TrendPolicy(rate, policy) │
-│ 3. BacklogDrain(backlog,sla) │
-└──────────────────────────────┘
-    ↓
-Take max(steady, predictive, backlog)
-    ↓
-Apply capacity constraints from system-metrics
-    ↓
-Apply config bounds (min/max workers)
-    ↓
-Return ScalingDecision
-```
-
-### 3. Scaling Execution
-
-```
-ScalingDecision
-    ↓
-If shouldScaleUp():
-    workers_to_add = targetWorkers - currentWorkers
-    ↓
-    WorkerSpawner::spawn(connection, queue, workers_to_add)
-    ↓
-    WorkerPool::addMany(newWorkers)
-    ↓
-    Broadcast WorkersScaled event
-
-If shouldScaleDown():
-    workers_to_remove = currentWorkers - targetWorkers
-    ↓
-    WorkerPool::remove(connection, queue, workers_to_remove)
-    ↓
-    WorkerTerminator::terminate(each removed worker)
-    ↓
-    Broadcast WorkersScaled event
-```
-
-### 4. Worker Lifecycle
-
-```
-WorkerSpawner::spawn()
-    ↓
-Creates Symfony Process:
-    [PHP_BINARY, artisan, queue:work, connection,
-     --queue=name, --tries=3, --max-time=3600, --sleep=3]
-    ↓
-Process::start() → Background process
-    ↓
-Wrapped in WorkerProcess(process, connection, queue, spawnedAt)
-    ↓
-Added to WorkerPool
-    ↓
-... Worker processes jobs ...
-    ↓
-When scaling down:
-    ↓
-WorkerTerminator::terminate(worker)
-    ↓
-1. posix_kill(pid, SIGTERM)
-2. Wait shutdown_timeout_seconds (default 30s)
-3. If still running: posix_kill(pid, SIGKILL)
-    ↓
-Worker terminated
-```
-
-## Scaling Decision Process
-
-### Decision Flow
-
-```
-1. Get Metrics
-   ├─ processingRate
-   ├─ activeWorkerCount
-   ├─ backlog (pending jobs)
-   ├─ oldestJobAge
-   └─ trend
-
-2. Estimate Avg Job Time
-   If activeWorkers > 0 && processingRate > 0:
-       avgJobTime = activeWorkers / processingRate
-   Else:
-       avgJobTime = 1.0 (fallback)
-
-3. Calculate All Three Approaches
-   ├─ steadyState = processingRate × avgJobTime
-   ├─ predictive = predictedRate × avgJobTime
-   └─ backlogDrain = calculate based on SLA proximity
-
-4. Take Maximum
-   targetWorkers = max(steadyState, predictive, backlogDrain)
-
-5. Apply System Capacity
-   maxPossible = CapacityCalculator::calculateMaxWorkers()
-   targetWorkers = min(targetWorkers, maxPossible)
-
-6. Apply Config Bounds
-   targetWorkers = max(targetWorkers, config.minWorkers)
-   targetWorkers = min(targetWorkers, config.maxWorkers)
-
-7. Check Cooldown
-   If lastScaledAt + cooldown > now:
-       Skip scaling (wait for cooldown)
-
-8. Execute Scaling
-   If targetWorkers > currentWorkers:
-       Scale Up
-   Else if targetWorkers < currentWorkers:
-       Scale Down
-   Else:
-       No Change
-```
-
-### Cooldown Logic
-
-Prevents scaling thrash:
-
-```php
-if (now()->diffInSeconds($this->lastScaled[$key] ?? 0) < $config->scaleCooldownSeconds) {
-    continue; // Skip this queue, still in cooldown
 }
 ```
 
-**Why cooldowns?**
-- Workers need time to start and begin processing
-- Metrics need time to reflect scaling changes
-- Prevents oscillation (scale up → scale down → scale up...)
+Workers reporting 90%+ utilisation while the arithmetic says "no change" means throughput data is
+lagging reality. One worker is added to break out of saturation.
 
-**Default:** 60 seconds between scaling operations per queue.
+### Target smoothing
 
-## Resource Management
+`TargetSmoother` keeps the last 10 throughput samples per queue. When a **scale-down** is requested
+and the coefficient of variation of throughput is below 5% (needing at least 3 samples), the
+decrease is limited to one worker per cycle. Scale-up is never smoothed.
 
-### CPU Constraints
+This kills the oscillation where a transient `pending = 0` collapses the Little's Law term and the
+target snaps back up on the next tick.
 
-```php
-$maxCpuPercent = config('queue-autoscale.resource_limits.max_cpu_percent'); // 90%
-$cpuUsage = SystemMetrics::cpuUsage(1.0)->usagePercentage(); // e.g., 60%
+## Input signals
 
-$availableCpuPercent = max($maxCpuPercent - $cpuUsage, 0); // 30%
+| Signal | Source | Notes |
+|---|---|---|
+| `arrivalRate` | `ArrivalRateEstimator` + forecast blend | Gated by `scaling.min_arrival_rate_confidence` (0.5) |
+| `avgJobTime` | `metrics.avgDuration` in seconds | Accepted only within `[0.01, 600]`, else `scaling.fallback_job_time_seconds` (2.0) |
+| `effectiveSla` | `sla.target_seconds` minus EMA spawn latency | Only when `spawn_compensation.enabled`; floored at 1.0 s |
+| `slaSignal` | `PickupTimeStore` percentile | `sla.percentile` over `sla.window_seconds`, needs `sla.min_samples`; falls back to `metrics.oldestJobAge` |
+| `utilizationRate` | metrics | Drives the saturation boost |
+| `failureRate` | metrics (lifetime) | Drives retry-noise subtraction and, separately, the fuse uses its own window |
 
-$reserveCores = config('queue-autoscale.limits.reserve_cpu_cores'); // 0.2
-$usableCores = max($limits->availableCpuCores() - $reserveCores, 0);
+For group configurations the pickup samples are collected across every member queue
+(`QueueConfiguration::sampleQueues()`), because samples are stored under the real queue names.
 
-$workerCpuEstimate = config('queue-autoscale.limits.worker_cpu_core_estimate'); // 0.2
-$availableCoreEquivalents = $usableCores * ($availableCpuPercent / 100);
-$maxWorkersByCpu = floor($availableCoreEquivalents / $workerCpuEstimate);
+## Decision pipeline
+
+The order matters, and policies come **last**, not first.
+
+```text
+metrics (laravel-queue-metrics)
+    │
+    ▼
+HybridStrategy::calculateTargetWorkers()          # max(steadyState, backlogDrain), clamped, smoothed
+    │
+    ▼
+ScalingEngine::evaluate()
+    ├─ 1. strategyRecommendation
+    ├─ 2. capacityResult = CapacityCalculator::calculateMaxWorkers(
+    │        max(totalPoolWorkers, currentWorkers),
+    │        ResourceEstimateResolver::resolve(connection, queue))
+    ├─ 3. availableForThisQueue = max(finalMaxWorkers - otherQueuesWorkers, 0)
+    │     target = min(target, availableForThisQueue)
+    ├─ 4. target = max(target, workers.min); target = min(target, workers.max)
+    ├─ 5. fuseCeiling = FailureFuse::evaluate(config)->workerCeiling(workers.min)
+    │     if not null: target = min(target, max(0, min(fuseCeiling, workers.max)))
+    └─ 6. limitingFactor + ScalingDecision
+    │
+    ▼
+AutoscaleManager
+    ├─ SLA breach check + anti-flapping cooldown (may return early)
+    ├─ PolicyExecutor::beforeScaling(decision) -> possibly modified decision
+    ├─ scaleUp() / scaleDown() / no action
+    ├─ PolicyExecutor::afterScaling(finalDecision)
+    ├─ event(ScalingDecisionMade), event(SlaBreachPredicted) when at risk
+    ├─ event(SlaBreached) / event(SlaRecovered) on state transitions
+    └─ record lastScaleTime and lastScaleDirection (unless the decision was a hold)
 ```
 
-### Memory Constraints
+`limitingFactor` on the final `CapacityCalculationResult` is `'fuse'` when the fuse is tripped;
+otherwise `'config'` (capped by `workers.max`), `'strategy'` (raised by `workers.min`, or
+unconstrained), or the capacity result's own `'cpu'` / `'memory'` / `'balanced'` /
+`'system_metrics_unavailable'`.
 
-```php
-$maxMemoryPercent = config('queue-autoscale.resource_limits.max_memory_percent'); // 85%
-$memoryUsage = SystemMetrics::memory()->usedPercentage(); // e.g., 50%
+`ScalingEngine::evaluateDemand()` — the cluster-leader path — runs the strategy, config bounds and
+the fuse, but **not** the system-capacity constraint: local CPU and memory say nothing about
+cluster-wide demand.
 
-$availableMemoryPercent = max($maxMemoryPercent - $memoryUsage, 0); // 35%
+## Component map
 
-$workerMemoryMb = config('queue-autoscale.resource_limits.worker_memory_mb_estimate'); // 128 MB
-$totalMemoryMb = $limits->availableMemoryBytes() / (1024 * 1024);
-
-$maxWorkersByMemory = floor(
-    ($totalMemoryMb * ($availableMemoryPercent / 100)) / $workerMemoryMb
-);
+```text
+┌──────────────────────────────────────────────────────────┐
+│ AutoscaleManager (queue:autoscale daemon)                │
+│  loop: process worker output → enforce termination       │
+│        deadlines → reap dead workers → evaluate & scale   │
+│        → render → sleep (interval - executionTime)        │
+└───────────────┬──────────────────────────┬───────────────┘
+                │                          │
+        ┌───────▼────────┐        ┌────────▼─────────┐
+        │ ScalingEngine  │        │ Worker management │
+        └───────┬────────┘        └────────┬─────────┘
+                │                          │
+   ┌────────────▼─────────────┐   ┌────────▼──────────────┐
+   │ HybridStrategy           │   │ WorkerSpawner         │
+   │  (ScalingStrategyContract)│   │ WorkerTerminator      │
+   └────────────┬─────────────┘   │ WorkerPool            │
+                │                  │ WorkerProcess         │
+   ┌────────────▼─────────────┐   └───────────────────────┘
+   │ LittlesLawCalculator     │
+   │ BacklogDrainCalculator   │   ┌───────────────────────┐
+   │ ArrivalRateEstimator     │   │ CapacityCalculator    │
+   │ LinearRegressionForecaster│  │ ResourceEstimateResolver│
+   │ TargetSmoother           │   │ FailureFuse           │
+   └──────────────────────────┘   │ PolicyExecutor        │
+                                  └───────────────────────┘
 ```
 
-### Most Restrictive Wins
+### Responsibilities
 
-```php
-return max(min($maxWorkersByCpu, $maxWorkersByMemory), 0);
+**AutoscaleManager** — the daemon. Owns the loop, signal handling (SIGTERM/SIGINT via
+`SignalHandler`), the worker pool, breach state, cooldown state, output rendering, cluster cycles
+and event dispatch.
+
+**ScalingEngine** — turns a strategy recommendation into a `ScalingDecision` by applying capacity,
+config bounds and the fuse. Holds no per-queue state.
+
+**HybridStrategy** — the default `ScalingStrategyContract`. Also ships:
+`BacklogOnlyStrategy`, `ConservativeStrategy`, `SimpleRateStrategy`.
+
+**Calculators** — `LittlesLawCalculator` (L = lambda W), `BacklogDrainCalculator` (SLA protection),
+`ArrivalRateEstimator` (sliding-window arrival rate plus forecast blend),
+`LinearRegressionForecaster` (OLS projection), `TargetSmoother` (scale-down hysteresis),
+`CapacityCalculator` (CPU/memory ceilings).
+
+**Worker management** — `WorkerSpawner` starts processes, `WorkerTerminator` performs graceful
+shutdown, `WorkerPool` tracks them, `WorkerProcess` wraps a Symfony `Process` with metadata.
+
+## Resource capacity
+
+`CapacityCalculator::calculateMaxWorkers(int $currentWorkers, ResourceEstimate $estimate)`, where
+`$currentWorkers` is **all workers on this host across all queues**:
+
+```text
+availableCpuPercent    = max(limits.max_cpu_percent - currentCpuPercent, 0)
+usableCores            = max(totalCores - limits.reserve_cpu_cores, 0)
+availableCoreEquiv     = usableCores * (availableCpuPercent / 100)
+maxWorkersByCpu        = currentWorkers + floor(availableCoreEquiv / max(cpuCoresPerWorker, 0.01))
+
+availableMemoryPercent = max(limits.max_memory_percent - currentMemoryPercent, 0)
+maxWorkersByMemory     = currentWorkers + floor(
+                             totalMemoryMb * (availableMemoryPercent / 100)
+                             / max(memoryMbPerWorker, 1.0))
+
+finalMaxWorkers        = max(min(maxWorkersByCpu, maxWorkersByMemory), 0)
 ```
 
-Ensures we never exceed either CPU or memory limits.
+The `currentWorkers +` term is mandatory: the measured percentages already include the running
+workers, so the division yields how many can be **added**.
 
-## Extension Points
+Per-worker CPU and memory come from `ResourceEstimateResolver`, which resolves each dimension
+independently as measured > per-queue `resources` config > global `limits.*` default.
 
-### Custom Scaling Strategies
+System metrics are cached for 4 seconds because `SystemMetrics::cpuUsage(1.0)` blocks for a full
+second. If `SystemMetrics::limits()` fails the calculator returns a fixed fallback of 5 workers with
+`limitingFactor: 'system_metrics_unavailable'`.
 
-Implement `ScalingStrategyContract`:
+Details and worked examples: [Resource Constraints](resource-constraints.md).
+
+## The failure fuse
+
+`FailureFuse` lives in `ScalingEngine`, not in a strategy, so every strategy — including custom ones
+— is protected. A downstream outage is indistinguishable from load to every calculation above: jobs
+fail, get released, the backlog grows. Without the fuse the autoscaler would answer an outage by
+adding workers to it.
+
+`FuseVerdict::workerCeiling(int $configuredMin)`:
+
+| State | Ceiling |
+|---|---|
+| `Closed` | `null` — never constrains |
+| `Open` | `workers.min` |
+| `HalfOpen` | `max(1, workers.min)` |
+
+It is a ceiling, not a target: the engine only lowers a target to meet it, never raises one. The
+half-open floor of 1 matters for scale-to-zero queues — holding at zero would record no job
+outcomes, so the fuse could never close again.
+
+## Anti-flapping cooldown
+
+`scaling.cooldown_seconds` (default 60) does **not** block all scaling. It blocks **direction
+reversals only**.
+
+The manager records `lastScaleTime` and `lastScaleDirection` per queue key. On each evaluation:
+
+```text
+currentDirection = up | down | hold
+
+if lastDirection is set and the cooldown has fully elapsed:
+    clear lastDirection            # a scale-up from minutes ago must not block a scale-down now
+
+if currentDirection != 'hold'
+   and lastDirection is set
+   and currentDirection != lastDirection:
+
+       isBreachScaleUp = currentDirection == 'up' and oldestJobAge >= sla.target_seconds
+
+       if not isBreachScaleUp and still in cooldown:
+           skip this queue this cycle
+```
+
+So:
+
+- Scaling **further in the same direction** is always allowed, however recently it happened.
+- A **reversal** within the window is suppressed.
+- A **scale-up during an active SLA breach overrides the cooldown** — protecting the SLA outranks
+  anti-flapping.
+- A `hold` never records a direction and never blocks anything.
+
+Groups use the same semantics with a `group:` prefixed key.
+
+## Worker lifecycle
+
+### Spawn
+
+`WorkerSpawner` builds exactly this process:
+
+```bash
+{PHP_BINARY} artisan queue:work {connection} \
+  --queue={queue} \
+  --tries={workers.tries} \
+  --max-time={workers.timeout_seconds} \
+  --sleep={workers.sleep_seconds}
+```
+
+`workers.timeout_seconds` maps to `--max-time` (worker lifetime), **not** `--timeout` (per-job
+timeout). No `--memory` flag is passed.
+
+Environment injected into the child: `LARAVEL_AUTOSCALE_WORKER=true`, `AUTOSCALE_MANAGER_ID`, and
+`AUTOSCALE_WORKER_GROUP` for group workers. Group workers get a comma-separated
+`--queue=q1,q2,q3` — strict left-to-right priority.
+
+### Terminate
+
+```text
+WorkerTerminator::requestTermination(worker)
+    posix_kill(pid, SIGTERM)
+    mark deadline = now + workers.shutdown_timeout_seconds (default 30)
+
+... manager loop calls enforceTerminationDeadlines() each tick ...
+
+WorkerTerminator::forceKillIfExpired(worker)
+    if deadline exceeded: posix_kill(pid, SIGKILL)
+```
+
+The synchronous `terminate()` variant does SIGTERM, waits out the timeout, then SIGKILLs.
+
+## Extension points
+
+### Custom strategies
 
 ```php
 interface ScalingStrategyContract
 {
-    public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int;
+    public function calculateTargetWorkers(QueueMetricsData $metrics, QueueConfiguration $config): int;
+
     public function getLastReason(): string;
+
     public function getLastPrediction(): ?float;
 }
 ```
 
-**Examples:**
-- **TimeOfDayStrategy:** Scale based on time patterns
-- **BudgetAwareStrategy:** Cap workers based on cost constraints
-- **MLStrategy:** Use machine learning for forecasting
-- **ConservativeStrategy:** Always maintain buffer capacity
+Register the class string:
 
-### Scaling Policies
+```php
+'strategy' => App\Scaling\TimeOfDayStrategy::class,
+```
 
-Implement `ScalingPolicy` for hooks:
+`AutoscaleConfiguration::strategyClass()` reads this as a **plain string**. An array form is not
+supported and will break boot.
+
+### Scaling policies
 
 ```php
 interface ScalingPolicy
 {
-    public function beforeScaling(ScalingDecision $decision): void;
-    public function afterScaling(ScalingDecision $decision, bool $success): void;
+    /** Return null to keep the original decision. */
+    public function beforeScaling(ScalingDecision $decision): ?ScalingDecision;
+
+    public function afterScaling(ScalingDecision $decision): void;
 }
 ```
 
-**Use Cases:**
-- Pre-warming caches before scale-up
-- Notifying monitoring systems
-- Rate limiting scale operations
-- Cost tracking and budgets
-- Compliance logging
-
-### Event Subscribers
-
-React to scaling events:
+`PolicyExecutor::beforeScaling()` chains them: a non-null return replaces the decision for every
+subsequent policy. Exceptions in either hook are caught and logged to
+`AutoscaleConfiguration::logChannel()` — a throwing policy does not abort scaling.
 
 ```php
-Event::listen(ScalingDecisionMade::class, function ($event) {
-    // Log, metrics, external systems
-});
-
-Event::listen(WorkersScaled::class, function ($event) {
-    // Track worker count metrics
-});
-
-Event::listen(SlaBreachPredicted::class, function ($event) {
-    // Alert on-call engineers
-});
+'policies' => [
+    ConservativeScaleDownPolicy::class,
+    BreachNotificationPolicy::class,
+],
 ```
 
-## Performance Considerations
+`AutoscaleConfiguration::policyClasses()` filters to `is_string($policy) && class_exists($policy)`,
+so a policy **instance** or closure placed in this array is silently dropped. Classes are resolved
+via the container, so constructor injection works.
 
-### Evaluation Frequency
+### Events
 
-Default: Every 5 seconds
-
-**Trade-offs:**
-- **Faster (1-2s):** More responsive, higher CPU usage, more scaling decisions
-- **Slower (10-30s):** Lower overhead, may miss short spikes, delayed reactions
-
-**Recommendation:** 5-10 seconds for most workloads.
-
-### Metrics Overhead
-
-Metrics collection happens in `laravel-queue-metrics` (external):
-- Runs in background
-- Minimal impact on queue processing
-- Pre-aggregated before autoscaler sees them
-
-**Our overhead:**
-- Simple calculations (3 multiplications, 1 max)
-- O(1) complexity for each queue
-- Total: <10ms for dozens of queues
-
-### Worker Spawn Time
-
-```
-Process creation: ~50-200ms
-Laravel bootstrap: ~100-500ms
-Queue worker ready: ~200-700ms total
+```php
+Event::listen(ScalingDecisionMade::class, fn ($event) => /* $event->decision */);
+Event::listen(WorkersScaled::class, fn ($event) => /* connection, queue, from, to, action, reason */);
+Event::listen(SlaBreachPredicted::class, fn ($event) => /* $event->decision */);
+Event::listen(SlaBreached::class, fn ($event) => /* connection, queue, oldestJobAge, slaTarget, pending, activeWorkers */);
+Event::listen(FuseTripped::class, fn ($event) => /* connection, queue, failureRate, samples, ... */);
 ```
 
-**Implication:** Autoscaler compensates by:
-- Predictive scaling (scale before demand)
-- Minimum workers (always-ready capacity)
-- Cooldown periods (wait for workers to start)
+## Performance considerations
 
-### Memory Footprint
+### Evaluation cadence
 
-Per worker process:
-- Laravel app: ~50-100 MB
-- Queue jobs: Variable (10-100+ MB)
-- Default estimate: 128 MB
+The loop interval comes from the command flag:
 
-**Total system:**
-```
-Autoscaler daemon: ~50 MB
-Workers: N × 128 MB
+```bash
+php artisan queue:autoscale --interval=5
 ```
 
-For 50 workers: ~6.4 GB + Laravel base
+The default is 5 seconds. Each cycle sleeps `max(0, interval - executionTime)`, so a slow cycle does
+not compound. `manager.evaluation_interval_seconds` exists in the config file and in
+`AutoscaleConfiguration::evaluationIntervalSeconds()`, but the running loop does not consult it —
+the CLI flag is what takes effect.
 
-## Design Decisions
+Faster intervals react sooner and evaluate more often; slower intervals cost less and can miss short
+spikes. Five to ten seconds suits most workloads.
 
-### Why Not Reactive-Only?
+### Per-cycle cost
 
-Reactive scaling (respond after queue depth grows) always lags:
+- Strategy arithmetic is O(1) per queue, over an O(30) snapshot window.
+- The one blocking cost is `SystemMetrics::cpuUsage(1.0)` — one second — cached for 4 seconds and
+  therefore paid once per cycle, not once per queue.
+- Percentile computation is a sort over the pickup samples in the window
+  (`pickup_time.max_samples_per_queue`, default 1000).
 
-```
-Load spike → Queue grows → Detect → Scale → Workers start → Begin processing
-Total lag: 30-60 seconds
-```
+### Worker spawn time
 
-Predictive scaling reduces lag by anticipating demand.
+Process creation plus Laravel bootstrap is typically several hundred milliseconds. Two mechanisms
+account for it: spawn compensation subtracts measured spawn latency (EMA) from the SLA budget, and
+`workers.min` keeps always-ready capacity.
 
-### Why Three Approaches?
+### Memory footprint
 
-Each handles different scenarios:
+The default estimate is 128 MB per worker (`limits.worker_memory_mb_estimate`); override per queue
+with the `resources` key when a queue's jobs are heavier. The manager process itself is small
+compared with the pool it supervises.
 
-| Scenario | Dominant Approach |
-|----------|------------------|
-| Stable load | Steady state (Little's Law) |
-| Predictable growth | Trend-based |
-| Burst traffic | Backlog drain |
-| Mixed patterns | Maximum of all three |
+## Design decisions
 
-### Why SLA-Based?
+### Why a maximum of two calculations?
 
-**Business Alignment:**
-- "Jobs picked up within 30s" is business requirement
-- Worker counts are implementation detail
-- Easier to communicate with stakeholders
+Each covers what the other cannot: Little's Law sizes for the flow arriving, backlog drain sizes for
+the water already in the tank. Taking the maximum means a queue is provisioned for whichever
+pressure is currently greater, and neither can mask the other. Over-provisioning is then bounded by
+capacity, config and the fuse.
 
-**Natural Bounds:**
-- SLA compliance = success
-- SLA violation = failure
-- Clear objective function
+### Why an SLA rather than a worker count?
 
-### Why Process-Based Workers?
+"Jobs are picked up within 30 seconds" is a statement about the business. "Run 12 workers" is an
+implementation detail that stops being true the moment job duration changes.
 
-**Isolation:**
-- Each worker is separate process
-- Memory leaks contained
-- Crashes don't affect others
+### Why process-based workers?
 
-**Control:**
-- Can SIGTERM/SIGKILL individual workers
-- Easy monitoring (process table)
-- Standard Unix tooling works
+Isolation (a leaking or crashing job takes down one process), control (individual SIGTERM/SIGKILL),
+and familiarity — they are ordinary `queue:work` processes, visible in the process table and
+manageable with standard tooling.
 
-**Simplicity:**
-- No threading complexity
-- No shared state issues
-- Matches Laravel queue:work model
+### Why does the fuse live in the engine?
 
-## Future Enhancements
+Because it must apply to strategies this package has never seen. A custom strategy gets outage
+protection without implementing anything.
 
-### Potential Improvements
+## See also
 
-1. **ML-Based Prediction**
-   - Train on historical patterns
-   - Better forecasting accuracy
-   - Seasonal adjustment
-
-2. **Cost Optimization**
-   - Factor in compute costs
-   - Balance SLA vs budget
-   - Spot instance awareness
-
-3. **Multi-Dimensional Scaling**
-   - Scale by job type, not just queue
-   - Priority-based worker allocation
-   - Resource quotas per tenant
-
-4. **Advanced Metrics**
-   - Job failure rates
-   - Retry patterns
-   - Dependency graphs
-
-5. **Auto-Tuning**
-   - Learn optimal min/max workers
-   - Adjust cooldown periods
-   - Calibrate breach thresholds
-
-### Extensibility by Design
-
-The architecture supports these enhancements through:
-- Strategy pattern for algorithms
-- Policy hooks for behavior
-- Event system for integration
-- Dependency injection for swapping components
-
-## Conclusion
-
-Queue Autoscale for Laravel combines queueing theory, predictive analysis, and SLA-based optimization to provide intelligent, automatic worker scaling. The hybrid algorithm ensures SLA compliance while being resource-aware and extensible.
-
-For usage examples, see [Quick Start](../quickstart.md).
-
-For implementation details, review the source code with this architecture in mind.
+- [Little's Law](littles-law.md) — the steady-state calculation
+- [Backlog Drain](backlog-drain.md) — the SLA-protection calculation
+- [Trend Prediction](trend-prediction.md) — forecasting inside the arrival-rate estimate
+- [Resource Constraints](resource-constraints.md) — the capacity ceiling
+- [Quick Start](../quickstart.md) — usage

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Workers;
 
-final class WorkerOutputBuffer
+class WorkerOutputBuffer
 {
     /** @var array<int, string> Partial line buffers per PID */
     private array $buffers = [];

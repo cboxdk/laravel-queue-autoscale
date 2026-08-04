@@ -7,8 +7,12 @@ namespace Cbox\LaravelQueueAutoscale\Configuration;
 use Cbox\LaravelQueueAutoscale\Contracts\ForecasterContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ForecastPolicyContract;
 
-final readonly class ForecastConfiguration
+readonly class ForecastConfiguration
 {
+    /**
+     * @param  class-string<ForecasterContract>  $forecasterClass
+     * @param  class-string<ForecastPolicyContract>  $policyClass
+     */
     public function __construct(
         public string $forecasterClass,
         public string $policyClass,
@@ -30,5 +34,38 @@ final readonly class ForecastConfiguration
         if ($historySeconds < $horizonSeconds) {
             throw new InvalidConfigurationException("forecast.history_seconds ({$historySeconds}) must be >= horizon_seconds ({$horizonSeconds})");
         }
+    }
+
+    /**
+     * Resolve the configured forecaster from the container.
+     *
+     * Construction lives here because this is where the class-strings are
+     * validated. The instance check is not redundant with the constructor's:
+     * a container binding can return something other than the requested class.
+     */
+    public function makeForecaster(): ForecasterContract
+    {
+        $forecaster = app($this->forecasterClass);
+
+        if (! $forecaster instanceof ForecasterContract) {
+            throw new InvalidConfigurationException(
+                "The container resolved {$this->forecasterClass} to something that is not a ForecasterContract."
+            );
+        }
+
+        return $forecaster;
+    }
+
+    public function makePolicy(): ForecastPolicyContract
+    {
+        $policy = app($this->policyClass);
+
+        if (! $policy instanceof ForecastPolicyContract) {
+            throw new InvalidConfigurationException(
+                "The container resolved {$this->policyClass} to something that is not a ForecastPolicyContract."
+            );
+        }
+
+        return $policy;
     }
 }

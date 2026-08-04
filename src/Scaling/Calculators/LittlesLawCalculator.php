@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Scaling\Calculators;
 
-final readonly class LittlesLawCalculator
+readonly class LittlesLawCalculator
 {
     /**
      * Little's Law: L = λW

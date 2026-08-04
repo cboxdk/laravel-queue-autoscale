@@ -5,85 +5,105 @@
 [![GitHub Code Quality Action Status](https://img.shields.io/github/actions/workflow/status/cboxdk/laravel-queue-autoscale/code-quality.yml?branch=main&label=code%20quality&style=flat-square)](https://github.com/cboxdk/laravel-queue-autoscale/actions?query=workflow%3Acode-quality+branch%3Amain)
 [![Total Downloads](https://img.shields.io/packagist/dt/cboxdk/laravel-queue-autoscale.svg?style=flat-square)](https://packagist.org/packages/cboxdk/laravel-queue-autoscale)
 
-**Intelligent, predictive autoscaling for Laravel queues with SLA/SLO-based optimization.**
+**SLA-driven autoscaling for Laravel queue workers.**
 
-Queue Autoscale for Laravel is a smart queue worker manager that automatically scales your queue workers based on workload, predicted demand, and service level objectives. Unlike traditional reactive solutions, it uses a **hybrid predictive algorithm** combining queueing theory (Little's Law), trend analysis, and backlog-based scaling to maintain your SLA targets.
+Queue Autoscale for Laravel is a long-running worker manager that spawns and terminates `queue:work`
+processes to hold a pickup-time SLA. Instead of configuring worker counts, you declare how long a job
+may wait before it is picked up, and the manager solves for the worker count each evaluation cycle
+using queueing theory (Little's Law) and backlog-drain math, bounded by measured CPU and memory
+capacity on the host.
 
 ## Features
 
-- 🎯 **SLA/SLO-Based Scaling** - Define max pickup time instead of arbitrary worker counts
-- 📈 **Predictive Algorithm** - Proactive scaling using trend analysis and forecasting
-- 🔬 **Queueing Theory Foundation** - Little's Law (L = λW) for steady-state calculations
-- ⚡ **SLA Breach Prevention** - Aggressive backlog drain when approaching SLA violations
-- 🖥️ **Resource-Aware** - Respects CPU and memory limits from system metrics
-- 🔄 **Metrics-Driven** - Uses [`laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics) for queue discovery and all metrics
-- 🌐 **Cluster-Aware** - Multiple autoscale managers auto-join via Redis, elect a leader, and distribute worker targets across hosts
-- 🌐 **Cluster-Aware** - Multiple autoscale managers auto-join via Redis, elect a leader, and distribute worker targets across hosts
-- 🎛️ **Extensible** - Custom scaling strategies and policies via interfaces
-- 📊 **Event Broadcasting** - React to scaling decisions, SLA predictions, worker changes
-- 🛡️ **Graceful Shutdown** - SIGTERM → SIGKILL worker termination
-- 🚀 **High Performance** - Drift-corrected evaluation loop and efficient process management
-- 🔒 **Secure by Design** - Safe process spawning and resource isolation
-- 💎 **DX First** - Clean API following Spatie package conventions
+- **SLA-based scaling** — declare a target pickup time; worker counts are derived, not configured
+- **Little's Law steady state** — `workers = arrival rate × average job time` for the baseline
+- **Backlog drain with progressive urgency** — a quadratic aggressiveness curve that ramps from 1.0x
+  at half the SLA budget to 3.0x at the SLA target, capped at 5.0x
+- **p95 pickup-time signal** — sliding-window percentile over real observed pickup times, with a
+  fallback to oldest-job age when there are not enough samples
+- **Spawn-latency compensation** — measured spawn time (EMA) is subtracted from the SLA budget
+- **Failure fuse** — a downstream outage looks like load to any autoscaler; the fuse detects a high
+  failure rate, holds the queue at `workers.min`, then probes with a single worker before releasing
+- **Resource-aware** — CPU and memory ceilings measured on the host constrain every decision
+- **Metrics-driven** — queue discovery and metrics come from
+  [`laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics)
+- **Cluster-aware** — managers auto-join via Redis, elect a leader, and distribute worker targets
+  across hosts
+- **Worker groups** — one worker set polling several queues in strict priority order
+- **Extensible** — custom scaling strategies and policies via interfaces
+- **Events** — react to scaling decisions, SLA breaches, fuse transitions and cluster changes
+- **Graceful shutdown** — SIGTERM, then SIGKILL after the shutdown timeout
 
 ## Requirements
 
-- PHP 8.3+
-- Laravel 11.0+
-- [`cboxdk/laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics) ^1.0.0
-- [`cboxdk/system-metrics`](https://github.com/cboxdk/system-metrics) ^1.2
+- PHP 8.3, 8.4 or 8.5
+- Laravel 11, 12 or 13
+- `ext-pcntl` and `ext-posix` (the manager is a signal-handling daemon)
+- [`cboxdk/laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics) `^3.0`
+
+Redis is required only for cluster mode. Single-host mode works with any queue driver and needs no
+Redis. [`cboxdk/laravel-telemetry`](https://github.com/cboxdk/laravel-telemetry) is optional and
+enables the OpenTelemetry integration; it requires Laravel 12+.
 
 ## Installation
-
-Install via Composer:
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
 ```
 
-Run the interactive installer to publish config, choose the right topology, and generate the matching `.env` values:
+Run the interactive installer to publish config, choose a topology, and generate matching `.env`
+values:
 
 ```bash
 php artisan queue:autoscale:install
 ```
 
-It guides you through three safe presets:
-- single host, low traffic, no Redis infrastructure
-- single host with Redis-backed metrics and predictive signals
-- multi-host cluster with Redis coordination
+It offers three presets via `--topology=`:
 
-If you prefer the manual path, you can still publish the config files yourself:
+| Preset | Shape |
+| --- | --- |
+| `single-low` | single host, low traffic, no Redis infrastructure |
+| `single-redis` | single host with Redis-backed metrics and predictive signals |
+| `cluster` | multi-host cluster with Redis coordination |
 
-Publish the configuration file:
+Additional flags: `--metrics-connection=`, `--publish-migrations`, `--write-env`, `--env-file=`,
+`--force`, `--no-publish`.
+
+If you prefer the manual path, publish the config yourself:
 
 ```bash
 php artisan vendor:publish --tag=queue-autoscale-config
 ```
 
-### Setup Metrics Package
+### Set up the metrics package
 
-The autoscaler requires [`laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics) for queue discovery and metrics collection:
+This package does not discover queues or collect metrics itself. Both come from
+[`laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics), which is installed as a
+dependency:
 
 ```bash
-# Install metrics package (if not auto-installed via dependency)
-composer require cboxdk/laravel-queue-metrics
-
-# Publish metrics configuration
 php artisan vendor:publish --tag=queue-metrics-config
 ```
 
-Configure storage backend in `.env`:
+Configure its storage backend in `.env`:
 
 ```env
-# Option A: Redis (recommended - fast, in-memory)
+# Option A: Redis (fast, in-memory)
 QUEUE_METRICS_STORAGE=redis
 QUEUE_METRICS_CONNECTION=default
 
-# Option B: Database (persistent storage)
+# Option B: Database (persistent)
 QUEUE_METRICS_STORAGE=database
 ```
 
-Queue Autoscale itself can now run in three safe modes:
+If you use database storage, publish and run its migrations:
+
+```bash
+php artisan vendor:publish --tag=queue-metrics-migrations
+php artisan migrate
+```
+
+### Choose an autoscale topology
 
 ```env
 # Single host without Redis
@@ -99,407 +119,426 @@ QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=redis
 QUEUE_AUTOSCALE_CLUSTER_ENABLED=true
 ```
 
-`auto` keeps single-host mode Redis-free and switches to Redis-backed coordination automatically in cluster mode.
-
-The installer can also write the recommended values straight into `.env` for you.
-
-If using database storage, publish and run migrations:
-
-```bash
-php artisan vendor:publish --tag=laravel-queue-metrics-migrations
-php artisan migrate
-```
-
-**📚 See [Metrics Package Documentation](https://github.com/cboxdk/laravel-queue-metrics) for advanced configuration.**
+`auto` keeps single-host mode Redis-free and switches to Redis-backed coordination in cluster mode.
+The installer can write these values into `.env` for you with `--write-env`.
 
 ## Quick Start
 
-### 1. Configure SLA Targets (Optional)
+### 1. Configure SLA targets (optional)
 
-**Zero Config:** By default, the package uses the "Balanced" profile (30s SLA). You can skip configuration if this suits you.
+By default `sla_defaults` is `BalancedProfile::class` — a 30-second p95 pickup-time target with
+1–10 workers. If that suits you, there is nothing to configure.
 
-To customize, edit `config/queue-autoscale.php`:
+To customise, edit `config/queue-autoscale.php`. Each entry is **either** a `ProfileContract` class
+**or** a literal array that is deep-merged over `sla_defaults`:
 
 ```php
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
+
 return [
     'enabled' => true,
-    
-    // Choose a preset profile: 'balanced', 'critical', 'high_volume', 'bursty', 'background'
-    'sla_defaults' => \Cbox\LaravelQueueAutoscale\Configuration\ProfilePresets::balanced(),
 
-    // ... or customize manually
+    // Shipped profiles: BalancedProfile, CriticalProfile, HighVolumeProfile,
+    // BurstyProfile, BackgroundProfile, ExclusiveProfile.
+    'sla_defaults' => BalancedProfile::class,
+
     'queues' => [
-        'critical' => [
-            'max_pickup_time_seconds' => 5,   // Strict SLA
-            'max_workers' => 20,
+        // A profile class...
+        'payments' => CriticalProfile::class,
+
+        // ...or a partial override merged over sla_defaults.
+        'reports' => [
+            'sla' => ['target_seconds' => 120],
+            'workers' => ['min' => 0, 'max' => 4],
         ],
     ],
 ];
 ```
 
-### 2. Run the Autoscaler
+A per-queue entry does **not** accept `'profile'` and `'overrides'` keys — those belong to `groups`
+only. See [Workload Profiles](docs/basic-usage/workload-profiles.md).
+
+### 2. Run the autoscaler
 
 ```bash
 php artisan queue:autoscale
 
-# Inspect cluster leader, hosts, capacity, and workload targets
-php artisan queue:autoscale:cluster
+# Custom evaluation interval (default: 5 seconds)
+php artisan queue:autoscale --interval=10
 
-# Inspect cluster leader, hosts, capacity, and workload targets
-php artisan queue:autoscale:cluster
-
-# Replace the existing local manager on this host/app
+# Stop the existing local manager and take over its host lock
 php artisan queue:autoscale --replace
+
+# Inspect cluster leader, hosts, capacity and workload targets
+php artisan queue:autoscale:cluster
+
+# Inspect one queue's raw state, metrics and fuse status
+php artisan queue:autoscale:debug --queue=payments
+
+# Signal running managers to restart gracefully (use this on deploy)
+php artisan queue:autoscale:restart
 ```
 
-The autoscaler will:
-- Receive all queues and metrics from [`laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics)
-- Apply scaling algorithms to meet SLA targets
-- Scale workers up/down based on calculations
-- Respect CPU/memory limits from [`system-metrics`](https://github.com/cboxdk/system-metrics)
-- Log all scaling decisions
+Each cycle the manager:
 
-### 3. Monitor with Events
+1. Pulls queue metrics from `laravel-queue-metrics`
+2. Runs the configured strategy to get a target worker count
+3. Constrains that target by measured host CPU/memory capacity
+4. Clamps it to `workers.min` / `workers.max`
+5. Applies the failure fuse
+6. Runs the registered policies over the resulting decision
+7. Spawns or terminates workers, and dispatches events
+
+### 3. Monitor with events
 
 ```php
-use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
 use Cbox\LaravelQueueAutoscale\Events\SlaBreachPredicted;
+use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
 
-Event::listen(WorkersScaled::class, function (WorkersScaled $event) {
+Event::listen(WorkersScaled::class, function (WorkersScaled $event): void {
     Log::info("Scaled {$event->queue}: {$event->from} → {$event->to} workers");
     Log::info("Reason: {$event->reason}");
 });
 
-Event::listen(SlaBreachPredicted::class, function (SlaBreachPredicted $event) {
-    // Alert when SLA breach is predicted
-    Notification::route('slack', env('SLACK_ALERT_WEBHOOK'))
-        ->notify(new SlaBreachAlert($event->decision));
+Event::listen(SlaBreachPredicted::class, function (SlaBreachPredicted $event): void {
+    $decision = $event->decision;
+
+    Log::warning("SLA breach predicted for {$decision->queue}", [
+        'predicted_pickup' => $decision->predictedPickupTime,
+        'sla_target' => $decision->slaTarget,
+    ]);
 });
 ```
 
 ## How It Works
 
-### Hybrid Predictive Algorithm
+### The hybrid strategy
 
-The autoscaler uses three complementary approaches and takes the **maximum** (most conservative):
+`HybridStrategy` (the default) computes two candidate worker counts and takes the **maximum**:
 
-#### 1. **Rate-Based (Little's Law)**
+**1. Steady state — Little's Law**
+
+```text
+workers = arrivalRate × avgJobTime
 ```
-Workers = Arrival Rate × Avg Processing Time
-```
-Calculates steady-state workers needed for current load.
 
-#### 2. **Trend-Based (Predictive)**
-```
-Workers = Predicted Rate × Avg Processing Time
-```
-Uses trend analysis to predict future arrival rates and scale proactively.
+The arrival rate comes from `ArrivalRateEstimator`, which tracks backlog deltas and blends in a
+forecast. It is used only when its confidence clears `scaling.min_arrival_rate_confidence` (0.5);
+otherwise the observed processing rate (`throughputPerMinute / 60`) is used instead. When the
+failure rate exceeds 5%, an estimated retry volume is subtracted so that retries are not counted as
+new arrivals.
 
-#### 3. **Backlog-Based (SLA Protection)**
+**2. Backlog drain — SLA protection**
+
+```text
+slaProgress   = min(slaSignal / effectiveSla, 1.5)
+baseWorkers   = backlog / max((effectiveSla - slaSignal) / avgJobTime, 1.0)
+multiplier    = min(1.0 + 8.0 × (slaProgress - 0.5)², 5.0)
+workers       = baseWorkers × multiplier
 ```
-Workers = Backlog / (Time Until SLA Breach / Avg Job Time)
-```
-Aggressively scales when approaching SLA violations.
 
-### Resource Constraints
+This returns zero until `slaProgress` reaches `scaling.breach_threshold` (default `0.5`, i.e. half
+the SLA budget consumed). The multiplier then ramps continuously: 1.0x at 50%, ~1.72x at 80%,
+3.0x at 100%, capped at 5.0x. `effectiveSla` is the SLA target minus the measured spawn latency, and
+`slaSignal` is the p95 of recent observed pickup times, falling back to oldest-job age when there
+are too few samples.
 
-All calculations are bounded by:
-- **System capacity** - CPU/memory limits from `system-metrics`
-- **Config bounds** - min/max workers from configuration
-- **Cooldown periods** - Prevents scaling thrash
+The larger of the two wins. A saturation guard then bumps the target to `activeWorkers + 1` if
+workers are above 90% utilisation but neither calculation asked for more. Finally the target is
+clamped to `[workers.min, workers.max]` and passed through a hysteresis smoother that limits
+scale-down to one worker per cycle while throughput is stable.
 
-See [Architecture Documentation](docs/algorithms/architecture.md) for detailed algorithm explanation.
+### Constraints applied to every decision
+
+- **Host capacity** — CPU and memory ceilings from measured system metrics, expressed as
+  `currentWorkers + additional headroom` and reduced by what other queues on the host already use
+- **Config bounds** — `workers.min` and `workers.max` from the queue's profile
+- **Failure fuse** — holds a queue at `workers.min` while its failure rate is above threshold
+- **Anti-flapping cooldown** — `scaling.cooldown_seconds` (default 60) blocks only a *reversal* of
+  scaling direction; scaling further in the same direction is always allowed, and an active SLA
+  breach overrides the cooldown for scale-up
+
+See the [Architecture](docs/algorithms/architecture.md) deep dive for the full derivation.
 
 ## Configuration Reference
 
-### SLA Defaults
+The published `config/queue-autoscale.php` is documented inline. The keys most people touch:
 
 ```php
-'sla_defaults' => [
-    // Maximum time a job should wait before being picked up (seconds)
-    'max_pickup_time_seconds' => 30,
+'sla_defaults' => BalancedProfile::class,   // ProfileContract class or literal array
+'queues' => [],                             // per-queue: profile class or partial override array
+'excluded' => [],                           // fnmatch globs never managed, e.g. 'legacy-*'
+'groups' => [],                             // multi-queue workers with strict priority
 
-    // Minimum workers to maintain (even if queue is empty)
-    'min_workers' => 1,
+'scaling' => [
+    'fallback_job_time_seconds' => 2.0,     // used when metrics have no avg duration
+    'breach_threshold' => 0.5,              // fraction of SLA budget before backlog drain engages
+    'cooldown_seconds' => 60,               // anti-flapping window for direction reversals
+],
 
-    // Maximum workers allowed for this queue
-    'max_workers' => 10,
+'limits' => [
+    'max_cpu_percent' => 85,
+    'max_memory_percent' => 85,
+    'worker_memory_mb_estimate' => 128,     // cold-start estimate; measured data wins once available
+    'worker_cpu_core_estimate' => 0.2,
+    'reserve_cpu_cores' => 0.2,
+],
 
-    // Cooldown period between scaling operations (seconds)
-    'scale_cooldown_seconds' => 60,
+'workers' => [
+    'timeout_seconds' => 3600,              // passed to queue:work as --max-time
+    'tries' => 3,
+    'sleep_seconds' => 3,
+    'shutdown_timeout_seconds' => 30,       // SIGTERM grace period before SIGKILL
+    'health_check_interval_seconds' => 10,
+],
+
+'strategy' => HybridStrategy::class,        // a plain class string, not an array
+
+'policies' => [
+    ConservativeScaleDownPolicy::class,
+    BreachNotificationPolicy::class,
 ],
 ```
 
-### Per-Queue Overrides
+A per-queue entry may also carry a `resources` block declaring cold-start CPU/memory estimates for
+that queue's workers:
 
 ```php
 'queues' => [
-    'queue-name' => [
-        'max_pickup_time_seconds' => 60,
-        'min_workers' => 2,
-        'max_workers' => 20,
-        'scale_cooldown_seconds' => 30,
+    'video-encode' => [
+        'workers' => ['min' => 0, 'max' => 4],
+        'resources' => ['cpu_cores' => 1.0, 'memory_mb' => 2048],
     ],
 ],
 ```
 
-### Prediction Settings
+Note that `manager.evaluation_interval_seconds` exists in the published config but has no effect —
+the evaluation interval is taken from `queue:autoscale --interval=` (default 5). Set it on the
+command line or in your Supervisor program definition.
 
-```php
-'prediction' => [
-    // How far ahead to forecast (seconds)
-    'forecast_horizon_seconds' => 60,
-
-    // When to trigger backlog drain (0-1, e.g., 0.8 = 80% of SLA time)
-    'breach_threshold' => 0.8,
-],
-```
-
-### Resource Limits
-
-```php
-'resource_limits' => [
-    // Maximum CPU usage percentage
-    'max_cpu_percent' => 90,
-
-    // Number of CPU cores to reserve
-    'reserve_cpu_cores' => 0.5,
-
-    // Maximum memory usage percentage
-    'max_memory_percent' => 85,
-
-    // Estimated memory per worker (MB)
-    'worker_memory_mb_estimate' => 128,
-],
-```
-
-### Worker Settings
-
-```php
-'worker' => [
-    // Worker process arguments
-    'tries' => 3,
-    'timeout_seconds' => 3600,
-    'sleep_seconds' => 3,
-
-    // Graceful shutdown timeout before SIGKILL
-    'shutdown_timeout_seconds' => 30,
-],
-```
-
-### Strategy Configuration
-
-```php
-'strategy' => [
-    // Scaling strategy class (must implement ScalingStrategyContract)
-    'class' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\PredictiveStrategy::class,
-],
-```
+Every key, including the profile, forecast, fuse, pickup-time, spawn-latency, cluster, alerting and
+telemetry blocks, is covered in [Configuration](docs/basic-usage/configuration.md).
 
 ## Custom Scaling Strategies
 
-Implement your own scaling logic:
+A strategy answers one question: how many workers should this queue have right now?
 
 ```php
-use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
-class CustomStrategy implements ScalingStrategyContract
+final class CustomStrategy implements ScalingStrategyContract
 {
-    public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
+    private int $lastTarget = 0;
+
+    public function calculateTargetWorkers(QueueMetricsData $metrics, QueueConfiguration $config): int
     {
-        // Your custom logic here
-        return (int) ceil($metrics->processingRate * 2);
+        // avgDuration is already in seconds by the time a strategy sees it.
+        $jobsPerSecond = $metrics->throughputPerMinute / 60.0;
+        $target = (int) ceil($jobsPerSecond * max($metrics->avgDuration, 0.1) * 2);
+
+        return $this->lastTarget = max(
+            $config->workers->min,
+            min($config->workers->max, $target),
+        );
     }
 
     public function getLastReason(): string
     {
-        return 'Custom strategy: doubled the processing rate';
+        return "Custom strategy: doubled steady-state demand → {$this->lastTarget} workers";
     }
 
     public function getLastPrediction(): ?float
     {
-        return null; // Optional: estimated pickup time
+        return null; // Optional: predicted pickup time in seconds
     }
 }
 ```
 
-Register in config:
+Register it as a plain class string:
 
 ```php
-'strategy' => [
-    'class' => \App\Scaling\CustomStrategy::class,
-],
+'strategy' => \App\Scaling\CustomStrategy::class,
 ```
+
+The engine still applies capacity limits, config bounds and the fuse on top of whatever a strategy
+returns. See [Custom Strategies](docs/advanced-usage/custom-strategies.md).
 
 ## Scaling Policies
 
-Add before/after hooks to scaling operations:
+A policy runs *after* the strategy and engine have produced a `ScalingDecision`. `beforeScaling()`
+may return a modified decision (or `null` to leave it alone); `afterScaling()` observes the result.
 
 ```php
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
-class NotifySlackPolicy implements ScalingPolicy
+final class BusinessHoursFloorPolicy implements ScalingPolicy
 {
-    public function beforeScaling(ScalingDecision $decision): void
+    public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
     {
-        if ($decision->shouldScaleUp()) {
-            Slack::notify("About to scale up {$decision->queue}");
+        if (! $decision->shouldScaleDown() || ! now()->isWeekday()) {
+            return null;
         }
+
+        if ($decision->targetWorkers >= 2) {
+            return null;
+        }
+
+        return new ScalingDecision(
+            connection: $decision->connection,
+            queue: $decision->queue,
+            currentWorkers: $decision->currentWorkers,
+            targetWorkers: 2,
+            reason: "business-hours floor of 2 applied (was: {$decision->reason})",
+            predictedPickupTime: $decision->predictedPickupTime,
+            slaTarget: $decision->slaTarget,
+        );
     }
 
-    public function afterScaling(ScalingDecision $decision, bool $success): void
+    public function afterScaling(ScalingDecision $decision): void
     {
-        if (!$success) {
-            Slack::notify("Failed to scale {$decision->queue}");
-        }
+        //
     }
 }
 ```
 
-Register in config:
+Register **class strings** — the loader resolves each through the container, so constructor
+injection works. An instance or closure placed in this array is silently ignored:
 
 ```php
 'policies' => [
-    \App\Policies\NotifySlackPolicy::class,
+    \App\Policies\BusinessHoursFloorPolicy::class,
 ],
 ```
 
+Policies are chained: a non-null return becomes the decision the next policy sees. An exception
+thrown by a policy is caught and logged, and scaling continues. See
+[Scaling Policies](docs/basic-usage/scaling-policies.md).
+
 ## Events
 
-Subscribe to scaling events:
+All events live in `Cbox\LaravelQueueAutoscale\Events`.
 
-### ScalingDecisionMade
+| Event | Properties |
+| --- | --- |
+| `ScalingDecisionMade` | `decision` |
+| `SlaBreachPredicted` | `decision` |
+| `WorkersScaled` | `connection`, `queue`, `from`, `to`, `action`, `reason` |
+| `SlaBreached` | `connection`, `queue`, `oldestJobAge`, `slaTarget`, `pending`, `activeWorkers` |
+| `SlaRecovered` | `connection`, `queue`, `currentJobAge`, `slaTarget`, `pending`, `activeWorkers` |
+| `FuseTripped` | `connection`, `queue`, `failureRate`, `samples`, `failures`, `thresholdPercent`, `heldAtWorkers` |
+| `FuseProbing` | `connection`, `queue`, `probeWorkers`, `cooldownSeconds` |
+| `FuseRecovered` | `connection`, `queue`, `failureRate`, `samples` |
+| `AutoscaleManagerStarted` | `managerId`, `host`, `clusterEnabled`, `clusterId`, `intervalSeconds`, `startedAt`, `packageVersion` |
+| `AutoscaleManagerStopped` | `managerId`, `host`, `clusterEnabled`, `clusterId`, `startedAt`, `stoppedAt`, `reason`, `workerCount`, `packageVersion` |
+| `ClusterLeaderChanged` | `clusterId`, `previousLeaderId`, `currentLeaderId`, `observedByManagerId`, `changedAt` |
+| `ClusterManagerPresenceChanged` | `clusterId`, `managerIds`, `addedManagerIds`, `removedManagerIds`, `leaderId`, `observedByManagerId`, `observedAt` |
+| `ClusterSummaryPublished` | `clusterId`, `leaderId`, `summary`, `publishedAt` |
 
 ```php
 use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
 
-Event::listen(ScalingDecisionMade::class, function (ScalingDecisionMade $event) {
+Event::listen(ScalingDecisionMade::class, function (ScalingDecisionMade $event): void {
     $decision = $event->decision;
 
     Log::info('Scaling decision', [
         'queue' => $decision->queue,
         'current' => $decision->currentWorkers,
         'target' => $decision->targetWorkers,
+        'action' => $decision->action(),   // 'scale_up' | 'scale_down' | 'hold'
         'reason' => $decision->reason,
     ]);
 });
-```
 
-### WorkersScaled
-
-```php
-use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
-
-Event::listen(WorkersScaled::class, function (WorkersScaled $event) {
+Event::listen(WorkersScaled::class, function (WorkersScaled $event): void {
     Metrics::gauge('queue.workers', $event->to, [
         'queue' => $event->queue,
-        'action' => $event->action, // 'scaled_up' or 'scaled_down'
+        'action' => $event->action,        // 'up' | 'down'
     ]);
 });
 ```
 
-### SlaBreachPredicted
+`WorkersScaled::$action` is the literal string `'up'` or `'down'`. `ScalingDecision::action()` uses a
+different vocabulary (`'scale_up'`, `'scale_down'`, `'hold'`) — do not mix them up. There is no
+`confidence` property on `ScalingDecision`, and no worker-health event.
 
-```php
-use Cbox\LaravelQueueAutoscale\Events\SlaBreachPredicted;
+See [Event Handling](docs/basic-usage/event-handling.md).
 
-Event::listen(SlaBreachPredicted::class, function (SlaBreachPredicted $event) {
-    $decision = $event->decision;
+## Running as a Daemon
 
-    // Alert when pickup time is predicted to exceed SLA
-    if ($decision->isSlaBreachRisk()) {
-        PagerDuty::alert("SLA breach predicted for {$decision->queue}");
-    }
-});
-```
-
-## Advanced Usage
-
-### Running as Daemon
-
-Use Supervisor to keep the autoscaler running:
+The manager is a long-running process. Run exactly one per app in single-host mode, and exactly one
+per host in cluster mode. Use Supervisor to keep it alive:
 
 ```ini
 [program:queue-autoscale]
-command=php /path/to/artisan queue:autoscale
+command=php /path/to/artisan queue:autoscale --interval=5
 directory=/path/to/project
 user=www-data
 autostart=true
 autorestart=true
+stopsignal=TERM
 redirect_stderr=true
 stdout_logfile=/path/to/logs/autoscale.log
 ```
 
-On deploy, restart the manager through Artisan so it can drain workers before Supervisor starts it again from the new release:
+On deploy, restart it through Artisan so it drains its workers before Supervisor starts the new
+release:
 
 ```bash
 php artisan queue:autoscale:restart
 ```
 
-### Custom Evaluation Interval
+With `manager.honor_queue_restart` enabled (the default), a plain `php artisan queue:restart` also
+stops the manager gracefully, so a standard deploy pipeline needs no extra step.
 
-```bash
-php artisan queue:autoscale --interval=10
-```
-
-Default is 5 seconds between evaluations.
-
-### Debugging
-
-Enable detailed logging:
-
-```php
-'log_channel' => 'stack', // Use your preferred channel
-```
-
-View scaling decisions:
-
-```bash
-tail -f storage/logs/laravel.log | grep autoscale
-```
+See [Deployment](docs/deployment/_index.md) for Forge, Ploi, Docker and self-hosted recipes.
 
 ## Metrics Integration
 
-**This package does NOT discover queues or collect metrics itself.** All queue discovery and metrics collection is delegated to [`laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics):
+**This package does not discover queues or collect metrics itself.** Both come from
+[`laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics):
 
 ```php
-use Cbox\LaravelQueueMetrics\QueueMetrics;
+use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
 
-// The ONLY source of queue data for autoscaling
-$allQueues = QueueMetrics::getAllQueuesWithMetrics();
+$metrics = QueueMetrics::getQueueMetrics('redis', 'payments');
 
-foreach ($allQueues as $queue) {
-    echo "Queue: {$queue->connection}/{$queue->queue}\n";
-    echo "Processing Rate: {$queue->processingRate} jobs/sec\n";
-    echo "Backlog: {$queue->depth->pending} jobs\n";
-    echo "Oldest Job: {$queue->depth->oldestJobAgeSeconds}s\n";
-    echo "Trend: {$queue->trend->direction}\n";
-}
+echo "Queue: {$metrics->connection}/{$metrics->queue}\n";
+echo "Pending: {$metrics->pending} jobs\n";
+echo "Oldest job age: {$metrics->oldestJobAge}s\n";
+echo "Throughput: {$metrics->throughputPerMinute} jobs/min\n";
+echo "Avg duration: {$metrics->avgDuration}\n";
+echo "Active workers: {$metrics->activeWorkers}\n";
 ```
 
-**Package Responsibilities:**
+`QueueMetrics::getAllQueuesWithMetrics()` returns a keyed array of raw metric arrays; use
+`getQueueMetrics()` when you want the `QueueMetricsData` object.
 
-### [laravel-queue-metrics](https://github.com/cboxdk/laravel-queue-metrics) (dependency)
-- ✅ Scans all configured queue connections
-- ✅ Discovers active queues
-- ✅ Collects queue depth and age metrics
-- ✅ Calculates processing rates
-- ✅ Analyzes trends and forecasts
+**Division of responsibility**
 
-### laravel-queue-autoscale (this package)
-- ✅ Applies scaling algorithms (Little's Law, Trend Prediction, Backlog Drain)
-- ✅ Makes SLA-based scaling decisions
-- ✅ Manages worker pool lifecycle (spawn/terminate)
-- ✅ Enforces resource constraints (CPU/memory limits)
-- ✅ Executes scaling policies and broadcasts events
+| [laravel-queue-metrics](https://github.com/cboxdk/laravel-queue-metrics) | laravel-queue-autoscale |
+| --- | --- |
+| Scans configured queue connections | Applies the scaling algorithms |
+| Discovers active queues | Makes SLA-based scaling decisions |
+| Collects depth, age and duration metrics | Manages the worker pool lifecycle |
+| Calculates throughput and failure rates | Enforces CPU/memory constraints |
+| Tracks worker heartbeats | Runs policies and dispatches events |
 
 ## OpenTelemetry via laravel-telemetry
 
-When [`cboxdk/laravel-telemetry`](https://github.com/cboxdk/laravel-telemetry) is installed, the autoscaler automatically publishes its scaling signals — no configuration needed. Disable with `QUEUE_AUTOSCALE_TELEMETRY_ENABLED=false`.
+When [`cboxdk/laravel-telemetry`](https://github.com/cboxdk/laravel-telemetry) is installed, the
+autoscaler publishes its scaling signals automatically — no configuration needed. Disable with
+`QUEUE_AUTOSCALE_TELEMETRY_ENABLED=false`.
 
-`cboxdk/laravel-telemetry` requires Laravel 12+. This autoscaler package still supports Laravel 11, but the telemetry integration described below is simply unavailable there — `queue:autoscale:debug` reports `Telemetry: not installed` in that case.
+`cboxdk/laravel-telemetry` requires Laravel 12+. This package still supports Laravel 11, but the
+telemetry integration is simply unavailable there — `queue:autoscale:debug` reports
+`Telemetry: not installed` in that case.
 
 | Metric | Type | Unit | Labels |
 | --- | --- | --- | --- |
@@ -508,8 +547,10 @@ When [`cboxdk/laravel-telemetry`](https://github.com/cboxdk/laravel-telemetry) i
 | `queue_autoscale.sla.target` | gauge | `s` | `connection`, `queue` |
 | `queue_autoscale.sla.breach` | gauge | `1` | `connection`, `queue` |
 | `queue_autoscale.capacity.max_workers` | gauge | `{workers}` | `limiter` |
+| `queue_autoscale.fuse.state` | gauge | `1` | `connection`, `queue` |
 | `queue_autoscale.scaling.actions` | counter | `{actions}` | `connection`, `queue`, `direction` |
 | `queue_autoscale.sla.breaches` | counter | `{breaches}` | `connection`, `queue` |
+| `queue_autoscale.fuse.trips` | counter | `{trips}` | `connection`, `queue` |
 | `queue_autoscale.cluster.leader_changes` | counter | `{changes}` | — |
 | `queue_autoscale.cluster.managers` | gauge (observable) | `{managers}` | — |
 | `queue_autoscale.cluster.workers` | gauge (observable) | `{workers}` | — |
@@ -520,37 +561,27 @@ When [`cboxdk/laravel-telemetry`](https://github.com/cboxdk/laravel-telemetry) i
 | `queue_autoscale.cluster.host.workers` | gauge (observable) | `{workers}` | `host` |
 | `queue_autoscale.cluster.host.capacity` | gauge (observable) | `{workers}` | `host` |
 
-Scaling actions, SLA breaches/recoveries, manager start/stop and cluster leader changes are also emitted as structured OTLP events (`queue_autoscale.scaling.action`, `queue_autoscale.sla.breached`, …) carrying the full context (including the scaling `reason`, which is deliberately not a metric label).
+Scaling actions, SLA breaches and recoveries, fuse transitions, manager start/stop and cluster leader
+changes are also emitted as structured OTLP events (`queue_autoscale.scaling.action`,
+`queue_autoscale.sla.breached`, `queue_autoscale.fuse.tripped`, …) carrying the full context —
+including the scaling `reason`, which is deliberately not a metric label.
 
-Deliberately **not** exported: queue depth, oldest-job age, health scores, worker busy/idle state and job baselines (owned by `cboxdk/laravel-queue-metrics`), and per-job durations/outcomes (covered by laravel-telemetry's own queue instrumentation). There is no active-worker gauge here — queue-metrics' own telemetry integration (its `queue_metrics.queue.active_workers` gauge, available from the queue-metrics release that ships telemetry support) is the one to join against `queue_autoscale.workers.target` in your dashboards. Spawn-latency gauges are a possible future addition.
+Deliberately **not** exported: queue depth, oldest-job age, health scores, worker busy/idle state and
+job baselines (owned by `cboxdk/laravel-queue-metrics`), and per-job durations/outcomes (covered by
+laravel-telemetry's own queue instrumentation). There is no active-worker gauge here —
+queue-metrics' `queue_metrics.queue.active_workers` gauge is the one to join against
+`queue_autoscale.workers.target` in your dashboards.
 
-Note: metrics are shipped to your OTLP endpoint by the telemetry package's `telemetry:flush` (cron or `--daemon`) — make sure one is scheduled.
-
-## Comparison with Horizon
-
-| Feature | Laravel Horizon | Queue Autoscale |
-|---------|----------------|-----------------|
-| **Scaling Logic** | Manual supervisor config | Automatic predictive |
-| **Optimization Goal** | Worker count targets | SLA/SLO targets |
-| **Algorithm** | Static configuration | Hybrid (Little's Law + Trend + Backlog) |
-| **Resource Awareness** | No | Yes (CPU/memory limits) |
-| **Queue Discovery** | Manual queue config | Via metrics package |
-| **Prediction** | Reactive only | Proactive trend-based |
-| **SLA Protection** | No | Yes (breach prevention) |
-| **Extensibility** | Limited | Full (strategies, policies) |
+Metrics are shipped to your OTLP endpoint by the telemetry package's `telemetry:flush` (cron or
+`--daemon`) — make sure one is scheduled.
 
 ## Testing
 
-Run the test suite:
-
 ```bash
-composer test
-```
-
-Run with coverage:
-
-```bash
-composer test:coverage
+composer test              # run the suite
+composer test-coverage     # run with coverage
+composer analyse           # PHPStan / Larastan
+vendor/bin/pint            # code style
 ```
 
 ## Changelog
@@ -559,11 +590,15 @@ Please see [CHANGELOG](CHANGELOG.md) for recent changes.
 
 ## Contributing
 
-Please see [Contributing Guide](docs/advanced-usage/contributing.md) for details.
+Please see the [Contributing Guide](docs/advanced-usage/contributing.md) for details.
 
 ## Security
 
-If you discover any security related issues, please email security@cbox.dk instead of using the issue tracker.
+Please report security issues privately through
+[GitHub Private Vulnerability Reporting](https://github.com/cboxdk/laravel-queue-autoscale/security/advisories/new)
+rather than the public issue tracker. This is a community-maintained package; reports are handled on
+a best-effort basis, and fixes land on the current major line. See
+[Security](docs/advanced-usage/security.md).
 
 ## Credits
 
@@ -574,22 +609,25 @@ If you discover any security related issues, please email security@cbox.dk inste
 
 ### Documentation
 
-- **[Architecture](docs/algorithms/architecture.md)** - Deep dive into the hybrid predictive algorithm, queueing theory, and system design
-- **[Troubleshooting](docs/basic-usage/troubleshooting.md)** - Common issues, debugging tips, and solutions
-- **[examples/README.md](examples/README.md)** - Practical examples and templates for custom strategies and policies
+- **[Introduction](docs/index.md)** — what the package is and when to reach for it
+- **[Quick Start](docs/quickstart.md)** — one queue autoscaled in five minutes
+- **[Installation](docs/basic-usage/installation.md)** — full install and configuration walkthrough
+- **[Architecture](docs/algorithms/architecture.md)** — deep dive into the algorithms and system design
+- **[Troubleshooting](docs/basic-usage/troubleshooting.md)** — common issues and debugging
+- **[examples/README.md](examples/README.md)** — templates for custom strategies and policies
 
 ### Examples
 
-- **Custom Strategies**
-  - [TimeBasedStrategy](examples/Strategies/TimeBasedStrategy.php) - Scale workers based on time-of-day patterns
-  - [CostOptimizedStrategy](examples/Strategies/CostOptimizedStrategy.php) - Prioritize cost efficiency with conservative scaling
+- **Custom strategies**
+  - [TimeBasedStrategy](examples/Strategies/TimeBasedStrategy.php) — scale on time-of-day patterns
+  - [CostOptimizedStrategy](examples/Strategies/CostOptimizedStrategy.php) — conservative scaling
+- **Custom policies**
+  - [SlackNotificationPolicy](examples/Policies/SlackNotificationPolicy.php) — Slack alerts on scaling events
+  - [MetricsLoggingPolicy](examples/Policies/MetricsLoggingPolicy.php) — log detailed metrics to a dedicated file
 
-- **Custom Policies**
-  - [SlackNotificationPolicy](examples/Policies/SlackNotificationPolicy.php) - Send Slack alerts on scaling events
-  - [MetricsLoggingPolicy](examples/Policies/MetricsLoggingPolicy.php) - Log detailed metrics to dedicated file
-
-- **Configuration Patterns**
-  - [config-examples.php](examples/config-examples.php) - 8 real-world configuration examples for different use cases
+> `examples/config-examples.php` is written against the current schema. The strategy and policy
+> classes implement the real contracts and are meant to be adapted, not dropped in as-is. The
+> authoritative reference is [the documentation](docs/index.md).
 
 ## License
 

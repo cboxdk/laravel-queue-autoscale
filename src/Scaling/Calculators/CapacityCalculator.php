@@ -6,15 +6,16 @@ namespace Cbox\LaravelQueueAutoscale\Scaling\Calculators;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\ResourceEstimate;
+use Cbox\SystemMetrics\DTO\Metrics\Cpu\CpuSnapshot;
 use Cbox\SystemMetrics\SystemMetrics;
 
 class CapacityCalculator
 {
     /**
-     * Cached system metrics to avoid repeated blocking measurements within
-     * the same evaluation tick. CPU measurement blocks for 1 second, so
-     * calling it once per queue would waste 1s * N queues per tick.
+     * Cached system metrics so a tick that evaluates many queues reads the
+     * host once rather than once per queue.
      */
     private ?float $cachedCpuPercent = null;
 
@@ -25,6 +26,12 @@ class CapacityCalculator
     private ?float $cachedAvailableCores = null;
 
     private ?float $cacheTimestamp = null;
+
+    /**
+     * Previous CPU counter snapshot, diffed against the current one to get a
+     * usage percentage without sleeping. See measureCpuPercent().
+     */
+    private ?CpuSnapshot $previousCpuSnapshot = null;
 
     /**
      * How long cached metrics remain valid (seconds).
@@ -38,8 +45,8 @@ class CapacityCalculator
      * Analyzes CPU and memory constraints separately and returns
      * comprehensive breakdown showing which factor is limiting.
      *
-     * System metrics are cached per evaluation tick to avoid redundant
-     * blocking measurements when evaluating multiple queues.
+     * System metrics are cached per evaluation tick, so evaluating many
+     * queues reads the host once.
      *
      * @param  int  $currentWorkers  Total workers currently running across all queues (for accurate capacity math)
      * @return CapacityCalculationResult Detailed capacity analysis with system-wide max workers
@@ -58,7 +65,7 @@ class CapacityCalculator
                 maxWorkersByMemory: 5,
                 maxWorkersByConfig: PHP_INT_MAX,
                 finalMaxWorkers: 5,
-                limitingFactor: 'system_metrics_unavailable',
+                limitingFactor: LimitingFactor::SystemMetricsUnavailable,
                 details: [
                     'cpu_explanation' => 'system metrics unavailable - using fallback',
                     'memory_explanation' => 'system metrics unavailable - using fallback',
@@ -101,9 +108,9 @@ class CapacityCalculator
         $finalMaxWorkers = max(min($maxWorkersByCpu, $maxWorkersByMemory), 0);
 
         $limitingFactor = match (true) {
-            $maxWorkersByCpu < $maxWorkersByMemory => 'cpu',
-            $maxWorkersByMemory < $maxWorkersByCpu => 'memory',
-            default => 'balanced', // Both are equal
+            $maxWorkersByCpu < $maxWorkersByMemory => LimitingFactor::Cpu,
+            $maxWorkersByMemory < $maxWorkersByCpu => LimitingFactor::Memory,
+            default => LimitingFactor::Balanced,
         };
 
         // Build detailed explanation
@@ -158,6 +165,53 @@ class CapacityCalculator
         $this->cacheTimestamp = null;
     }
 
+    /**
+     * CPU usage since the previous evaluation tick.
+     *
+     * CPU counters are cumulative, so a usage percentage needs two snapshots
+     * with time between them. SystemMetrics::cpuUsage() gets that time by
+     * sleeping — a full blocking second inside the manager's control loop,
+     * every cycle. On the default 5-second interval that burned a fifth of the
+     * manager's wall clock and left every scaling decision computed from
+     * metrics a second out of date, while making intervals below ~1.5s
+     * impossible.
+     *
+     * Holding the previous snapshot gets the same measurement for free: the
+     * gap between ticks is both cheaper AND a longer, steadier sample window
+     * than the one-second sleep it replaces.
+     *
+     * The first tick of a process has nothing to diff against, so it falls
+     * back to the neutral 50% the failure path already used rather than
+     * reintroducing the sleep. One slightly-off cycle at start-up is a better
+     * trade than a permanent per-cycle stall.
+     */
+    private function measureCpuPercent(): float
+    {
+        $snapshotResult = SystemMetrics::cpu();
+
+        if ($snapshotResult->isFailure()) {
+            return $this->cachedCpuPercent ?? 50.0;
+        }
+
+        $snapshot = $snapshotResult->getValue();
+        $previous = $this->previousCpuSnapshot;
+        $this->previousCpuSnapshot = $snapshot;
+
+        if ($previous === null) {
+            return 50.0;
+        }
+
+        $delta = CpuSnapshot::calculateDelta($previous, $snapshot);
+
+        // Two snapshots taken within the same instant carry no signal; keep the
+        // last known value rather than reporting a meaningless 0%.
+        if ($delta->durationSeconds <= 0.0) {
+            return $this->cachedCpuPercent ?? 50.0;
+        }
+
+        return $delta->usagePercentage();
+    }
+
     private function isCacheValid(): bool
     {
         if ($this->cacheTimestamp === null) {
@@ -184,11 +238,7 @@ class CapacityCalculator
         $this->cachedAvailableCores = $limits->availableCpuCores();
         $this->cachedTotalMemoryMb = $limits->availableMemoryBytes() / (1024 * 1024);
 
-        // CPU measurement - this is the expensive blocking call (1 second)
-        $cpuUsageResult = SystemMetrics::cpuUsage(1.0);
-        $this->cachedCpuPercent = $cpuUsageResult->isSuccess()
-            ? $cpuUsageResult->getValue()->usagePercentage()
-            : 50.0;
+        $this->cachedCpuPercent = $this->measureCpuPercent();
 
         // Memory measurement
         $memoryResult = SystemMetrics::memory();

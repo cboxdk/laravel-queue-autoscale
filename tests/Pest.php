@@ -1,6 +1,7 @@
 <?php
 
 use Cbox\LaravelQueueAutoscale\Configuration\ForecastConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\FuseConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\SlaConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
@@ -35,6 +36,7 @@ uses()
  * - slaPercentile  → sla.percentile          (default 95)
  * - minWorkers     → workers.min             (default 1)
  * - maxWorkers     → workers.max             (default 10)
+ * - fuse           → array merged over the default FuseConfiguration args
  *
  * Any key not listed above is ignored.
  */
@@ -46,6 +48,14 @@ function makeQueueConfig(array $overrides = []): QueueConfiguration
     $maxWorkers = (int) ($overrides['maxWorkers'] ?? 10);
     $connection = (string) ($overrides['connection'] ?? 'redis');
     $queue = (string) ($overrides['queue'] ?? 'default');
+
+    $fuse = array_merge([
+        'enabled' => true,
+        'failureThresholdPercent' => 50.0,
+        'minSamples' => 20,
+        'windowSeconds' => 60,
+        'cooldownSeconds' => 60,
+    ], $overrides['fuse'] ?? []);
 
     return new QueueConfiguration(
         connection: $connection,
@@ -75,6 +85,13 @@ function makeQueueConfig(array $overrides = []): QueueConfiguration
             timeoutSeconds: 3600,
             sleepSeconds: 3,
             shutdownTimeoutSeconds: 30,
+        ),
+        fuse: new FuseConfiguration(
+            enabled: (bool) $fuse['enabled'],
+            failureThresholdPercent: (float) $fuse['failureThresholdPercent'],
+            minSamples: (int) $fuse['minSamples'],
+            windowSeconds: (int) $fuse['windowSeconds'],
+            cooldownSeconds: (int) $fuse['cooldownSeconds'],
         ),
     );
 }

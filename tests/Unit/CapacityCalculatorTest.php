@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\ResourceEstimate;
 
 /**
@@ -22,7 +23,7 @@ it('returns capacity calculation result with detailed breakdown', function () {
         ->and($result->maxWorkersByCpu)->toBeInt()
         ->and($result->maxWorkersByMemory)->toBeInt()
         ->and($result->maxWorkersByConfig)->toBeInt()
-        ->and($result->limitingFactor)->toBeString();
+        ->and($result->limitingFactor)->toBeInstanceOf(LimitingFactor::class);
 });
 
 it('returns conservative fallback when system metrics fail', function () {
@@ -80,7 +81,7 @@ it('identifies limiting factor correctly', function () {
     $result = $calculator->calculateMaxWorkers(0, ResourceEstimate::globalDefault());
 
     // Limiting factor should be one of: cpu, memory, balanced
-    expect($result->limitingFactor)->toBeIn(['cpu', 'memory', 'balanced']);
+    expect($result->limitingFactor)->toBeIn([LimitingFactor::Cpu, LimitingFactor::Memory, LimitingFactor::Balanced]);
 });
 
 it('provides helper methods for limiting factor checks', function () {
@@ -89,7 +90,7 @@ it('provides helper methods for limiting factor checks', function () {
     $result = $calculator->calculateMaxWorkers(0, ResourceEstimate::globalDefault());
 
     // One of the helper methods should return true (unless 'balanced')
-    if ($result->limitingFactor !== 'balanced') {
+    if ($result->limitingFactor !== LimitingFactor::Balanced) {
         $hasLimitingFactorTrue = $result->isCpuLimited() || $result->isMemoryLimited();
         expect($hasLimitingFactorTrue)->toBeTrue();
     }
@@ -198,20 +199,11 @@ it('uses different estimates producing different results', function () {
 it('caches system metrics across consecutive calls within TTL', function () {
     $calculator = new CapacityCalculator;
 
-    // First call - measures system metrics (expensive, ~1s for CPU)
-    $start = microtime(true);
     $result1 = $calculator->calculateMaxWorkers(5, ResourceEstimate::globalDefault());
-    $firstCallDuration = microtime(true) - $start;
-
-    // Second call - should use cached metrics (fast)
-    $start = microtime(true);
     $result2 = $calculator->calculateMaxWorkers(5, ResourceEstimate::globalDefault());
-    $secondCallDuration = microtime(true) - $start;
 
-    // Second call should be significantly faster (cached, no 1s CPU measurement)
-    expect($secondCallDuration)->toBeLessThan($firstCallDuration)
-        // Results should be consistent (same cached metrics)
-        ->and($result1->details['cpu_details']['current_cpu_percent'])
+    // Both calls read the same cached host measurement.
+    expect($result1->details['cpu_details']['current_cpu_percent'])
         ->toBe($result2->details['cpu_details']['current_cpu_percent'])
         ->and($result1->details['memory_details']['current_memory_percent'])
         ->toBe($result2->details['memory_details']['current_memory_percent']);
@@ -220,20 +212,42 @@ it('caches system metrics across consecutive calls within TTL', function () {
 it('invalidates cache when explicitly requested', function () {
     $calculator = new CapacityCalculator;
 
-    // First call caches metrics
     $calculator->calculateMaxWorkers(0, ResourceEstimate::globalDefault());
-
-    // Invalidate the cache
     $calculator->invalidateCache();
 
-    // Next call should refresh metrics (will take ~1s for CPU measurement)
+    expect($calculator->calculateMaxWorkers(0, ResourceEstimate::globalDefault()))
+        ->toBeInstanceOf(CapacityCalculationResult::class);
+});
+
+it('never blocks the evaluation loop to sample CPU', function () {
+    // CPU usage is derived by diffing against the previous tick's snapshot
+    // rather than by sleeping between two of its own. A sleeping sample cost
+    // a full second of every manager cycle and made short intervals
+    // impossible; this asserts the sleep cannot come back unnoticed.
+    $calculator = new CapacityCalculator;
+
     $start = microtime(true);
-    $result = $calculator->calculateMaxWorkers(0, ResourceEstimate::globalDefault());
+    $calculator->calculateMaxWorkers(0, ResourceEstimate::globalDefault());
+    $calculator->invalidateCache();
+    $calculator->calculateMaxWorkers(0, ResourceEstimate::globalDefault());
     $duration = microtime(true) - $start;
 
-    expect($result)->toBeInstanceOf(CapacityCalculationResult::class)
-        // Should have taken measurable time for fresh CPU measurement
-        ->and($duration)->toBeGreaterThan(0.5);
+    expect($duration)->toBeLessThan(0.5);
+});
+
+it('reports a real CPU percentage once it has two snapshots to diff', function () {
+    $calculator = new CapacityCalculator;
+
+    // The first tick of a process has nothing to diff against and reports the
+    // neutral fallback; the second measures the interval between them.
+    $calculator->calculateMaxWorkers(0, ResourceEstimate::globalDefault());
+    $calculator->invalidateCache();
+    $result = $calculator->calculateMaxWorkers(0, ResourceEstimate::globalDefault());
+
+    $cpu = $result->details['cpu_details']['current_cpu_percent'];
+
+    expect($cpu)->toBeGreaterThanOrEqual(0.0)
+        ->and($cpu)->toBeLessThanOrEqual(100.0);
 });
 
 it('includes memory_estimate_source in memory_details', function () {

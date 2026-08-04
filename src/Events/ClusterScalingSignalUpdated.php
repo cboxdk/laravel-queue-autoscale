@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Events;
 
-final readonly class ClusterScalingSignalUpdated
+readonly class ClusterScalingSignalUpdated
 {
     public function __construct(
         public string $clusterId,

@@ -7,7 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Output\Renderers;
 use Cbox\LaravelQueueAutoscale\Output\Contracts\OutputRendererContract;
 use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\OutputData;
 
-final class QuietOutputRenderer implements OutputRendererContract
+class QuietOutputRenderer implements OutputRendererContract
 {
     public function initialize(): void
     {

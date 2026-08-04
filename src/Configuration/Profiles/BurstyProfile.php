@@ -8,7 +8,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ProfileContract;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\AggressiveForecastPolicy;
 
-final readonly class BurstyProfile implements ProfileContract
+readonly class BurstyProfile implements ProfileContract
 {
     public function resolve(): array
     {
@@ -38,6 +38,13 @@ final readonly class BurstyProfile implements ProfileContract
                 'fallback_seconds' => 2.0,
                 'min_samples' => 5,
                 'ema_alpha' => 0.2,
+            ],
+            'fuse' => [
+                'enabled' => true,
+                'failure_threshold_percent' => 50.0,
+                'min_samples' => 20,
+                'window_seconds' => 120,
+                'cooldown_seconds' => 60,
             ],
         ];
     }

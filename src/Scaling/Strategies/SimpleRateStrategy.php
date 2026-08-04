@@ -24,7 +24,7 @@ use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
  * - Strict SLA requirements
  * - Workloads requiring proactive scaling
  */
-final class SimpleRateStrategy implements ScalingStrategyContract
+class SimpleRateStrategy implements ScalingStrategyContract
 {
     /**
      * @var array<string, float|int|string>

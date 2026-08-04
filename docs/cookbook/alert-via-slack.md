@@ -18,7 +18,7 @@ Send SLA breach and recovery notifications to a Slack channel with one incoming-
 
 `.env`:
 
-```
+```env
 QUEUE_ALERTS_SLACK_WEBHOOK=https://hooks.slack.com/services/T00/B00/xxx
 ```
 

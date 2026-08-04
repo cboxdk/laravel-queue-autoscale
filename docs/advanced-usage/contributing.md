@@ -1,6 +1,6 @@
 ---
 title: "Contributing"
-description: "Guidelines for contributing to Queue Autoscale for Laravel development"
+description: "Development setup, coding standards and the quality gate for contributing to Queue Autoscale for Laravel"
 weight: 34
 ---
 
@@ -8,9 +8,7 @@ weight: 34
 
 First off, thank you for considering contributing to Queue Autoscale for Laravel! It's people like you that make this package better for everyone.
 
-## Code of Conduct
-
-This project adheres to a code of conduct. By participating, you are expected to uphold this code. Please report unacceptable behavior to security@cbox.dk.
+Security issues are the one exception to "open an issue" — report those privately, as described in [Security](security.md).
 
 ## How Can I Contribute?
 
@@ -18,49 +16,29 @@ This project adheres to a code of conduct. By participating, you are expected to
 
 Before creating bug reports, please check the existing issues to avoid duplicates. When creating a bug report, include as many details as possible:
 
-**Bug Report Template:**
-```markdown
-**Describe the bug**
-A clear description of what the bug is.
+The repository has a **Bug Report** issue form that prompts for most of this. Whatever the form
+asks, a good autoscaler bug report also includes:
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Configure with '...'
-2. Run command '...'
-3. Observe error '...'
-
-**Expected behavior**
-What you expected to happen.
-
-**Environment:**
-- PHP version: [e.g., 8.2.10]
-- Laravel version: [e.g., 11.0]
-- Package version: [e.g., 0.1.0]
-- Queue driver: [e.g., redis, database]
-
-**Configuration:**
-```php
-// Your config/queue-autoscale.php relevant sections
-```
-
-**Logs:**
-```
-Relevant log excerpts
-```
-
-**Additional context**
-Any other information about the problem.
-```
+- **What happened** and what you expected instead
+- **Reproduction steps** — the config, the command you ran, and what you observed
+- **Environment** — PHP version, Laravel version, package version, queue driver, metrics storage
+  (`redis` or `database`), and whether cluster mode is enabled
+- **The relevant part of `config/queue-autoscale.php`** — especially `sla_defaults`, the `queues`
+  entry involved, `strategy`, `policies` and `limits`
+- **Log excerpts** from the channel named by `queue-autoscale.manager.log_channel`
+- **`php artisan queue:autoscale:debug --queue=<queue>` output**, which shows what the autoscaler
+  actually sees for that queue
+- **`php artisan queue:autoscale -vvv` output** for a few cycles when the problem is a scaling
+  decision — the `-vvv` capacity breakdown explains which constraint bound the target
 
 ### Suggesting Enhancements
 
-Enhancement suggestions are tracked as GitHub issues. When creating an enhancement suggestion, include:
+Feature ideas go to GitHub Discussions (the *Ideas* category) — the issue form links there. Include:
 
-- **Clear title** describing the enhancement
-- **Use case** explaining why this enhancement would be useful
-- **Proposed solution** if you have one in mind
-- **Alternatives considered**
-- **Code examples** if applicable
+- A **clear title** describing the enhancement
+- The **use case** — what workload shape makes this necessary
+- A **proposed solution** if you have one
+- **Alternatives considered**, including whether a custom strategy or policy already solves it
 
 ### Pull Requests
 
@@ -82,7 +60,7 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 
 ### Prerequisites
 
-- PHP 8.2 or higher
+- PHP 8.3, 8.4 or 8.5 with the `pcntl` and `posix` extensions
 - Composer
 - Git
 
@@ -108,34 +86,36 @@ composer format
 
 ### Running Tests
 
+The composer scripts are `test`, `test-coverage`, `analyse` and `format`:
+
 ```bash
 # Run all tests
 composer test
 
 # Run tests with coverage
-composer test:coverage
+composer test-coverage
 
-# Run specific test file
+# Run a specific file or filter
 ./vendor/bin/pest tests/Unit/ScalingEngineTest.php
-
-# Run tests in watch mode (if you have installed watch tools)
-./vendor/bin/pest --watch
+./vendor/bin/pest --filter="fuse"
 ```
+
+The suite uses Pest 4 on Orchestra Testbench. `tests/Pest.php` provides helpers for building a
+`QueueConfiguration` without hand-assembling every value object.
 
 ### Code Quality
 
-We maintain high code quality standards:
+Before opening a pull request:
 
 ```bash
-# PHPStan (static analysis)
+# Static analysis
 composer analyse
 
-# Laravel Pint (code formatting)
+# Formatting (fixes in place)
 composer format
-
-# Check formatting without fixing
-./vendor/bin/pint --test
 ```
+
+`vendor/bin/pint --dirty` formats only your changed files, which is usually what you want mid-branch.
 
 ## Coding Standards
 
@@ -150,9 +130,11 @@ composer format
 ### Laravel Conventions
 
 - Follow **Laravel** naming conventions
-- Use **Eloquent** best practices
-- Leverage **Service Container** for bindings
-- Follow **Spatie** package conventions
+- Leverage the **service container** for bindings; the service provider registers every collaborator
+  as a singleton so behaviour can be swapped by binding a contract
+- Read config through `AutoscaleConfiguration`, never `env()` outside `config/`
+- The package ships no Eloquent models — state lives in the cache/Redis stores and in memory on the
+  manager
 
 ### Testing Standards
 
@@ -164,41 +146,57 @@ composer format
 
 ### Documentation Standards
 
-- Update **README.md** for user-facing changes
+- Every page under `/docs` needs YAML frontmatter with `title`, `description` (60–160 characters)
+  and `weight`; titles must be unique across the site
+- Relative links between pages keep the `.md` extension
+- Every code fence declares a language
 - Update **[Architecture](../algorithms/architecture.md)** for algorithm changes
 - Add **[Troubleshooting](../basic-usage/troubleshooting.md)** entries for common issues
 - Include **PHPDoc blocks** for classes and public methods
-- Provide **code examples** in documentation
+- Every documented API must match the source. If a doc claims a class, method, flag, config key or
+  environment variable, open the file and check it before writing the sentence
 
 ## Project Structure
 
-```
+```text
 src/
-├── Commands/          # Artisan commands
-├── Configuration/     # Configuration classes
-├── Contracts/         # Interfaces
+├── Alerting/         # AlertRateLimiter
+├── Cluster/          # Leader election, heartbeats, cluster store
+├── Commands/         # Artisan commands
+├── Configuration/    # Config value objects and profiles
+├── Contracts/        # Interfaces
 ├── Events/           # Event classes
-├── Manager/          # Core autoscale manager
-├── Policies/         # Policy executor
-├── Scaling/          # Scaling engine and strategies
-│   ├── Calculators/  # Algorithm components
-│   └── Strategies/   # Scaling strategies
-└── Workers/          # Worker management
+├── Facades/          # LaravelQueueAutoscale facade
+├── Fuse/             # Failure fuse and failure-window stores
+├── Manager/          # AutoscaleManager evaluation loop, signal handling
+├── Output/           # Console renderers
+├── Pickup/           # Pickup-time stores and percentile calculators
+├── Policies/         # Shipped policies and PolicyExecutor
+├── Scaling/          # Scaling engine, decision, strategies
+│   ├── Calculators/  # Little's Law, backlog drain, capacity, forecaster
+│   ├── DTOs/         # Capacity and resource-estimate DTOs
+│   ├── Forecasting/  # Forecast policies
+│   └── Strategies/   # Hybrid, BacklogOnly, Conservative, SimpleRate
+├── Support/          # Process lock, restart signal
+├── Telemetry/        # Optional laravel-telemetry integration
+└── Workers/          # Spawner, terminator, pool, spawn-latency tracking
 
 tests/
-├── Unit/             # Unit tests
-└── Feature/          # Feature tests (if needed)
+├── Feature/
+├── Helpers/
+├── Simulation/       # End-to-end scaling simulations
+└── Unit/
 
-examples/             # Example implementations
-├── Strategies/       # Custom strategy examples
-└── Policies/         # Custom policy examples
+examples/             # Reference implementations
+├── Strategies/
+└── Policies/
 ```
 
 ## Commit Message Guidelines
 
 We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
-```
+```text
 <type>(<scope>): <subject>
 
 <body>
@@ -219,22 +217,22 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ### Examples
 
-```bash
+```text
 feat(scaling): add exponential backoff strategy
 
-Add new ExponentialBackoffStrategy that scales more conservatively
-by using exponential backoff when scaling up workers.
+Add ExponentialBackoffStrategy that ramps up more conservatively
+than HybridStrategy when the backlog is growing.
 
 Closes #123
 
 fix(workers): prevent worker spawn race condition
 
 Workers could spawn multiple times if evaluation cycles overlapped.
-Added mutex lock to prevent concurrent spawns.
+Added a lock to prevent concurrent spawns.
 
 Fixes #456
 
-docs(readme): add troubleshooting section for Horizon conflicts
+docs(policies): document the 25% ConservativeScaleDownPolicy limit
 
 test(engine): add tests for capacity constraint edge cases
 ```
@@ -244,10 +242,12 @@ test(engine): add tests for capacity constraint edge cases
 Maintainers follow this process for releases:
 
 1. Update `CHANGELOG.md` with release notes
-2. Update version in `composer.json`
-3. Create git tag: `git tag v1.0.0`
-4. Push tag: `git push origin v1.0.0`
-5. GitHub Actions automatically publishes to Packagist
+2. Create the git tag on the v3 line: `git tag v3.x.y`
+3. Push the tag: `git push origin v3.x.y`
+4. Publish the GitHub release; Packagist picks it up from the repository
+
+The package version is not stored in `composer.json` — it is derived from the git tag. CI covers
+tests, PHPStan and Pint style fixes; there is no publishing workflow in `.github/workflows/`.
 
 ## Architecture Guidelines
 
@@ -264,18 +264,26 @@ When creating new scaling strategies:
 
 Example:
 ```php
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
+
 class MyStrategy implements ScalingStrategyContract
 {
     private string $lastReason = 'No calculation performed yet';
+
     private ?float $lastPrediction = null;
 
-    public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
+    public function calculateTargetWorkers(QueueMetricsData $metrics, QueueConfiguration $config): int
     {
-        // Your logic here
-        $this->lastReason = 'Clear explanation of decision';
-        $this->lastPrediction = $backlog > 0 ? $backlog / $workers : 0.0;
+        $targetWorkers = $this->calculate($metrics, $config);
 
-        return max(0, (int) ceil($targetWorkers));
+        $this->lastReason = 'Clear explanation of the decision';
+        $this->lastPrediction = $metrics->pending > 0 && $targetWorkers > 0
+            ? ($metrics->pending / $targetWorkers) * $metrics->avgDuration
+            : 0.0;
+
+        return max($config->workers->min, min($config->workers->max, $targetWorkers));
     }
 
     public function getLastReason(): string
@@ -290,53 +298,66 @@ class MyStrategy implements ScalingStrategyContract
 }
 ```
 
+`$metrics->avgDuration` is in **seconds** by the time a strategy sees it — `AutoscaleManager`
+converts from the metrics package's milliseconds. See
+[Custom Strategies](custom-strategies.md) for the full DTO shape.
+
 ### Scaling Policy Development
 
 When creating new scaling policies:
 
-1. **Implement ScalingPolicy interface**
-2. **Be idempotent**: Handle multiple calls safely
-3. **Fail silently**: Don't disrupt autoscaling on errors
-4. **Log errors**: Track failures for debugging
-5. **Keep it fast**: Avoid blocking operations
-6. **Clean up resources**: Prevent memory leaks
+1. **Implement the `ScalingPolicy` interface** — the hooks are `beforeScaling(ScalingDecision): ?ScalingDecision` and `afterScaling(ScalingDecision): void`
+2. **Return `null` when you have no opinion** — returning a decision replaces it for every later policy
+3. **Copy every field you are not deliberately changing** when rebuilding a decision, including `capacity` and `spawnCompensation`
+4. **Be idempotent**: the hooks run on every evaluation cycle
+5. **Keep it fast**: they run inline in the manager's tick
+6. **Let `PolicyExecutor` handle failures**: it already catches and logs `Throwable` from both hooks
 
 Example:
 ```php
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
+
 class MyPolicy implements ScalingPolicy
 {
-    public function before(ScalingDecision $decision): void
+    public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
     {
-        try {
-            // Preparation logic
-        } catch (\Exception $e) {
-            logger()->warning('Policy before failed', ['error' => $e->getMessage()]);
+        if (! $decision->shouldScaleDown()) {
+            return null;
         }
+
+        return new ScalingDecision(
+            connection: $decision->connection,
+            queue: $decision->queue,
+            currentWorkers: $decision->currentWorkers,
+            targetWorkers: max($decision->targetWorkers, 1),
+            reason: 'MyPolicy kept one worker (original: '.$decision->reason.')',
+            predictedPickupTime: $decision->predictedPickupTime,
+            slaTarget: $decision->slaTarget,
+            capacity: $decision->capacity,
+            spawnCompensation: $decision->spawnCompensation,
+        );
     }
 
-    public function after(ScalingDecision $decision): void
+    public function afterScaling(ScalingDecision $decision): void
     {
-        try {
-            // Cleanup/notification logic
-        } catch (\Exception $e) {
-            logger()->warning('Policy after failed', ['error' => $e->getMessage()]);
-        }
+        // Side effects only — the decision is final at this point.
     }
 }
 ```
 
+See [Policy Execution Internals](scaling-policies.md) for chaining, error isolation and the shipped
+policy implementations.
+
 ## Questions?
 
-Feel free to:
-- Open an issue for discussion
+- Open a GitHub issue for discussion
 - Ask in pull request comments
-- Email: info@cbox.dk
+- Report security problems privately — see [Security](security.md)
 
 ## Recognition
 
-Contributors will be recognized in:
-- README.md credits section
-- GitHub contributors page
-- Release notes for significant contributions
+Contributors are recognised on the GitHub contributors page and in the release notes for significant
+contributions.
 
-Thank you for contributing! 🎉
+Thank you for contributing!

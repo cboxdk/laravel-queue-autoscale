@@ -20,7 +20,7 @@ use Illuminate\Queue\SerializesModels;
  * - Escalate to incident management systems
  * - Track SLA compliance metrics
  */
-final class SlaBreached
+class SlaBreached
 {
     use Dispatchable;
     use InteractsWithSockets;

@@ -12,7 +12,7 @@ Email SLA breaches to one or more addresses via Laravel's built-in notification 
 
 `.env`:
 
-```
+```env
 QUEUE_ALERTS_EMAIL=oncall@example.com
 ```
 

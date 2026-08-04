@@ -18,7 +18,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ForecastPolicyContract;
  * This is crucial because Little's Law requires arrival rate, not processing rate.
  * During a spike, processing rate stays constant while arrival rate increases.
  */
-final class ArrivalRateEstimator
+class ArrivalRateEstimator
 {
     /**
      * Historical backlog snapshots per queue (sliding window)

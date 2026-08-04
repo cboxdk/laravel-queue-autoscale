@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Commands;
 
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
+use Cbox\LaravelQueueAutoscale\Fuse\FuseState;
+use Cbox\LaravelQueueAutoscale\Fuse\NullFailureWindowStore;
 use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
 use Cbox\Telemetry\TelemetryManager;
 use Illuminate\Console\Command;
@@ -52,6 +56,10 @@ class DebugQueueCommand extends Command
             $this->error("Failed: {$e->getMessage()}");
         }
 
+        $this->line('');
+        $this->info('=== Failure Fuse ===');
+        $this->debugFuse($connection, $queue);
+
         // Check driver type
         $driver = config("queue.connections.{$connection}.driver");
         $driverStr = is_string($driver) ? $driver : 'unknown';
@@ -67,6 +75,98 @@ class DebugQueueCommand extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Answers "why is this queue stuck at workers.min?" — the fuse holding a
+     * queue back is otherwise only visible in the manager's own log output,
+     * which is the wrong place to look during an incident.
+     */
+    private function debugFuse(string $connection, string $queue): void
+    {
+        try {
+            $config = QueueConfiguration::fromConfig($connection, $queue);
+        } catch (\Throwable $e) {
+            $this->error("Failed to resolve queue configuration: {$e->getMessage()}");
+
+            return;
+        }
+
+        $fuse = $config->fuse;
+
+        if (! $fuse->enabled) {
+            $this->line('Disabled for this queue — scaling is never held back by failure rate.');
+
+            return;
+        }
+
+        $store = $this->laravel->make(FailureWindowStoreContract::class);
+
+        if ($store instanceof NullFailureWindowStore) {
+            $this->warn('Outcome tracking is disabled (fuse.store), so the fuse can never trip.');
+
+            return;
+        }
+
+        try {
+            $window = $store->currentWindow($connection, $queue, $fuse->windowSeconds);
+            $state = $store->readState($connection, $queue);
+        } catch (\Throwable $e) {
+            // A diagnostic command must never be the thing that breaks. An
+            // unreachable cache is itself the finding here: it means the fuse
+            // cannot see outcomes either.
+            $this->error("Failed to read fuse state: {$e->getMessage()}");
+            $this->warn('The fuse cannot function while its store is unreachable — check the cache backend.');
+
+            return;
+        }
+
+        $rate = $window['total'] > 0 ? ($window['failures'] / $window['total']) * 100.0 : 0.0;
+        $stateName = $state['state'] ?? FuseState::Closed->value;
+
+        $this->table(
+            ['Metric', 'Value'],
+            [
+                ['State', $stateName],
+                ['Failure rate', sprintf('%.1f%% (%d of %d jobs)', $rate, $window['failures'], $window['total'])],
+                ['Trips at', sprintf('%.1f%% over >= %d jobs', $fuse->failureThresholdPercent, $fuse->minSamples)],
+                ['Window', "{$fuse->windowSeconds}s"],
+                ['Cooldown', "{$fuse->cooldownSeconds}s"],
+                ['Worker range', "{$config->workers->min} - {$config->workers->max}"],
+            ]
+        );
+
+        match ($stateName) {
+            FuseState::Open->value => $this->warn(
+                "TRIPPED: scaling is held at {$config->workers->min} worker(s). ".
+                "A probe runs automatically after {$fuse->cooldownSeconds}s."
+            ),
+            FuseState::HalfOpen->value => $this->warn(
+                'PROBING: running at the minimum worker count to test whether the dependency recovered.'
+            ),
+            default => $window['total'] < $fuse->minSamples
+                ? $this->line("Closed. Not enough samples yet to evaluate ({$window['total']} of {$fuse->minSamples}).")
+                : $this->line('Closed. Scaling is unconstrained by the fuse.'),
+        };
+
+        if ($this->cacheDriverIsPerProcess()) {
+            $this->warn(
+                'The "array" cache driver is in use: worker processes and the manager do not share '.
+                'state, so the fuse cannot see recorded outcomes. Use a shared cache driver.'
+            );
+        }
+    }
+
+    /**
+     * The array driver keeps everything in one process's memory, which makes
+     * the fuse silently inert in production.
+     */
+    private function cacheDriverIsPerProcess(): bool
+    {
+        $store = config('queue-autoscale.fuse.store', 'auto');
+        $usesCache = ! is_string($store) || in_array(trim($store), ['', 'auto', 'cache'], true);
+
+        return $usesCache && config('cache.default') === 'array';
     }
 
     private function debugDatabaseQueue(string $connection, string $queue): void
@@ -120,8 +220,8 @@ class DebugQueueCommand extends Command
                 $createdAt = is_numeric($job->created_at) ? (int) $job->created_at : 0;
                 $reservedAgo = (int) now()->timestamp - $reservedAt;
                 $rows[] = [
-                    (string) $job->id,
-                    (string) $job->attempts,
+                    is_scalar($job->id) ? (string) $job->id : '?',
+                    is_scalar($job->attempts) ? (string) $job->attempts : '?',
                     "{$reservedAgo}s ago",
                     date('H:i:s', $createdAt),
                 ];

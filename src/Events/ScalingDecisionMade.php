@@ -9,7 +9,7 @@ use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-final class ScalingDecisionMade
+class ScalingDecisionMade
 {
     use Dispatchable;
     use InteractsWithSockets;

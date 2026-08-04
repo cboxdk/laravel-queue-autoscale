@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Scaling\Calculators;
 
-final readonly class BacklogDrainCalculator
+readonly class BacklogDrainCalculator
 {
     /**
      * Calculate workers needed to drain backlog before SLA breach

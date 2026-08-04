@@ -15,7 +15,7 @@ namespace Cbox\LaravelQueueAutoscale\Scaling\Calculators;
  * to drop target sharply via Little's Law, only to pump it back up when pending
  * refills — producing 33%+ oscillation under steady-state load.
  */
-final class TargetSmoother
+class TargetSmoother
 {
     private const MAX_THROUGHPUT_HISTORY = 10;
 

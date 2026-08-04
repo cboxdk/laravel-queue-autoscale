@@ -15,7 +15,8 @@ Find your symptom in the list below, then follow the diagnosis steps in order. E
 - [Workers keep spawning and terminating (flapping)](#workers-keep-spawning-and-terminating-flapping)
 - [Logs show the same SLA breach line every few seconds](#logs-show-the-same-sla-breach-line-every-few-seconds)
 - [Manager starts but produces no output](#manager-starts-but-produces-no-output)
-- [Manager crashes on startup](#manager-crashes-on-startup)
+- [Manager exits immediately on startup](#manager-exits-immediately-on-startup)
+- [A queue is stuck at `workers.min` while its backlog grows](#a-queue-is-stuck-at-workersmin-while-its-backlog-grows)
 - [An exclusive queue keeps respawning its worker](#an-exclusive-queue-keeps-respawning-its-worker)
 - [A group never scales up even though its members have jobs](#a-group-never-scales-up-even-though-its-members-have-jobs)
 - [Deploy finishes but new config is not applied](#deploy-finishes-but-new-config-is-not-applied)
@@ -64,8 +65,8 @@ The output names the limiting factor for every queue.
    ```
 
    The error will be immediate — almost always `.env` permissions, missing Redis connection, or a wrong PHP path.
-2. **PHP is running out of memory on each job.** Check `storage/logs/laravel.log` for `Allowed memory size` errors in the spawned workers. Raise `memory_limit` in php.ini or `--memory` on the worker.
-3. **A long-running job is hitting the `workers.timeout_seconds` limit.** Default is 3600s — workers are recycled after that. Expected behaviour unless you see it every few seconds.
+2. **PHP is running out of memory on each job.** Check `storage/logs/laravel.log` for `Allowed memory size` errors in the spawned workers. The autoscaler never passes `--memory` to `queue:work`, so raise `memory_limit` in the php.ini the manager's PHP binary uses.
+3. **A worker is hitting `workers.timeout_seconds`.** That value is passed as `--max-time`, so the worker exits after that many seconds of life and is respawned. Default is 3600s. Expected behaviour unless you see it every few seconds.
 
 ## Workers keep spawning and terminating (flapping)
 
@@ -79,11 +80,11 @@ The output names the limiting factor for every queue.
 
 ## Logs show the same SLA breach line every few seconds
 
-**Fixed in v2**: `BreachNotificationPolicy` now rate-limits its log output via `AlertRateLimiter` (default 300s cooldown).
+`BreachNotificationPolicy` rate-limits its log output via `AlertRateLimiter` (default 300s cooldown), so a sustained breach risk should produce one line per queue per cooldown window.
 
 If you're still seeing the spam:
 
-1. Verify you're on v2 and the policy is registered in `config/queue-autoscale.php → policies`.
+1. Verify the policy is registered in `config/queue-autoscale.php → policies`.
 2. Check `queue-autoscale.alerting.cooldown_seconds` — it may be set to a very low value.
 3. If your app has custom listeners on `SlaBreachPredicted`, they need their own rate-limiting. Use `AlertRateLimiter` in them — pattern shown in the [cookbook](../cookbook/_index.md).
 
@@ -96,19 +97,69 @@ If you're still seeing the spam:
 php artisan queue:autoscale -vv
 ```
 
-If `-vv` still shows nothing after a full evaluation interval (5s default), something is broken:
+If `-vv` still shows nothing after a full evaluation interval (5s unless you passed `--interval`), something is broken:
 
 1. **Config-cached stale values.** Run `php artisan config:clear` on the host, then restart the manager.
 2. **The metrics package is returning an empty queue list.** Run `queue:autoscale:debug` for a queue you know has jobs. If totals are zero, the metrics package isn't wired to your queue driver — its config is the problem.
 3. **All queues are `excluded`.** Check the `excluded` array and any globs.
 
-## Manager crashes on startup
+## Manager exits immediately on startup
 
-Check the first lines of stderr/the log. Common failures:
+Only two conditions stop `queue:autoscale` before it reaches its first cycle:
 
 - **`Queue autoscale is disabled in config`** — set `'enabled' => true` or `QUEUE_AUTOSCALE_ENABLED=true`.
-- **`queue-autoscale.pickup_time.store must be a class that implements PickupTimeStoreContract`** — your `pickup_time.store` config value is not a valid class. Run `vendor:publish` again and merge manually.
-- **`Group configuration is invalid — groups disabled until manager restart`** — a queue appears in both `queues` and a group, or in multiple groups. Fix the config; the manager will still run but with groups disabled until you restart.
+- **The host manager lock could not be acquired** — another manager for this app is already running on this host. Stop it, or start with `php artisan queue:autoscale --replace` to take over the lock.
+
+Container-binding failures also abort the boot. These come from the service provider validating class-string config values:
+
+- **`queue-autoscale.pickup_time.store must be a class that implements PickupTimeStoreContract, got: ...`**
+- **`queue-autoscale.spawn_latency.tracker must be a class that implements SpawnLatencyTrackerContract, got: ...`**
+- **`queue-autoscale.fuse.store must be a class that implements FailureWindowStoreContract, got: ...`**
+- **`queue-autoscale.fuse.classifier must be a class that implements FailureClassifierContract, got: ...`**
+- **`queue-autoscale.pickup_time.percentile_calculator must be a class that implements PercentileCalculatorContract, got: ...`**
+
+Run `vendor:publish` again and merge manually if one of these appears.
+
+### Bad config does NOT crash the manager
+
+An invalid `workers.*` or `sla.*` block throws `InvalidConfigurationException` during the evaluation cycle, not at startup. The run loop catches it, logs `Autoscale evaluation failed` (with the message and a trace) to `manager.log_channel`, and continues — you get one error line per interval and no scaling for the affected queue. Watch the log; the manager will not tell you on stdout.
+
+Invalid **group** config is handled separately: `Group configuration is invalid — groups disabled until manager restart` is logged at critical level once, all groups are skipped for the rest of the process's life, and per-queue autoscaling carries on.
+
+## A queue is stuck at `workers.min` while its backlog grows
+
+This is usually the [failure fuse](failure-fuse.md) doing its job: the queue's jobs are failing, and adding workers would only increase pressure on whatever is failing.
+
+**Confirm it:**
+
+```bash
+php artisan queue:autoscale:debug --queue=<your-queue>
+```
+
+The `=== Failure Fuse ===` section reports the current state and the evidence behind it:
+
+```text
+=== Failure Fuse ===
++--------------+------------------------+
+| Metric       | Value                  |
++--------------+------------------------+
+| State        | open                   |
+| Failure rate | 75.6% (93 of 123 jobs) |
+| Trips at     | 50.0% over >= 20 jobs  |
+| Window       | 60s                    |
+| Cooldown     | 60s                    |
+| Worker range | 1 - 10                 |
++--------------+------------------------+
+TRIPPED: scaling is held at 1 worker(s). A probe runs automatically after 60s.
+```
+
+**Then:**
+
+1. **If the failure rate is real** — the fix is upstream. Find out what your jobs are failing against. The fuse will probe for recovery on its own every `cooldown_seconds` and release scaling once the probe succeeds; no manual intervention is needed.
+2. **If the failure rate looks wrong** — your threshold may be too close to the queue's baseline. Jobs hitting rate limits count as failures too. See [Tuning](failure-fuse.md#tuning).
+3. **If you need to scale regardless** — disable the fuse for that queue with `'fuse' => ['enabled' => false]`, or globally with `QUEUE_AUTOSCALE_FUSE_ENABLED=false`. Understand that you are choosing to scale into a failure.
+
+If the reason string does **not** mention the fuse, the cause is elsewhere — see [Jobs are piling up but no workers are spawning](#jobs-are-piling-up-but-no-workers-are-spawning).
 
 ## An exclusive queue keeps respawning its worker
 
@@ -124,8 +175,8 @@ Check the first lines of stderr/the log. Common failures:
 
 Two scenarios:
 
-1. **Members are newly-active queues the metrics package hasn't discovered yet.** Fixed in the v2 topology release — the manager force-fetches metrics for every group member on each cycle. Verify you're on the latest v2.
-2. **Group validation failed at startup and groups were disabled.** Check the log for `Group configuration is invalid — groups disabled until manager restart`. Fix the config (remove duplicate queue names across groups/queues) and restart the manager.
+1. **Members are newly-active queues the metrics package hasn't discovered yet.** The manager force-fetches metrics for every declared group member on each cycle, so this should self-correct within one interval.
+2. **Group validation failed and groups were disabled.** Check the log for `Group configuration is invalid — groups disabled until manager restart`. Fix the config (remove duplicate queue names across groups/queues) and restart the manager — the flag is cached for the life of the process.
 
 If neither applies, run `queue:autoscale:debug` for each member queue. If the metrics are all zero but you know jobs are being processed, the metrics package is either not recording pickups or not persisting them.
 

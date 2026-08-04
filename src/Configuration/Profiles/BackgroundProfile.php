@@ -8,7 +8,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ProfileContract;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\HintForecastPolicy;
 
-final readonly class BackgroundProfile implements ProfileContract
+readonly class BackgroundProfile implements ProfileContract
 {
     public function resolve(): array
     {
@@ -38,6 +38,13 @@ final readonly class BackgroundProfile implements ProfileContract
                 'fallback_seconds' => 3.0,
                 'min_samples' => 5,
                 'ema_alpha' => 0.2,
+            ],
+            'fuse' => [
+                'enabled' => true,
+                'failure_threshold_percent' => 60.0,
+                'min_samples' => 10,
+                'window_seconds' => 300,
+                'cooldown_seconds' => 300,
             ],
         ];
     }

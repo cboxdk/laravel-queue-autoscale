@@ -32,7 +32,7 @@ use Illuminate\Support\Facades\Log;
  * - Audit trail for debugging
  * - Foundation for alerting integrations
  */
-final readonly class BreachNotificationPolicy implements ScalingPolicy
+readonly class BreachNotificationPolicy implements ScalingPolicy
 {
     public function __construct(
         private AlertRateLimiter $limiter = new AlertRateLimiter,

@@ -20,7 +20,7 @@ use Illuminate\Queue\SerializesModels;
  * - Notify stakeholders of resolution
  * - Calculate Mean Time To Recovery (MTTR)
  */
-final class SlaRecovered
+class SlaRecovered
 {
     use Dispatchable;
     use InteractsWithSockets;

@@ -7,7 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Scaling\Calculators;
 use Cbox\LaravelQueueAutoscale\Contracts\ForecasterContract;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\ForecastResult;
 
-final class LinearRegressionForecaster implements ForecasterContract
+class LinearRegressionForecaster implements ForecasterContract
 {
     private const int MIN_SAMPLES = 5;
 

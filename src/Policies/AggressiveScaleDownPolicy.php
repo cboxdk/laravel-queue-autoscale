@@ -32,7 +32,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
  * Configuration: Use this policy INSTEAD of ConservativeScaleDownPolicy, not alongside it.
  * If both are configured, this policy should come after Conservative to override its limits.
  */
-final readonly class AggressiveScaleDownPolicy implements ScalingPolicy
+readonly class AggressiveScaleDownPolicy implements ScalingPolicy
 {
     /**
      * If no SLA breach risk is detected and the queue appears idle,

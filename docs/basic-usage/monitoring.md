@@ -1,200 +1,183 @@
 ---
 title: "Monitoring"
-description: "Complete guide to monitoring Queue Autoscale for Laravel in production with metrics and alerts"
+description: "What the autoscaler emits — events, telemetry gauges and logs — and how to turn them into dashboards and alerts"
 weight: 12
 ---
 
 # Monitoring
 
-Complete guide to monitoring Queue Autoscale for Laravel in production.
+This page covers what Queue Autoscale actually emits, and how to turn that into dashboards and alerts.
 
-## Table of Contents
-- [Overview](#overview)
-- [Key Metrics](#key-metrics)
-- [Monitoring Strategies](#monitoring-strategies)
-- [Integration Examples](#integration-examples)
-- [Alerting](#alerting)
-- [Dashboards](#dashboards)
-- [Troubleshooting](#troubleshooting)
+There are exactly three observability surfaces:
 
-## Overview
+1. **Laravel events** — dispatched by the manager process. See [Event Handling](event-handling.md) for the full list.
+2. **Telemetry** — gauges, counters and events published to `cboxdk/laravel-telemetry` when that package is installed.
+3. **Logs** — written to the channel in `queue-autoscale.manager.log_channel` (default `stack`).
 
-Effective monitoring is critical for:
-- **Performance**: Ensure autoscaling meets SLA targets
-- **Cost**: Track resource usage and optimize spending
-- **Reliability**: Detect and respond to failures quickly
-- **Optimization**: Identify improvement opportunities
+Queue depth, throughput and job durations are **not** owned by this package. They come from `cboxdk/laravel-queue-metrics`; query them through its `QueueMetrics` facade.
 
-### Monitoring Layers
+## What the events carry
 
-```
-┌─────────────────────────────────────┐
-│  Application Layer                  │
-│  - Queue depth                      │
-│  - Job processing rate              │
-│  - SLA compliance                   │
-└─────────────────────────────────────┘
-            ↓
-┌─────────────────────────────────────┐
-│  Autoscale Layer                    │
-│  - Scaling decisions                │
-│  - Worker count                     │
-│  - Decision confidence              │
-└─────────────────────────────────────┘
-            ↓
-┌─────────────────────────────────────┐
-│  Infrastructure Layer               │
-│  - CPU/Memory usage                 │
-│  - Process health                   │
-│  - System resources                 │
-└─────────────────────────────────────┘
-```
-
-## Key Metrics
-
-### Application Metrics
-
-#### Queue Depth
-Number of pending jobs in the queue.
+The autoscaler's events do not carry a metrics snapshot or a config object. `ScalingDecisionMade` and `SlaBreachPredicted` carry exactly one property — `$decision`, a `ScalingDecision`:
 
 ```php
-// Via Laravel
-$depth = Queue::size('default');
+$event->decision->connection            // string
+$event->decision->queue                 // string (group name for group workers)
+$event->decision->currentWorkers        // int
+$event->decision->targetWorkers         // int
+$event->decision->reason                // string
+$event->decision->predictedPickupTime   // ?float — null when no prediction was possible
+$event->decision->slaTarget             // int seconds
+$event->decision->capacity              // ?CapacityCalculationResult
+$event->decision->spawnCompensation     // ?SpawnCompensationConfiguration
+```
 
-// Via Autoscale events
-Event::listen(ScalingDecisionMade::class, function ($event) {
-    $depth = $event->metrics->depth->pending;
+Plus the helpers `shouldScaleUp()`, `shouldScaleDown()`, `shouldHold()`, `workersToAdd()`, `workersToRemove()`, `action()` (`'scale_up' | 'scale_down' | 'hold'`) and `isSlaBreachRisk()`.
+
+There is no confidence score on a decision — the strategy either produced a prediction or it did not.
+
+## Key signals
+
+### Worker count
+
+`WorkersScaled` fires whenever workers are actually spawned or terminated.
+
+```php
+use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
+use Illuminate\Support\Facades\Event;
+
+Event::listen(function (WorkersScaled $event) {
+    $from = $event->from;          // int, before
+    $to = $event->to;              // int, after
+    $direction = $event->action;   // 'up' | 'down'
+    $reason = $event->reason;      // string
 });
 ```
 
-**Monitor for:**
-- Sustained high depth → May need higher workers.max
-- Rapid growth → Potential traffic spike or processing issues
+**Watch for:**
 
-#### Processing Rate
-Jobs processed per second.
+- Frequently pinned at `workers.max` → raise the ceiling, or accept it as a deliberate budget.
+- Rapid direction reversals → see [Performance → Worker Oscillation](performance.md#issue-worker-oscillation).
 
-```php
-$rate = $event->metrics->processingRate;  // jobs/second
-```
-
-**Monitor for:**
-- Declining rate → Worker performance degradation
-- Zero rate with pending jobs → Workers may be stuck
-
-#### Oldest Job Age
-How long the oldest job has been waiting.
+### Target vs. current workers
 
 ```php
-$age = $event->metrics->depth->oldestJobAgeSeconds;
-$sla = $event->config->maxPickupTimeSeconds;
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 
-$slaBreachRisk = $age / $sla;  // >0.9 = imminent breach
-```
-
-**Monitor for:**
-- Age approaching SLA → Scale up needed
-- Age always near zero → May be overprovisioned
-
-### Autoscaling Metrics
-
-#### Worker Count
-Current number of active workers.
-
-```php
-Event::listen(WorkersScaled::class, function ($event) {
-    $workers = $event->newCount;
+Event::listen(function (ScalingDecisionMade $event) {
+    $gap = $event->decision->targetWorkers - $event->decision->currentWorkers;
 });
 ```
 
-**Monitor for:**
-- Frequently at workers.max → Consider raising limit
-- Rapid oscillation → Adjust cooldown or strategy
+`ScalingDecisionMade` fires every evaluation cycle, including when the decision is a hold. A sustained positive gap means something downstream of the strategy is clamping the target — check `$event->decision->capacity->limitingFactor`.
 
-#### Scaling Frequency
-How often scaling decisions change worker count.
+### Limiting factor
 
 ```php
-// Count decisions per hour
-DB::table('scaling_decisions')
-    ->where('created_at', '>=', now()->subHour())
-    ->where('worker_change', '!=', 0)
-    ->count();
+$capacity = $event->decision->capacity;
+
+if ($capacity !== null) {
+    $capacity->maxWorkersByCpu;      // int
+    $capacity->maxWorkersByMemory;   // int
+    $capacity->maxWorkersByConfig;   // int — workers.max
+    $capacity->finalMaxWorkers;      // int
+    $capacity->limitingFactor;       // see below
+}
 ```
 
-**Monitor for:**
-- High frequency → May indicate oscillation
-- Zero changes with varying load → Strategy may be too conservative
+`limitingFactor` is one of `cpu`, `memory`, `balanced`, `config`, `strategy`, `fuse`, or `system_metrics_unavailable`.
 
-#### Decision Confidence
-Strategy confidence in scaling decisions.
+**Watch for:**
+
+- `config` → the configured `workers.max` is the bottleneck, not the host.
+- `cpu` / `memory` → the host is the bottleneck. Add capacity or lower per-worker estimates.
+- `fuse` → the [failure fuse](failure-fuse.md) is holding the queue. Treat as an incident.
+- `system_metrics_unavailable` → the system-metrics read failed and a conservative fallback was used.
+
+### Predicted pickup time vs. SLA
 
 ```php
-$confidence = $event->decision->confidence;  // 0.0 - 1.0
+$predicted = $event->decision->predictedPickupTime;   // ?float seconds
+$target = $event->decision->slaTarget;                // int seconds
+
+if ($event->decision->isSlaBreachRisk()) {
+    // predictedPickupTime > slaTarget
+}
 ```
 
-**Monitor for:**
-- Low confidence (<0.7) → May need more historical data
-- Always high → Strategy calibration working well
+`predictedPickupTime` is `null` when the strategy could not produce one (no backlog, or no usable job-time estimate). Guard for null before dividing.
 
-#### Predicted vs Actual Pickup Time
-Compare predictions to reality.
+### Actual SLA state
 
-```php
-$predicted = $event->decision->predictedPickupTime;
-// Later, measure actual
-$actual = $actualMeasuredTime;
-$error = abs($predicted - $actual) / $actual;
-```
-
-**Monitor for:**
-- High error rate → Strategy may need tuning
-- Consistent underestimation → SLA breach risk
-
-### Resource Metrics
-
-#### CPU Usage
-Per-worker and system-wide CPU usage.
+`SlaBreached` and `SlaRecovered` fire **once per state transition**, not per cycle:
 
 ```php
-$cpuPercent = $event->metrics->resources->cpuPercent;
-```
+use Cbox\LaravelQueueAutoscale\Events\SlaBreached;
 
-**Monitor for:**
-- High CPU with low throughput → Inefficient jobs
-- CPU at limit → Need to scale
-
-#### Memory Usage
-Worker memory consumption.
-
-```php
-$memoryPercent = $event->metrics->resources->memoryPercent;
-$availableMb = $event->metrics->resources->availableMemoryMb;
-```
-
-**Monitor for:**
-- Memory leaks → Increasing usage over time
-- Out of memory errors → Reduce limits.worker_memory_mb_estimate or workers.max
-
-#### Worker Health
-Worker process health status.
-
-```php
-Event::listen(WorkerHealthCheckFailed::class, function ($event) {
-    $pid = $event->worker->pid();
-    $reason = $event->reason;
+Event::listen(function (SlaBreached $event) {
+    $event->connection;
+    $event->queue;
+    $event->oldestJobAge;    // int seconds
+    $event->slaTarget;       // int seconds
+    $event->pending;         // int
+    $event->activeWorkers;   // int
+    $event->breachSeconds();
+    $event->breachPercentage();
 });
 ```
 
-**Monitor for:**
-- Frequent health check failures → Job or infrastructure issues
-- Specific worker consistently failing → Process-specific problem
+`SlaRecovered` has the same shape but with `currentJobAge` instead of `oldestJobAge`, and offers `marginSeconds()` / `marginPercentage()`.
 
-## Monitoring Strategies
+### Failure fuse state
 
-### Strategy 1: Event-Based Monitoring
+Whether the [failure fuse](failure-fuse.md) is currently holding a queue back from scaling.
 
-Use Laravel events to push metrics:
+```php
+use Cbox\LaravelQueueAutoscale\Events\FuseTripped;
+
+Event::listen(function (FuseTripped $event) {
+    $rate = $event->failureRate;        // percent, over $event->samples outcomes
+    $failures = $event->failures;       // int
+    $threshold = $event->thresholdPercent;
+    $held = $event->heldAtWorkers;      // workers.min
+});
+```
+
+With `cboxdk/laravel-telemetry` installed this is also a gauge — `queue_autoscale.fuse.state`, where `0` is closed, `1` half-open and `2` open. Alert on `queue_autoscale_fuse_state > 0`.
+
+Without any wiring at all, the manager logs `Autoscaling held back by failure fuse` at warning level to its configured channel for as long as a queue is held, rate-limited by `alerting.cooldown_seconds`.
+
+**Watch for:**
+
+- Any trip → treat as an incident. This is a stronger signal than an SLA breach: the queue's work is failing, not just late.
+- Repeated trip/recover cycles on one queue → a flapping dependency, or a threshold set too close to the queue's baseline failure rate.
+- A queue that never trips during a known outage → `min_samples` may be unreachable at that queue's throughput. See [Tuning](failure-fuse.md#tuning).
+
+### Queue depth, throughput and job duration
+
+These belong to the metrics package, not to the autoscaler. Read them directly:
+
+```php
+use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
+
+$metrics = QueueMetrics::getQueueMetrics('redis', 'default');
+
+$metrics->pending;              // int
+$metrics->oldestJobAge;         // int seconds
+$metrics->throughputPerMinute;  // float
+$metrics->avgDuration;          // float — milliseconds
+$metrics->failureRate;          // float percent
+$metrics->utilizationRate;      // float percent
+$metrics->activeWorkers;        // int
+```
+
+There is no worker-health event in this package. `ProcessHealthCheck` only answers whether a tracked PID is still alive; dead workers are dropped from the pool and, if the target still calls for them, respawned on the next cycle. The respawn shows up as a `WorkersScaled` event.
+
+## Collecting metrics
+
+### Push: an event listener
+
+The manager is a long-running daemon, so listeners run in-process and must be fast.
 
 ```php
 <?php
@@ -207,295 +190,146 @@ use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 class CollectScalingMetrics
 {
     public function __construct(
-        private readonly MetricsCollector $metrics
+        private readonly MetricsCollector $metrics,
     ) {}
 
     public function handle(ScalingDecisionMade $event): void
     {
+        $decision = $event->decision;
+
         $tags = [
-            'queue' => $event->config->queue,
-            'connection' => $event->config->connection,
+            'queue' => $decision->queue,
+            'connection' => $decision->connection,
         ];
 
-        // Application metrics
-        $this->metrics->gauge('queue.depth', $event->metrics->depth->pending ?? 0, $tags);
-        $this->metrics->gauge('queue.oldest_job_age', $event->metrics->depth->oldestJobAgeSeconds ?? 0, $tags);
-        $this->metrics->gauge('queue.processing_rate', $event->metrics->processingRate ?? 0, $tags);
+        $this->metrics->gauge('autoscale.current_workers', $decision->currentWorkers, $tags);
+        $this->metrics->gauge('autoscale.target_workers', $decision->targetWorkers, $tags);
+        $this->metrics->gauge('autoscale.sla_target', $decision->slaTarget, $tags);
 
-        // Autoscaling metrics
-        $this->metrics->gauge('autoscale.worker_count', $event->currentWorkers, $tags);
-        $this->metrics->gauge('autoscale.target_workers', $event->decision->targetWorkers, $tags);
-        $this->metrics->gauge('autoscale.confidence', $event->decision->confidence, $tags);
-        $this->metrics->gauge('autoscale.predicted_pickup_time', $event->decision->predictedPickupTime ?? 0, $tags);
+        if ($decision->predictedPickupTime !== null) {
+            $this->metrics->gauge('autoscale.predicted_pickup_time', $decision->predictedPickupTime, $tags);
+            $this->metrics->gauge(
+                'autoscale.sla_usage_percent',
+                ($decision->predictedPickupTime / $decision->slaTarget) * 100,
+                $tags,
+            );
+        }
 
-        // SLA metrics
-        $slaUsage = ($event->metrics->depth->oldestJobAgeSeconds ?? 0) / $event->config->maxPickupTimeSeconds;
-        $this->metrics->gauge('autoscale.sla_usage_percent', $slaUsage * 100, $tags);
-
-        // Resource metrics
-        $this->metrics->gauge('autoscale.cpu_percent', $event->metrics->resources->cpuPercent ?? 0, $tags);
-        $this->metrics->gauge('autoscale.memory_percent', $event->metrics->resources->memoryPercent ?? 0, $tags);
+        if ($decision->capacity !== null) {
+            $this->metrics->gauge('autoscale.max_workers', $decision->capacity->finalMaxWorkers, [
+                ...$tags,
+                'limiter' => $decision->capacity->limitingFactor,
+            ]);
+        }
     }
 }
 ```
 
-### Strategy 2: Pull-Based Monitoring
-
-Expose metrics endpoint for Prometheus:
+Register it in a service provider:
 
 ```php
-// routes/web.php
-Route::get('/metrics', MetricsController::class);
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Illuminate\Support\Facades\Event;
+
+Event::listen(ScalingDecisionMade::class, \App\Listeners\CollectScalingMetrics::class);
 ```
+
+### Pull: a scrape endpoint
+
+A web request cannot see the manager daemon's in-memory worker pool — they are separate processes. A pull endpoint must therefore read from a shared store. Two sources are available:
+
+- `LaravelQueueAutoscale::clusterMetrics()` — flattened cluster metrics, available in [cluster mode](cluster-scaling.md).
+- The `QueueMetrics` facade — queue depth, throughput and worker heartbeats, available always.
 
 ```php
 <?php
 
 namespace App\Http\Controllers;
 
-use Illuminate\Support\Facades\Queue;
-use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
+use Cbox\LaravelQueueAutoscale\Facades\LaravelQueueAutoscale;
+use Illuminate\Http\Response;
 
 class MetricsController
 {
-    public function __invoke(AutoscaleManager $manager)
+    public function __invoke(): Response
     {
-        $metrics = [];
+        $lines = [];
 
-        foreach (config('queue-autoscale.queues') as $queueConfig) {
-            $queue = $queueConfig['queue'];
-            $connection = $queueConfig['connection'];
+        foreach (LaravelQueueAutoscale::clusterMetrics() as $metric) {
+            $labels = [];
 
-            // Queue metrics
-            $metrics[] = "queue_depth{queue=\"{$queue}\"} " . Queue::connection($connection)->size($queue);
+            foreach ($metric['labels'] as $key => $value) {
+                $labels[] = sprintf('%s="%s"', $key, $value);
+            }
 
-            // Worker metrics
-            $workers = $manager->getWorkerCount($connection, $queue);
-            $metrics[] = "queue_workers{queue=\"{$queue}\"} {$workers}";
-
-            // SLA metrics
-            $oldestAge = $this->getOldestJobAge($connection, $queue);
-            $slaLimit = $queueConfig['sla.target_seconds'];
-            $slaUsage = ($oldestAge / $slaLimit) * 100;
-
-            $metrics[] = "queue_oldest_job_age{queue=\"{$queue}\"} {$oldestAge}";
-            $metrics[] = "queue_sla_usage_percent{queue=\"{$queue}\"} {$slaUsage}";
+            $lines[] = sprintf('%s{%s} %s', $metric['name'], implode(',', $labels), $metric['value']);
         }
 
-        return response(implode("\n", $metrics))
-            ->header('Content-Type', 'text/plain');
+        return response(implode("\n", $lines))->header('Content-Type', 'text/plain');
     }
 }
 ```
 
-### Strategy 3: Database Logging
+`clusterMetrics()` returns an empty array when cluster mode is disabled. See [Cluster Metrics Export](../cookbook/cluster-metrics-export.md) for a complete recipe.
 
-Store metrics in database for analysis:
+## Telemetry integration
+
+When `cboxdk/laravel-telemetry` is installed and its `TelemetryManager` is bound, the autoscaler registers itself automatically. It is a no-op otherwise — no configuration is required to get the safe default.
+
+Two config keys control it:
 
 ```php
-<?php
-
-namespace App\Listeners;
-
-use Illuminate\Support\Facades\DB;
-use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
-
-class LogScalingMetrics
-{
-    public function handle(ScalingDecisionMade $event): void
-    {
-        DB::table('autoscale_metrics')->insert([
-            'queue' => $event->config->queue,
-            'connection' => $event->config->connection,
-            'timestamp' => now(),
-
-            // Queue state
-            'pending_jobs' => $event->metrics->depth->pending ?? null,
-            'oldest_job_age' => $event->metrics->depth->oldestJobAgeSeconds ?? null,
-            'processing_rate' => $event->metrics->processingRate ?? null,
-
-            // Scaling decision
-            'current_workers' => $event->currentWorkers,
-            'target_workers' => $event->decision->targetWorkers,
-            'worker_change' => $event->decision->targetWorkers - $event->currentWorkers,
-            'decision_reason' => $event->decision->reason,
-            'decision_confidence' => $event->decision->confidence,
-            'predicted_pickup_time' => $event->decision->predictedPickupTime,
-
-            // Trend data
-            'trend_direction' => $event->metrics->trend->direction ?? null,
-            'trend_forecast' => $event->metrics->trend->forecast ?? null,
-
-            // Resource usage
-            'cpu_percent' => $event->metrics->resources->cpuPercent ?? null,
-            'memory_percent' => $event->metrics->resources->memoryPercent ?? null,
-        ]);
-    }
-}
+'telemetry' => [
+    'enabled' => env('QUEUE_AUTOSCALE_TELEMETRY_ENABLED', true),  // master switch
+    'cache_ttl' => env('QUEUE_AUTOSCALE_TELEMETRY_CACHE_TTL', 10), // cluster snapshot cache, seconds
+    'gauges' => ['cluster' => true],                               // observable cluster gauges
+    'events' => true,                                              // push gauges/counters from events
+],
 ```
 
-Query for analysis:
+Setting `telemetry.enabled` to `false` skips registration entirely. `telemetry.events` gates the event-driven push path only; `telemetry.gauges.cluster` gates the scrape-time cluster gauges only.
 
-```sql
--- Average worker count per hour
-SELECT
-    DATE_FORMAT(timestamp, '%Y-%m-%d %H:00') as hour,
-    AVG(current_workers) as avg_workers,
-    MAX(current_workers) as peak_workers
-FROM autoscale_metrics
-WHERE queue = 'default'
-  AND timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
-GROUP BY hour;
+### Pushed from events
 
--- SLA compliance rate
-SELECT
-    queue,
-    COUNT(*) as total_evaluations,
-    SUM(CASE WHEN oldest_job_age < predicted_pickup_time THEN 1 ELSE 0 END) as within_sla,
-    (SUM(CASE WHEN oldest_job_age < predicted_pickup_time THEN 1 ELSE 0 END) / COUNT(*)) * 100 as sla_compliance_percent
-FROM autoscale_metrics
-WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
-GROUP BY queue;
-```
+| Instrument | Type | Source event |
+|---|---|---|
+| `queue_autoscale.workers.target` | gauge | `ScalingDecisionMade` |
+| `queue_autoscale.sla.target` | gauge | `ScalingDecisionMade` |
+| `queue_autoscale.sla.predicted_pickup` | gauge | `ScalingDecisionMade` (when a prediction exists) |
+| `queue_autoscale.capacity.max_workers` | gauge | `ScalingDecisionMade` (labelled `limiter`) |
+| `queue_autoscale.scaling.actions` | counter | `WorkersScaled` (labelled `direction`) |
+| `queue_autoscale.sla.breach` | gauge | `SlaBreached` (1) / `SlaRecovered` (0) |
+| `queue_autoscale.sla.breaches` | counter | `SlaBreached` |
+| `queue_autoscale.fuse.state` | gauge | `FuseTripped` (2) / `FuseProbing` (1) / `FuseRecovered` (0) |
+| `queue_autoscale.fuse.trips` | counter | `FuseTripped` |
+| `queue_autoscale.cluster.leader_changes` | counter | `ClusterLeaderChanged` |
 
-## Integration Examples
+Gauges and counters are labelled with `connection` and `queue` where the source event carries them. OTLP events are emitted alongside: `queue_autoscale.scaling.action`, `.sla.breached`, `.sla.recovered`, `.manager.started`, `.manager.stopped`, `.cluster.leader_changed`, `.fuse.tripped`, `.fuse.probing`, `.fuse.recovered`.
 
-### Datadog
+Every handler flushes immediately except the per-cycle `ScalingDecisionMade` one, which flushes at most once per second.
 
-```php
-<?php
+### Observable cluster gauges
 
-namespace App\Services;
+Evaluated at scrape time from the Redis-backed cluster summary, so they report nothing in single-host mode:
 
-use DataDog\DogStatsd;
+| Gauge | Meaning |
+|---|---|
+| `queue_autoscale.cluster.managers` | Active autoscale managers in the cluster |
+| `queue_autoscale.cluster.workers` | Autoscaler-spawned workers across the cluster |
+| `queue_autoscale.cluster.required_workers` | Cluster-wide worker demand |
+| `queue_autoscale.cluster.capacity` | Cluster-wide worker capacity |
+| `queue_autoscale.cluster.utilization` | Cluster worker capacity utilization, percent |
+| `queue_autoscale.cluster.recommended_hosts` | Host count recommended by the leader |
+| `queue_autoscale.cluster.host.workers` | Workers per host, labelled `host` |
+| `queue_autoscale.cluster.host.capacity` | Worker capacity per host, labelled `host` |
 
-class DatadogMetricsCollector
-{
-    private DogStatsd $statsd;
-
-    public function __construct()
-    {
-        $this->statsd = new DogStatsd([
-            'host' => config('services.datadog.host'),
-            'port' => config('services.datadog.port'),
-        ]);
-    }
-
-    public function gauge(string $metric, float $value, array $tags = []): void
-    {
-        $this->statsd->gauge("laravel.queue.autoscale.{$metric}", $value, $tags);
-    }
-
-    public function increment(string $metric, int $value = 1, array $tags = []): void
-    {
-        $this->statsd->increment("laravel.queue.autoscale.{$metric}", $value, $tags);
-    }
-
-    public function histogram(string $metric, float $value, array $tags = []): void
-    {
-        $this->statsd->histogram("laravel.queue.autoscale.{$metric}", $value, $tags);
-    }
-}
-```
-
-### CloudWatch
-
-```php
-<?php
-
-namespace App\Services;
-
-use Aws\CloudWatch\CloudWatchClient;
-
-class CloudWatchMetricsCollector
-{
-    private CloudWatchClient $client;
-    private string $namespace;
-
-    public function __construct()
-    {
-        $this->client = new CloudWatchClient([
-            'region' => config('services.aws.region'),
-            'version' => 'latest',
-        ]);
-
-        $this->namespace = 'Laravel/QueueAutoscale';
-    }
-
-    public function putMetric(string $name, float $value, array $dimensions = []): void
-    {
-        $this->client->putMetricData([
-            'Namespace' => $this->namespace,
-            'MetricData' => [
-                [
-                    'MetricName' => $name,
-                    'Value' => $value,
-                    'Unit' => 'None',
-                    'Timestamp' => time(),
-                    'Dimensions' => $this->formatDimensions($dimensions),
-                ],
-            ],
-        ]);
-    }
-
-    private function formatDimensions(array $dimensions): array
-    {
-        return collect($dimensions)->map(function ($value, $key) {
-            return ['Name' => $key, 'Value' => $value];
-        })->values()->all();
-    }
-}
-```
-
-### Prometheus
-
-```php
-<?php
-
-namespace App\Services;
-
-use Prometheus\CollectorRegistry;
-use Prometheus\Storage\Redis;
-
-class PrometheusMetricsCollector
-{
-    private CollectorRegistry $registry;
-
-    public function __construct()
-    {
-        Redis::setDefaultOptions(['host' => config('database.redis.default.host')]);
-        $this->registry = new CollectorRegistry(new Redis());
-    }
-
-    public function gauge(string $name, float $value, array $labels = []): void
-    {
-        $gauge = $this->registry->getOrRegisterGauge(
-            'laravel_queue_autoscale',
-            $name,
-            'Autoscale metric',
-            array_keys($labels)
-        );
-
-        $gauge->set($value, array_values($labels));
-    }
-
-    public function counter(string $name, int $value = 1, array $labels = []): void
-    {
-        $counter = $this->registry->getOrRegisterCounter(
-            'laravel_queue_autoscale',
-            $name,
-            'Autoscale counter',
-            array_keys($labels)
-        );
-
-        $counter->incBy($value, array_values($labels));
-    }
-}
-```
+The snapshot behind these is cached for `telemetry.cache_ttl` seconds so concurrent scrapes do not all hit the cluster store.
 
 ## Alerting
 
-### SLA Breach Alert
+### SLA breach
+
+`SlaBreached` fires once per transition, so no rate limiting is needed for the transition itself:
 
 ```php
 <?php
@@ -503,149 +337,147 @@ class PrometheusMetricsCollector
 namespace App\Listeners;
 
 use App\Services\AlertingService;
-use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Events\SlaBreached;
 
-class AlertOnSlaRisk
+class AlertOnSlaBreach
 {
     public function __construct(
-        private readonly AlertingService $alerting
+        private readonly AlertingService $alerting,
     ) {}
 
-    public function handle(ScalingDecisionMade $event): void
+    public function handle(SlaBreached $event): void
     {
-        $oldestAge = $event->metrics->depth->oldestJobAgeSeconds ?? 0;
-        $slaLimit = $event->config->maxPickupTimeSeconds;
-        $slaUsage = $oldestAge / $slaLimit;
-
-        if ($slaUsage >= 0.9) {
-            $this->alerting->send([
-                'severity' => 'critical',
-                'title' => "SLA breach imminent: {$event->config->queue}",
-                'message' => "Queue {$event->config->queue} is at {$slaUsage}% of SLA limit",
-                'details' => [
-                    'oldest_job_age' => $oldestAge,
-                    'sla_limit' => $slaLimit,
-                    'pending_jobs' => $event->metrics->depth->pending ?? 0,
-                    'current_workers' => $event->currentWorkers,
-                    'target_workers' => $event->decision->targetWorkers,
-                ],
-            ]);
-        }
-    }
-}
-```
-
-### Capacity Alert
-
-```php
-public function handle(ScalingDecisionMade $event): void
-{
-    // Alert if we're at max capacity
-    if ($event->decision->targetWorkers >= $event->config->maxWorkers) {
         $this->alerting->send([
-            'severity' => 'warning',
-            'title' => "Queue at maximum capacity: {$event->config->queue}",
-            'message' => "Consider raising workers.max limit",
+            'severity' => 'critical',
+            'title' => "SLA breached: {$event->connection}:{$event->queue}",
+            'message' => sprintf(
+                'Oldest job is %ds old against a %ds target (%.1f%% over)',
+                $event->oldestJobAge,
+                $event->slaTarget,
+                $event->breachPercentage(),
+            ),
             'details' => [
-                'workers.max' => $event->config->maxWorkers,
-                'pending_jobs' => $event->metrics->depth->pending ?? 0,
+                'pending' => $event->pending,
+                'active_workers' => $event->activeWorkers,
             ],
         ]);
     }
 }
 ```
 
-### Cost Alert
+### Predicted breach
+
+`SlaBreachPredicted` fires **every cycle** while risk is present. Gate it through the package's own rate limiter:
 
 ```php
 <?php
 
 namespace App\Listeners;
 
-use Illuminate\Support\Facades\Cache;
+use App\Services\AlertingService;
+use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
+use Cbox\LaravelQueueAutoscale\Events\SlaBreachPredicted;
 
-class AlertOnHighCosts
+class AlertOnPredictedBreach
 {
-    private const HOURLY_BUDGET = 100.00;
-    private const WORKER_COST = 0.50;
+    public function __construct(
+        private readonly AlertingService $alerting,
+        private readonly AlertRateLimiter $limiter,
+    ) {}
 
-    public function handle(WorkersScaled $event): void
+    public function handle(SlaBreachPredicted $event): void
     {
-        $currentHour = now()->format('Y-m-d-H');
-        $cacheKey = "autoscale:cost:{$currentHour}";
+        $decision = $event->decision;
 
-        $currentSpend = Cache::get($cacheKey, 0.0);
-        $newSpend = $event->newCount * self::WORKER_COST;
-
-        Cache::put($cacheKey, $currentSpend + $newSpend, now()->addHours(2));
-
-        if ($currentSpend + $newSpend > self::HOURLY_BUDGET * 0.8) {
-            $this->alerting->send([
-                'severity' => 'warning',
-                'title' => 'Autoscale costs approaching budget',
-                'message' => sprintf('Current: $%.2f, Budget: $%.2f', $currentSpend + $newSpend, self::HOURLY_BUDGET),
-            ]);
+        if (! $this->limiter->allow("predicted:{$decision->connection}:{$decision->queue}")) {
+            return;
         }
+
+        $this->alerting->send([
+            'severity' => 'warning',
+            'title' => "SLA breach predicted: {$decision->queue}",
+            'message' => sprintf(
+                'Predicted pickup %.1fs against a %ds target',
+                $decision->predictedPickupTime ?? 0.0,
+                $decision->slaTarget,
+            ),
+        ]);
     }
 }
 ```
 
+`AlertRateLimiter` resolves from the container with the cooldown from `queue-autoscale.alerting.cooldown_seconds` (300s by default).
+
+### At the configured ceiling
+
+```php
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+
+public function handle(ScalingDecisionMade $event): void
+{
+    $capacity = $event->decision->capacity;
+
+    if ($capacity === null || $capacity->limitingFactor !== 'config') {
+        return;
+    }
+
+    // workers.max is the bottleneck for this queue.
+    $this->alerting->send([
+        'severity' => 'warning',
+        'title' => "Queue at configured maximum: {$event->decision->queue}",
+        'message' => "Consider raising workers.max (currently {$capacity->maxWorkersByConfig})",
+    ]);
+}
+```
+
+Rate-limit this one too — `ScalingDecisionMade` fires every cycle.
+
+### Fuse trip
+
+See [Alert on a Fuse Trip](../cookbook/alert-on-fuse-trip.md) for a paste-and-go listener.
+
 ## Dashboards
 
-### Recommended Metrics for Dashboards
+**Overview panel:**
 
-**Overview Dashboard:**
-- Worker count (current, min, max, target)
-- Queue depth over time
-- Oldest job age vs SLA limit
-- Processing rate
-- Scaling frequency
+- Current vs. target workers (`queue_autoscale.workers.target` against your own current-worker series)
+- Queue depth and oldest job age (from the metrics package)
+- Predicted pickup time against `queue_autoscale.sla.target`
+- Scaling actions per minute (`queue_autoscale.scaling.actions`, split by `direction`)
 
-**Performance Dashboard:**
-- SLA compliance rate
-- Predicted vs actual pickup time
-- Decision confidence
-- Trend forecast accuracy
+**Health panel:**
 
-**Resource Dashboard:**
-- CPU usage per worker
-- Memory usage per worker
-- Worker health status
-- Process lifecycle (spawned/terminated)
+- `queue_autoscale.sla.breach` per queue (a step function: 1 while breaching)
+- `queue_autoscale.fuse.state` per queue (0/1/2)
+- `queue_autoscale.capacity.max_workers` broken down by the `limiter` label
 
-**Cost Dashboard:**
-- Worker cost per hour
-- Total autoscale cost (daily/weekly/monthly)
-- Cost per job processed
-- Cost efficiency trends
+**Cluster panel** (cluster mode only):
 
-### Grafana Example
+- `queue_autoscale.cluster.managers`, `.workers`, `.capacity`, `.utilization`
+- `queue_autoscale.cluster.recommended_hosts` against `.managers`
+- `queue_autoscale.cluster.leader_changes` — a rising rate means unstable leadership
+
+### Grafana example
 
 ```json
 {
   "dashboard": {
-    "title": "Queue Autoscale Monitoring",
+    "title": "Queue Autoscale",
     "panels": [
       {
-        "title": "Worker Count",
-        "targets": [
-          {"expr": "queue_workers{queue=\"default\"}"}
-        ]
+        "title": "Target workers",
+        "targets": [{"expr": "queue_autoscale_workers_target{queue=\"default\"}"}]
       },
       {
-        "title": "Queue Depth",
-        "targets": [
-          {"expr": "queue_depth{queue=\"default\"}"}
-        ]
+        "title": "SLA breaching",
+        "targets": [{"expr": "queue_autoscale_sla_breach"}]
       },
       {
-        "title": "SLA Usage",
-        "targets": [
-          {"expr": "queue_sla_usage_percent{queue=\"default\"}"}
-        ],
+        "title": "Fuse state",
+        "targets": [{"expr": "queue_autoscale_fuse_state"}],
         "thresholds": [
-          {"value": 80, "color": "yellow"},
-          {"value": 90, "color": "red"}
+          {"value": 1, "color": "yellow"},
+          {"value": 2, "color": "red"}
         ]
       }
     ]
@@ -653,83 +485,28 @@ class AlertOnHighCosts
 }
 ```
 
-## Troubleshooting
+## Troubleshooting from the signals
 
-### Issue: Workers Not Scaling
+### Workers not scaling up
 
-**Symptoms:**
-- Queue depth increasing
-- Target workers calculated but not spawned
-
-**Check:**
 ```bash
-# Inspect queue and metric state
 php artisan queue:autoscale:debug --queue=<your-queue> --connection=<your-connection>
-
-# Check worker spawn errors in the app log
-tail -f storage/logs/laravel.log | grep -Ei "worker|autoscale"
-
-# Check system resources
-free -m
-ps aux | grep "queue:work"
 ```
 
-**Common Causes:**
-- Insufficient system resources
-- Permission issues
-- Worker spawn failures
+Then read `limitingFactor` on the next `ScalingDecisionMade`. `config` means raise `workers.max`; `cpu`/`memory` means the host is full; `fuse` means the queue's jobs are failing.
 
-### Issue: Oscillating Worker Count
+### Oscillating worker count
 
-**Symptoms:**
-- Worker count rapidly changing
-- Frequent scaling up and down
+Count direction reversals on `WorkersScaled` per queue per minute. If reversals are frequent, see [Performance → Worker Oscillation](performance.md#issue-worker-oscillation).
 
-**Check:**
-```sql
-SELECT
-    timestamp,
-    current_workers,
-    target_workers,
-    decision_reason
-FROM autoscale_metrics
-WHERE queue = 'default'
-ORDER BY timestamp DESC
-LIMIT 20;
-```
+### SLA breaches with headroom left
 
-**Solutions:**
-- Increase `scaling.cooldown_seconds`
-- Adjust strategy sensitivity
-- Check for metric noise
-
-### Issue: SLA Breaches
-
-**Symptoms:**
-- Jobs waiting longer than `sla.target_seconds`
-- Oldest job age exceeds SLA
-
-**Check:**
-```php
-// Check if hitting workers.max
-if ($currentWorkers >= $maxWorkers) {
-    // Need to raise workers.max
-}
-
-// Check processing rate
-if ($processingRate < expected) {
-    // Workers may be slow or stuck
-}
-```
-
-**Solutions:**
-- Increase `workers.max`
-- Optimize job performance
-- Check for stuck workers
+If `SlaBreached` fires while `limitingFactor` is `strategy`, the strategy is not asking for enough workers — check the job-time estimate in `queue:autoscale:debug`, and whether `sla.min_samples` is reachable at your throughput.
 
 ## See Also
 
-- [Event Handling](event-handling.md) - Using events for monitoring
-- [Scaling Policies](../advanced-usage/scaling-policies.md) - Policies for metrics collection
-- [Deployment](../advanced-usage/deployment.md) - Production deployment
-- [Troubleshooting](troubleshooting.md) - Detailed troubleshooting guide
+- [Event Handling](event-handling.md) — the full event catalogue and listener patterns
+- [Failure Fuse](failure-fuse.md) — the circuit breaker and its telemetry
+- [Cluster Scaling](cluster-scaling.md) — cluster summary and `clusterMetrics()`
+- [Troubleshooting](troubleshooting.md) — symptom-indexed diagnosis
+- [API Reference](../api-reference/_index.md) — exact types and signatures

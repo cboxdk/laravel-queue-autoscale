@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Configuration;
 
+use Cbox\LaravelQueueAutoscale\Fuse\ConfigurableFailureClassifier;
 use Illuminate\Support\Str;
 
-final readonly class AutoscaleConfiguration
+readonly class AutoscaleConfiguration
 {
     public static function applicationScopeId(): string
     {
@@ -23,18 +24,31 @@ final readonly class AutoscaleConfiguration
         return (bool) config('queue-autoscale.enabled', true);
     }
 
+    /**
+     * Memoised because the derived form does a DNS lookup (measured ~262 us)
+     * and is called inside per-manager loops in the evaluation cycle. Process
+     * identity cannot change within a process, so the only thing the repeated
+     * work bought was a blocking resolver call in the manager's control loop —
+     * which stalls scaling cluster-wide when DNS is slow or unreachable.
+     */
     public static function managerId(): string
     {
+        static $memoised = null;
+
         $configured = config('queue-autoscale.manager_id');
 
         if (is_string($configured) && trim($configured) !== '') {
             return trim($configured);
         }
 
+        if (is_string($memoised)) {
+            return $memoised;
+        }
+
         $host = self::hostLabel();
         $source = self::managerIdentitySource();
 
-        return sprintf(
+        return $memoised = sprintf(
             '%s-%s',
             Str::slug($host, '-'),
             substr(sha1($source), 0, 12),
@@ -98,6 +112,27 @@ final readonly class AutoscaleConfiguration
         $configured = config('queue-autoscale.spawn_latency.tracker', 'auto');
 
         return is_string($configured) ? trim($configured) : 'auto';
+    }
+
+    public static function fuseEnabled(): bool
+    {
+        return (bool) config('queue-autoscale.fuse.enabled', true);
+    }
+
+    public static function fuseStore(): string
+    {
+        $configured = config('queue-autoscale.fuse.store', 'auto');
+
+        return is_string($configured) ? trim($configured) : 'auto';
+    }
+
+    public static function fuseClassifier(): string
+    {
+        $configured = config('queue-autoscale.fuse.classifier', ConfigurableFailureClassifier::class);
+
+        return is_string($configured) && trim($configured) !== ''
+            ? trim($configured)
+            : ConfigurableFailureClassifier::class;
     }
 
     public static function clusterEnabled(): bool
@@ -250,6 +285,22 @@ final readonly class AutoscaleConfiguration
     public static function workerCpuCoreEstimate(): float
     {
         return self::floatConfig('queue-autoscale.limits.worker_cpu_core_estimate', 0.2);
+    }
+
+    /**
+     * Hard host-wide worker ceiling, or null when unbounded.
+     */
+    public static function maxTotalWorkers(): ?int
+    {
+        $configured = config('queue-autoscale.limits.max_total_workers');
+
+        if (! is_numeric($configured)) {
+            return null;
+        }
+
+        $value = (int) $configured;
+
+        return $value > 0 ? $value : null;
     }
 
     public static function reserveCpuCores(): float

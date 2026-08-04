@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Scaling\Forecasting;
 
-final readonly class ForecastResult
+readonly class ForecastResult
 {
     public function __construct(
         public float $projectedRate,

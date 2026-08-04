@@ -6,6 +6,8 @@ namespace Cbox\LaravelQueueAutoscale\Scaling\Strategies;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ForecasterContract;
+use Cbox\LaravelQueueAutoscale\Contracts\ForecastPolicyContract;
 use Cbox\LaravelQueueAutoscale\Contracts\PercentileCalculatorContract;
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
@@ -28,7 +30,7 @@ use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
  *
  * Takes the maximum of all algorithms to ensure SLA compliance.
  */
-final class HybridStrategy implements ScalingStrategyContract
+class HybridStrategy implements ScalingStrategyContract
 {
     /**
      * @var array<string, float|int|string|null>
@@ -38,6 +40,14 @@ final class HybridStrategy implements ScalingStrategyContract
     private bool $usedFallback = false;
 
     private string $arrivalRateSource = '';
+
+    /**
+     * Resolved forecaster/policy pairs, keyed by the configuration that
+     * produced them.
+     *
+     * @var array<string, array{0: ForecasterContract, 1: ForecastPolicyContract}>
+     */
+    private array $forecasters = [];
 
     public function __construct(
         private readonly LittlesLawCalculator $littles,
@@ -65,14 +75,7 @@ final class HybridStrategy implements ScalingStrategyContract
         // Determine average job time
         [$avgJobTime, $jobTimeSource] = $this->determineJobTime($metrics);
 
-        // Lazily configure the forecaster from queue config if not already set
-        if (! $this->arrivalEstimator->hasForecaster()) {
-            $this->arrivalEstimator->setForecaster(
-                forecaster: app($config->forecast->forecasterClass),
-                policy: app($config->forecast->policyClass),
-                horizonSeconds: $config->forecast->horizonSeconds,
-            );
-        }
+        $this->applyForecastConfiguration($config);
 
         // Estimate arrival rate from backlog changes (more accurate during spikes)
         $queueKey = "{$config->connection}:{$config->queue}";
@@ -249,6 +252,39 @@ final class HybridStrategy implements ScalingStrategyContract
         }
 
         return $targetWorkers;
+    }
+
+    /**
+     * Point the shared estimator at THIS queue's forecast configuration.
+     *
+     * The estimator is a container singleton holding forecaster, policy and
+     * horizon as instance state. Configuring it only once per process — the
+     * previous behaviour — meant the first queue evaluated set them for every
+     * other queue for the manager's whole lifetime, so a critical queue could
+     * silently run a background queue's disabled forecasting, and per-queue
+     * forecast config was inert for every queue but one.
+     *
+     * Instances are memoised by configuration rather than resolved per call:
+     * the manager evaluates every queue on every cycle for the life of the
+     * daemon, so resolving two fresh objects each time is a lot of churn for
+     * values that only vary across a handful of distinct profiles.
+     */
+    private function applyForecastConfiguration(QueueConfiguration $config): void
+    {
+        $forecast = $config->forecast;
+        $key = $forecast->forecasterClass.'|'.$forecast->policyClass;
+
+        if (! isset($this->forecasters[$key])) {
+            $this->forecasters[$key] = [$forecast->makeForecaster(), $forecast->makePolicy()];
+        }
+
+        [$forecaster, $policy] = $this->forecasters[$key];
+
+        $this->arrivalEstimator->setForecaster(
+            forecaster: $forecaster,
+            policy: $policy,
+            horizonSeconds: $forecast->horizonSeconds,
+        );
     }
 
     public function getLastReason(): string

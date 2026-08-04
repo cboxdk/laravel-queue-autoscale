@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Output\DataTransferObjects;
 
-final readonly class WorkerStatus
+readonly class WorkerStatus
 {
     /**
      * @param  string  $status  'running', 'idle', 'paused', 'dead'

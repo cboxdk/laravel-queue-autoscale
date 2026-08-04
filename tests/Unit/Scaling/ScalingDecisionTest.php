@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 test('creates instance with all properties', function () {
@@ -211,7 +212,7 @@ test('accepts capacity calculation result', function () {
         maxWorkersByMemory: 15,
         maxWorkersByConfig: 10,
         finalMaxWorkers: 10,
-        limitingFactor: 'config',
+        limitingFactor: LimitingFactor::Config,
     );
 
     $decision = new ScalingDecision(

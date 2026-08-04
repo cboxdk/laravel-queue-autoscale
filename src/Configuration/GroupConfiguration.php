@@ -22,7 +22,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ProfileContract;
  * Laravel's worker iterates that comma-separated list per poll cycle and
  * takes the first job it finds, which yields strict-priority semantics.
  */
-final readonly class GroupConfiguration
+readonly class GroupConfiguration
 {
     public const MODE_PRIORITY = 'priority';
 
@@ -36,6 +36,13 @@ final readonly class GroupConfiguration
         public ForecastConfiguration $forecast,
         public SpawnCompensationConfiguration $spawnCompensation,
         public WorkerConfiguration $workers,
+        public FuseConfiguration $fuse = new FuseConfiguration(
+            enabled: true,
+            failureThresholdPercent: 50.0,
+            minSamples: 20,
+            windowSeconds: 60,
+            cooldownSeconds: 60,
+        ),
     ) {
         if ($this->queues === []) {
             throw new InvalidConfigurationException(
@@ -92,6 +99,7 @@ final readonly class GroupConfiguration
             forecast: $this->forecast,
             spawnCompensation: $this->spawnCompensation,
             workers: $this->workers,
+            fuse: $this->fuse,
             memberQueues: array_values($this->queues),
         );
     }
@@ -129,7 +137,7 @@ final readonly class GroupConfiguration
         $profileClass = $config['profile'] ?? null;
 
         $profileResolved = self::resolveProfile($profileClass);
-        $overrides = is_array($config['overrides'] ?? null) ? $config['overrides'] : [];
+        $overrides = self::stringKeyed($config['overrides'] ?? null);
         $merged = self::deepMerge($profileResolved, $overrides);
 
         /** @var array{
@@ -137,6 +145,7 @@ final readonly class GroupConfiguration
          *     forecast: array{forecaster: class-string<ForecasterContract>, policy: class-string<ForecastPolicyContract>, horizon_seconds: int, history_seconds: int},
          *     spawn_compensation: array{enabled: bool, fallback_seconds: float, min_samples: int, ema_alpha: float},
          *     workers: array{min: int, max: int, tries: int, timeout_seconds: int, sleep_seconds: int, shutdown_timeout_seconds: int, scalable?: bool},
+         *     fuse?: array{enabled: bool, failure_threshold_percent: float, min_samples: int, window_seconds: int, cooldown_seconds: int},
          * } $merged
          */
         return new self(
@@ -171,6 +180,7 @@ final readonly class GroupConfiguration
                 shutdownTimeoutSeconds: (int) $merged['workers']['shutdown_timeout_seconds'],
                 scalable: (bool) ($merged['workers']['scalable'] ?? true),
             ),
+            fuse: FuseConfiguration::fromArray($merged['fuse'] ?? []),
         );
     }
 
@@ -269,6 +279,29 @@ final readonly class GroupConfiguration
         }
 
         return [];
+    }
+
+    /**
+     * Config arrays are string-keyed by construction; filtering rather than
+     * asserting keeps a malformed positional entry out of the merge.
+     *
+     * @return array<string, mixed>
+     */
+    private static function stringKeyed(mixed $value): array
+    {
+        if (! is_array($value)) {
+            return [];
+        }
+
+        $resolved = [];
+
+        foreach ($value as $key => $entry) {
+            if (is_string($key)) {
+                $resolved[$key] = $entry;
+            }
+        }
+
+        return $resolved;
     }
 
     /**

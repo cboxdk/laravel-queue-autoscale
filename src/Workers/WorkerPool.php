@@ -6,14 +6,14 @@ namespace Cbox\LaravelQueueAutoscale\Workers;
 
 use Illuminate\Support\Collection;
 
-final class WorkerPool
+class WorkerPool
 {
     /** @var Collection<int, WorkerProcess> */
     private Collection $workers;
 
     public function __construct()
     {
-        $this->workers = collect();
+        $this->workers = new Collection;
     }
 
     public function add(WorkerProcess $worker): void
@@ -220,6 +220,6 @@ final class WorkerPool
 
     public function reset(): void
     {
-        $this->workers = collect();
+        $this->workers = new Collection;
     }
 }

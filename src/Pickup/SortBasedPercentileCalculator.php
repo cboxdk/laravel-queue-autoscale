@@ -6,7 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Pickup;
 
 use Cbox\LaravelQueueAutoscale\Contracts\PercentileCalculatorContract;
 
-final class SortBasedPercentileCalculator implements PercentileCalculatorContract
+class SortBasedPercentileCalculator implements PercentileCalculatorContract
 {
     public function compute(array $values, int $percentile, int $minSamples = 20): ?float
     {

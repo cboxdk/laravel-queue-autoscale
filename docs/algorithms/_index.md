@@ -1,98 +1,64 @@
 ---
 title: "Algorithms"
-description: "Mathematical foundations and algorithmic details of Queue Autoscale for Laravel"
+description: "The real formulas behind the autoscaler: Little's Law, backlog drain, forecasting and capacity limits"
 weight: 50
 ---
 
 # Algorithms
 
-This section provides deep dives into the mathematical foundations and algorithmic details behind Queue Autoscale for Laravel.
+Deep dives into the calculations `HybridStrategy` and `ScalingEngine` actually run, with the source
+file named for every formula.
 
-## Overview
+## The target worker count
 
-Queue Autoscale for Laravel uses a **hybrid predictive algorithm** that combines three complementary approaches:
+The default strategy takes the maximum of **two** calculations:
 
-1. **[Little's Law](littles-law.md)** - Steady-state calculation for current workload
-2. **[Trend Prediction](trend-prediction.md)** - Proactive scaling based on traffic forecasts
-3. **[Backlog Drain](backlog-drain.md)** - Aggressive scaling to prevent SLA breaches
-
-The autoscaler takes the **maximum** of these three calculations to ensure SLA compliance while being responsive to changing conditions.
-
-## Core Algorithms
-
-### Little's Law
-Mathematical foundation using queueing theory to calculate baseline worker requirements based on arrival rate and processing time.
-
-**Best for**: Steady-state workloads with predictable patterns.
-
-### Trend Prediction
-Forecasting algorithm that predicts future traffic based on historical patterns and current trends.
-
-**Best for**: Proactive scaling ahead of demand increases.
-
-### Backlog Drain
-SLA-focused algorithm that aggressively scales when jobs approach their pickup time targets.
-
-**Best for**: Preventing SLA breaches during traffic spikes.
-
-## Supporting Systems
-
-### Architecture
-Complete system architecture showing how components interact:
-
-- **[Architecture](architecture.md)** - System design and component interaction
-
-### Resource Management
-Ensuring autoscaling respects system limits:
-
-- **[Resource Constraints](resource-constraints.md)** - CPU and memory management
-
-## Mathematical Background
-
-These algorithms are based on established queueing theory and operations research:
-
-- **Little's Law**: L = λW (proven theorem from queueing theory)
-- **Trend Analysis**: Linear regression and exponential smoothing
-- **Constraint Optimization**: Multi-objective optimization with hard constraints
-
-## Algorithm Selection Logic
-
-The hybrid algorithm evaluates all three approaches and selects the maximum:
-
-```
-target_workers = max(
-    little_law_workers,
-    trend_predicted_workers,
-    backlog_drain_workers
+```text
+targetWorkers = max(
+    steadyStateWorkers,     # Little's Law:  arrivalRate x avgJobTime
+    backlogDrainWorkers     # SLA protection: backlog / timeUntilBreach, x aggressiveness
 )
+
+targetWorkers = max(workers.min, min(workers.max, ceil(targetWorkers)))
+targetWorkers = TargetSmoother::smooth(...)
 ```
 
-This ensures:
-- ✅ Current workload is handled (Little's Law)
-- ✅ Future demand is anticipated (Trend Prediction)
-- ✅ SLA breaches are prevented (Backlog Drain)
+- **[Little's Law](littles-law.md)** — the steady-state term. `L = lambda x W`, where lambda is the
+  estimated arrival rate and W is the average job duration.
+- **[Backlog Drain](backlog-drain.md)** — the SLA term. Abstains below
+  `scaling.breach_threshold` (default 50% of the SLA window), then scales with a progressive
+  aggressiveness multiplier that reaches 3.0x at the SLA line and caps at 5.0x.
 
-## When Each Algorithm Dominates
+Forecasting is **not** a third term:
 
-**Little's Law dominates when**:
-- Traffic is stable
-- No significant trends detected
-- Backlog is manageable
+- **[Trend Prediction](trend-prediction.md)** — linear-regression forecasting blended into the
+  arrival rate that feeds Little's Law, gated by a per-queue forecast policy.
 
-**Trend Prediction dominates when**:
-- Traffic is increasing
-- Strong upward trend detected
-- Proactive scaling needed
+## Constraints on the target
 
-**Backlog Drain dominates when**:
-- Jobs are aging
-- Approaching SLA target
-- Immediate action required
+Once the strategy has produced a number, it can only be reduced (or raised to `workers.min`):
 
-## Further Reading
+- **[Resource Constraints](resource-constraints.md)** — CPU and memory capacity, per-worker resource
+  estimates, and the per-queue share of a host-wide ceiling.
 
-For implementation details, see:
+## The whole pipeline
 
-- [How It Works](../basic-usage/how-it-works.md) - Practical application of algorithms
-- [Custom Strategies](../advanced-usage/custom-strategies.md) - Implementing your own algorithms
-- [Architecture](architecture.md) - System design and decision flow
+- **[Architecture](architecture.md)** — signals, the decision pipeline in execution order, the
+  failure fuse, the anti-flapping cooldown, worker lifecycle and extension points.
+
+## Which calculation dominates
+
+| Situation | Term that wins |
+|---|---|
+| Steady arrival rate, no aged backlog | Little's Law |
+| Arrival rate climbing, clean trend | Little's Law with a forecast-blended rate |
+| Backlog aged past `scaling.breach_threshold` | Backlog drain |
+| Oldest job at or past the SLA | Backlog drain, multiplied 3.0x–5.0x |
+| Host near `limits.max_cpu_percent` / `max_memory_percent` | Neither — capacity caps the result |
+| Downstream failing | Neither — the failure fuse holds at `workers.min` |
+
+## Further reading
+
+- [How It Works](../basic-usage/how-it-works.md) — the same pipeline without the mathematics
+- [Custom Strategies](../advanced-usage/custom-strategies.md) — implementing `ScalingStrategyContract`
+- [Scaling Policies](../advanced-usage/scaling-policies.md) — modifying decisions after the strategy

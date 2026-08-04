@@ -5,11 +5,15 @@ declare(strict_types=1);
 use Cbox\LaravelQueueAutoscale\Events\AutoscaleManagerStarted;
 use Cbox\LaravelQueueAutoscale\Events\AutoscaleManagerStopped;
 use Cbox\LaravelQueueAutoscale\Events\ClusterLeaderChanged;
+use Cbox\LaravelQueueAutoscale\Events\FuseProbing;
+use Cbox\LaravelQueueAutoscale\Events\FuseRecovered;
+use Cbox\LaravelQueueAutoscale\Events\FuseTripped;
 use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
 use Cbox\LaravelQueueAutoscale\Events\SlaBreached;
 use Cbox\LaravelQueueAutoscale\Events\SlaRecovered;
 use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Telemetry\TelemetryEventSubscriber;
 use Cbox\Telemetry\Facades\Telemetry;
@@ -53,7 +57,7 @@ it('records the capacity ceiling gauge with its limiting factor label', function
         maxWorkersByMemory: 12,
         maxWorkersByConfig: 20,
         finalMaxWorkers: 8,
-        limitingFactor: 'cpu',
+        limitingFactor: LimitingFactor::Cpu,
     );
 
     $this->subscriber->handleScalingDecisionMade(new ScalingDecisionMade(makeScalingDecision(['capacity' => $capacity])));
@@ -97,6 +101,48 @@ it('sets the breach gauge and counts breaches on sla breach, then clears on reco
 
     expect($this->fake->gaugeValue('queue_autoscale.sla.breach', $labels))->toBe(0.0);
     $this->fake->assertEventEmitted('queue_autoscale.sla.recovered');
+});
+
+it('walks the fuse state gauge through trip, probe and recovery', function () {
+    $labels = ['connection' => 'redis', 'queue' => 'default'];
+
+    $this->subscriber->handleFuseTripped(new FuseTripped(
+        connection: 'redis', queue: 'default', failureRate: 90.0, samples: 200,
+        failures: 180, thresholdPercent: 50.0, heldAtWorkers: 2,
+    ));
+
+    expect($this->fake->gaugeValue('queue_autoscale.fuse.state', $labels))->toBe(2.0);
+    $this->fake->assertCounterIncremented('queue_autoscale.fuse.trips', $labels);
+    $this->fake->assertEventEmitted('queue_autoscale.fuse.tripped', function ($event): bool {
+        return $event->attributes['failure_rate'] === 90.0
+            && $event->attributes['held_at_workers'] === 2;
+    });
+
+    $this->subscriber->handleFuseProbing(new FuseProbing(
+        connection: 'redis', queue: 'default', probeWorkers: 1, cooldownSeconds: 60,
+    ));
+
+    expect($this->fake->gaugeValue('queue_autoscale.fuse.state', $labels))->toBe(1.0);
+    $this->fake->assertEventEmitted('queue_autoscale.fuse.probing');
+
+    $this->subscriber->handleFuseRecovered(new FuseRecovered(
+        connection: 'redis', queue: 'default', failureRate: 0.0, samples: 50,
+    ));
+
+    expect($this->fake->gaugeValue('queue_autoscale.fuse.state', $labels))->toBe(0.0);
+    $this->fake->assertEventEmitted('queue_autoscale.fuse.recovered');
+});
+
+it('records no fuse telemetry when the events toggle is disabled', function () {
+    config()->set('queue-autoscale.telemetry.events', false);
+
+    $this->subscriber->handleFuseTripped(new FuseTripped(
+        connection: 'redis', queue: 'default', failureRate: 90.0, samples: 200,
+        failures: 180, thresholdPercent: 50.0, heldAtWorkers: 2,
+    ));
+
+    $this->fake->assertCounterNotIncremented('queue_autoscale.fuse.trips');
+    $this->fake->assertEventNotEmitted('queue_autoscale.fuse.tripped');
 });
 
 it('counts leader changes', function () {

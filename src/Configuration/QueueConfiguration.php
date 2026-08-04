@@ -8,7 +8,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ForecasterContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ForecastPolicyContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ProfileContract;
 
-final readonly class QueueConfiguration
+readonly class QueueConfiguration
 {
     /**
      * @param  list<string>  $memberQueues  When this configuration represents a group, lists the real
@@ -22,6 +22,13 @@ final readonly class QueueConfiguration
         public ForecastConfiguration $forecast,
         public SpawnCompensationConfiguration $spawnCompensation,
         public WorkerConfiguration $workers,
+        public FuseConfiguration $fuse = new FuseConfiguration(
+            enabled: true,
+            failureThresholdPercent: 50.0,
+            minSamples: 20,
+            windowSeconds: 60,
+            cooldownSeconds: 60,
+        ),
         public array $memberQueues = [],
     ) {}
 
@@ -51,6 +58,7 @@ final readonly class QueueConfiguration
          *     forecast: array{forecaster: class-string<ForecasterContract>, policy: class-string<ForecastPolicyContract>, horizon_seconds: int, history_seconds: int},
          *     spawn_compensation: array{enabled: bool, fallback_seconds: float, min_samples: int, ema_alpha: float},
          *     workers: array{min: int, max: int, tries: int, timeout_seconds: int, sleep_seconds: int, shutdown_timeout_seconds: int, scalable?: bool},
+         *     fuse?: array{enabled: bool, failure_threshold_percent: float, min_samples: int, window_seconds: int, cooldown_seconds: int},
          * } $merged
          */
         $merged = self::deepMerge($defaults, $overrideArray);
@@ -85,6 +93,7 @@ final readonly class QueueConfiguration
                 shutdownTimeoutSeconds: (int) $merged['workers']['shutdown_timeout_seconds'],
                 scalable: (bool) ($merged['workers']['scalable'] ?? true),
             ),
+            fuse: FuseConfiguration::fromArray($merged['fuse'] ?? []),
         );
     }
 
@@ -100,7 +109,22 @@ final readonly class QueueConfiguration
             return $instance->resolve();
         }
 
-        return is_array($value) ? $value : [];
+        if (! is_array($value)) {
+            return [];
+        }
+
+        // Config arrays are string-keyed by construction; filtering rather
+        // than asserting keeps a malformed positional entry from silently
+        // becoming a config key.
+        $resolved = [];
+
+        foreach ($value as $key => $entry) {
+            if (is_string($key)) {
+                $resolved[$key] = $entry;
+            }
+        }
+
+        return $resolved;
     }
 
     /**

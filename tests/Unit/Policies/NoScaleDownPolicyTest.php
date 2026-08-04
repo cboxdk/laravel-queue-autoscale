@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Cbox\LaravelQueueAutoscale\Policies\NoScaleDownPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 beforeEach(function () {
@@ -93,7 +94,7 @@ test('preserves capacity in modified decision', function () {
         maxWorkersByMemory: 15,
         maxWorkersByConfig: 10,
         finalMaxWorkers: 10,
-        limitingFactor: 'config',
+        limitingFactor: LimitingFactor::Config,
     );
 
     $decision = new ScalingDecision(

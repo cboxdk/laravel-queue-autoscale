@@ -6,7 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Output\DataTransferObjects;
 
 use DateTimeImmutable;
 
-final readonly class OutputData
+readonly class OutputData
 {
     /**
      * @param  array<string, QueueStats>  $queueStats  Keyed by "connection:queue"

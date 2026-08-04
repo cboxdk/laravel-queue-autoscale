@@ -7,7 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Workers;
 use Illuminate\Support\Carbon;
 use Symfony\Component\Process\Process;
 
-final class WorkerProcess
+class WorkerProcess
 {
     private ?Carbon $terminationRequestedAt = null;
 
@@ -31,11 +31,23 @@ final class WorkerProcess
         return $this->process->getPid();
     }
 
+    /**
+     * Whether the OS process is still alive.
+     *
+     * Impure by nature: the answer changes as the child exits, independently
+     * of anything this program does. Without the annotation, static analysis
+     * caches the first result and concludes that the SIGTERM-wait-SIGKILL loop
+     * in WorkerTerminator is unreachable — which is how three suppressions for
+     * a live code path ended up in a baseline.
+     *
+     * @phpstan-impure
+     */
     public function isRunning(): bool
     {
         return $this->process->isRunning();
     }
 
+    /** @phpstan-impure */
     public function isDead(): bool
     {
         return ! $this->process->isRunning();

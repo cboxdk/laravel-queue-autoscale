@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Output\DataTransferObjects;
 
-final readonly class QueueStats
+readonly class QueueStats
 {
     /**
      * @param  string  $slaStatus  'ok', 'warning', 'breached'

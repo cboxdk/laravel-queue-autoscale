@@ -99,7 +99,8 @@ it('resolves recommendation targets for queues and groups', function () {
 
     expect($decoded->targetForQueue('redis', 'default'))->toBe(2)
         ->and($decoded->targetForGroup('redis', 'mailers'))->toBe(1)
-        ->and($decoded->targetForQueue('redis', 'missing'))->toBe(0)
+        // An unpublished workload reads as null, not zero — see targetForQueue().
+        ->and($decoded->targetForQueue('redis', 'missing'))->toBeNull()
         ->and($decoded->leaderId)->toBe('leader-a')
         ->and($decoded->leaderToken)->toBe('lease-token-a');
 });

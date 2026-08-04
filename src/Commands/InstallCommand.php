@@ -7,7 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 
-final class InstallCommand extends Command
+class InstallCommand extends Command
 {
     protected $signature = 'queue:autoscale:install
                             {--topology= : Installation preset: single-low, single-redis, or cluster}
@@ -351,7 +351,12 @@ final class InstallCommand extends Command
     {
         $this->info('Publishing queue-metrics database migrations...');
 
-        $args = ['--tag' => 'laravel-queue-metrics-migrations'];
+        // The metrics package registers itself as 'queue-metrics', and its
+        // publish tags are "{shortName}-migrations". Asking for a tag that does
+        // not exist is silent — vendor:publish still exits 0 — so the guard
+        // below never fires and the install looks clean while no migration is
+        // ever written.
+        $args = ['--tag' => 'queue-metrics-migrations'];
         if ($force) {
             $args['--force'] = true;
         }

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Configuration;
 
-final readonly class SlaConfiguration
+readonly class SlaConfiguration
 {
     private const ALLOWED_PERCENTILES = [50, 75, 90, 95, 99];
 

@@ -8,7 +8,7 @@ use Cbox\LaravelQueueAutoscale\Output\Contracts\OutputRendererContract;
 use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\OutputData;
 use Symfony\Component\Console\Output\OutputInterface;
 
-final class DefaultOutputRenderer implements OutputRendererContract
+class DefaultOutputRenderer implements OutputRendererContract
 {
     /** @var array<int, int> Maps worker PID to display ID */
     private array $workerIds = [];

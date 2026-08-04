@@ -1,406 +1,257 @@
 ---
 title: "Trend Prediction"
-description: "Predictive autoscaling using trend analysis and forecasting"
+description: "How linear-regression forecasting blends into the arrival-rate estimate, and the forecast policies that gate it"
 weight: 52
 ---
 
 # Trend Prediction
 
-Predictive autoscaling using trend analysis and forecasting.
+Forecasting in this package is not a third worker-count calculation. It is a **correction to the
+arrival rate** that feeds [Little's Law](littles-law.md): the estimator projects where the arrival
+rate is heading and blends that projection into the observed rate, so the steady-state calculation
+sizes for the next horizon rather than the last tick.
 
-## Overview
+Everything below lives in four places:
 
-Trend prediction enables **proactive scaling** by:
-- Analyzing historical metrics
-- Detecting traffic patterns
-- Forecasting future load
-- Scaling ahead of demand
+- `src/Contracts/ForecasterContract.php` and `src/Contracts/ForecastPolicyContract.php`
+- `src/Scaling/Calculators/LinearRegressionForecaster.php`
+- `src/Scaling/Forecasting/ForecastResult.php` and `src/Scaling/Forecasting/Policies/`
+- `src/Scaling/Calculators/ArrivalRateEstimator.php` — where the blend happens
 
-**Goal:** Start scaling **before** load increases, not after.
-
-## Mathematical Foundation
-
-### Simple Linear Regression
-
-Predict future values using historical trend:
-
-```
-y = mx + b
-
-Where:
-y = predicted value
-m = slope (rate of change)
-x = time
-b = y-intercept
-```
-
-For queue autoscaling:
-
-```
-Future Load = Current Load + (Trend × Time Horizon)
-```
-
-### Implementation
+## The contracts
 
 ```php
-public function predictFutureLoad(array $historicalDepth, int $secondsAhead): float
+interface ForecasterContract
 {
-    $n = count($historicalDepth);
+    /** @param list<array{timestamp: float, rate: float}> $history */
+    public function forecast(array $history, int $horizonSeconds): ForecastResult;
+}
 
-    if ($n < 3) {
-        return end($historicalDepth);  // Not enough data
-    }
+interface ForecastPolicyContract
+{
+    /** Minimum R² for a forecast to be trusted. Returns > 1.0 to effectively disable. */
+    public function minRSquared(): float;
 
-    // Calculate slope using linear regression
-    $sumX = 0;
-    $sumY = 0;
-    $sumXY = 0;
-    $sumX2 = 0;
-
-    foreach ($historicalDepth as $i => $depth) {
-        $x = $i;  // time index
-        $y = $depth;  // queue depth
-
-        $sumX += $x;
-        $sumY += $y;
-        $sumXY += $x * $y;
-        $sumX2 += $x * $x;
-    }
-
-    $slope = ($n * $sumXY - $sumX * $sumY) / ($n * $sumX2 - $sumX * $sumX);
-    $intercept = ($sumY - $slope * $sumX) / $n;
-
-    // Predict future
-    $futureTime = $n + ($secondsAhead / $this->sampleInterval);
-    $prediction = $slope * $futureTime + $intercept;
-
-    return max(0, $prediction);  // Can't have negative queue depth
+    /** Blending weight for forecast in [0.0, 1.0]. */
+    public function forecastWeight(): float;
 }
 ```
 
-## Trend Detection
+`ForecastResult` is a readonly DTO of `projectedRate`, `rSquared`, `slope`, `sampleCount` and
+`hasSufficientData`, with a `ForecastResult::insufficientData()` constructor for the "not enough
+samples" case.
 
-### Direction Classification
+Two small interfaces, deliberately: the forecaster decides *what* the future rate is, the policy
+decides *whether and how much* to believe it.
 
-Classify trend direction:
+## LinearRegressionForecaster
+
+The shipped forecaster is ordinary least squares over `(timestamp, rate)` pairs.
+
+```text
+requires at least MIN_SAMPLES = 5 points, else ForecastResult::insufficientData()
+
+slope        = (sumXY - n * meanX * meanY) / (sumXX - n * meanX^2)
+intercept    = meanY - slope * meanX
+projectedRate = max(0, slope * (latestTimestamp + horizonSeconds) + intercept)
+rSquared     = max(0, 1 - ssRes / ssTot)
+```
+
+Two degenerate cases are handled explicitly:
+
+- Denominator below `1e-12` (all timestamps effectively identical): returns the mean rate with
+  `rSquared = 1.0` and `slope = 0.0`.
+- `ssTot` below `1e-12` (a perfectly flat rate): `rSquared = 1.0`.
+
+Projected rate is floored at zero — a steep downward slope cannot project negative arrivals.
+
+## Forecast policies
+
+| Policy | `minRSquared()` | `forecastWeight()` | Effect |
+|---|---|---|---|
+| `AggressiveForecastPolicy` | 0.4 | 0.8 | Accepts loose fits, mostly trusts the projection |
+| `ModerateForecastPolicy` | 0.6 | 0.5 | Even blend of projection and observation |
+| `HintForecastPolicy` | 0.8 | 0.3 | Only very clean trends, and only nudges |
+| `DisabledForecastPolicy` | 1.1 | 0.0 | `R²` can never reach 1.1, so no forecast is ever used |
+
+`DisabledForecastPolicy` turns forecasting off through the same code path rather than a flag — the
+blend simply never passes its gate.
+
+## How the blend works
+
+Inside `ArrivalRateEstimator::estimate()`, once the observed rate has been computed from backlog
+growth, `maybeBlendForecast()` runs — but only if a forecaster and policy have been set and at least
+two snapshots exist.
+
+**1. Build the rate history** from consecutive backlog snapshots (pairs less than 1 ms apart are
+skipped):
+
+```text
+growth = (backlog[i] - backlog[i-1]) / (timestamp[i] - timestamp[i-1])
+rate   = max(0, processingRate + growth)
+```
+
+**2. Forecast** over `forecast.horizon_seconds`.
+
+**3. Gate.** If `!hasSufficientData` or `rSquared < policy.minRSquared()`, the blend is abandoned and
+the plain observed rate is returned.
+
+**4. Blend:**
+
+```text
+weight  = policy.forecastWeight()
+blended = max(0, weight * forecast.projectedRate + (1 - weight) * observedRate)
+```
+
+The returned `source` string records the whole thing, for example:
+
+```text
+forecast_blended: observed=8.20/s forecast=12.40/s R²=0.87
+```
+
+Note what the blend does **not** change: `confidence`. The confidence value returned alongside the
+rate is always the window-quality confidence computed from the snapshot history, and it is that
+value which the strategy tests against `scaling.min_arrival_rate_confidence`. A high-`R²` forecast
+over a poor observation window is still rejected downstream.
+
+## Configuration
+
+Forecasting is configured per queue, in the profile's `forecast` block (or an override array
+deep-merged over `sla_defaults`):
 
 ```php
-public function detectTrendDirection(array $recentMetrics): string
+'forecast' => [
+    'forecaster' => LinearRegressionForecaster::class,
+    'policy' => ModerateForecastPolicy::class,
+    'horizon_seconds' => 60,
+    'history_seconds' => 300,
+],
+```
+
+`ForecastConfiguration` validates on construction and throws `InvalidConfigurationException` when:
+
+- `forecaster` does not implement `ForecasterContract`
+- `policy` does not implement `ForecastPolicyContract`
+- `horizon_seconds <= 0`
+- `history_seconds < horizon_seconds`
+
+Both classes are resolved from the container, so a forecaster or policy with constructor
+dependencies works.
+
+**`history_seconds` is validated but not consumed at runtime.** The window that actually feeds the
+forecaster is `ArrivalRateEstimator`'s own fixed sliding window: at most 30 snapshots, nothing older
+than 300 seconds. Setting `history_seconds` to 900 does not lengthen it.
+
+### Shipped profile settings
+
+| Profile | Policy | `horizon_seconds` | `history_seconds` |
+|---|---|---|---|
+| `BalancedProfile` | `ModerateForecastPolicy` | 60 | 300 |
+| `CriticalProfile` | `AggressiveForecastPolicy` | 60 | 300 |
+| `BurstyProfile` | `AggressiveForecastPolicy` | 120 | 600 |
+| `HighVolumeProfile` | `ModerateForecastPolicy` | 60 | 300 |
+| `BackgroundProfile` | `HintForecastPolicy` | 300 | 900 |
+| `ExclusiveProfile` | `DisabledForecastPolicy` | 60 | 300 |
+
+Every shipped profile uses `LinearRegressionForecaster`.
+
+## Per-queue configuration is re-applied every call
+
+`HybridStrategy` calls `ArrivalRateEstimator::setForecaster()` on **every** invocation, with the
+current queue's forecaster, policy and horizon:
+
+```php
+$this->arrivalEstimator->setForecaster(
+    forecaster: app($config->forecast->forecasterClass),
+    policy: app($config->forecast->policyClass),
+    horizonSeconds: $config->forecast->horizonSeconds,
+);
+```
+
+The estimator is a container singleton holding those as instance state. Configuring it once would
+mean the first queue evaluated set the forecast behaviour for every other queue for the manager's
+whole lifetime.
+
+## Worked example
+
+A queue on `BalancedProfile` (`ModerateForecastPolicy`, horizon 60 s), with `processingRate = 5.0/s`
+and a backlog climbing steadily over six snapshots.
+
+```text
+Observed:
+  weighted growth       = 3.2 jobs/s
+  observedRate          = 5.0 + 3.2 = 8.2 jobs/s
+  confidence            = 0.9
+
+Forecast (6 rate points, horizon 60 s):
+  slope                 = 0.07 jobs/s per second
+  projectedRate         = 12.4 jobs/s
+  rSquared              = 0.87
+
+Gate: 0.87 >= 0.6 (ModerateForecastPolicy)     -> blend
+
+blended = 0.5 * 12.4 + 0.5 * 8.2 = 10.3 jobs/s
+
+Confidence 0.9 >= 0.5 threshold                -> arrivalRate = 10.3 jobs/s
+With avgJobTime 1.5 s: workers = 10.3 * 1.5 = 15.45  -> ceil 16
+```
+
+Without the forecast the same tick would have asked for `ceil(8.2 * 1.5) = 13` workers. Under
+`HintForecastPolicy` the blend would be `0.3 * 12.4 + 0.7 * 8.2 = 9.46` — 15 workers. Under
+`DisabledForecastPolicy` the gate never passes and the answer is 13.
+
+## Writing a custom forecaster
+
+```php
+use Cbox\LaravelQueueAutoscale\Contracts\ForecasterContract;
+use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\ForecastResult;
+
+class SeasonalForecaster implements ForecasterContract
 {
-    if (count($recentMetrics) < 3) {
-        return 'stable';
-    }
-
-    $depths = array_column($recentMetrics, 'pending');
-    $slope = $this->calculateSlope($depths);
-
-    // Define thresholds
-    $upwardThreshold = 5.0;    // jobs/sample increasing
-    $downwardThreshold = -5.0;  // jobs/sample decreasing
-
-    if ($slope > $upwardThreshold) {
-        return 'up';
-    } elseif ($slope < $downwardThreshold) {
-        return 'down';
-    } else {
-        return 'stable';
-    }
-}
-```
-
-### Trend Strength
-
-Measure how strong the trend is:
-
-```php
-public function calculateTrendStrength(array $values): float
-{
-    // Calculate R² (coefficient of determination)
-    $n = count($values);
-    $meanY = array_sum($values) / $n;
-
-    $ssTotal = 0;  // Total sum of squares
-    $ssResidual = 0;  // Residual sum of squares
-
-    $predictions = $this->getPredictions($values);
-
-    foreach ($values as $i => $actual) {
-        $ssTotal += pow($actual - $meanY, 2);
-        $ssResidual += pow($actual - $predictions[$i], 2);
-    }
-
-    $rSquared = 1 - ($ssResidual / $ssTotal);
-
-    return max(0, min(1, $rSquared));  // 0-1 confidence
-}
-```
-
-## Forecasting Strategies
-
-### Strategy 1: Linear Extrapolation
-
-Simple projection of current trend:
-
-```php
-private function linearForecast(object $metrics, QueueConfiguration $config): int
-{
-    $currentDepth = $metrics->depth->pending ?? 0;
-    $trendDirection = $metrics->trend->direction ?? 'stable';
-    $trendForecast = $metrics->trend->forecast ?? null;
-
-    if ($trendDirection === 'stable' || $trendForecast === null) {
-        return $this->littlesLawCalculation($metrics, $config);
-    }
-
-    // Predict depth in next evaluation cycle
-    $forecastHorizon = $config->evaluationIntervalSeconds ?? 30;
-    $predictedDepth = $trendForecast;
-
-    // Calculate workers needed for predicted load
-    $processingRate = $metrics->processingRate ?? 1.0;
-    $workers = (int) ceil(($predictedDepth / $config->maxPickupTimeSeconds) / $processingRate);
-
-    return max($config->minWorkers, min($config->maxWorkers, $workers));
-}
-```
-
-### Strategy 2: Weighted Forecast
-
-Blend current state with prediction:
-
-```php
-private function weightedForecast(object $metrics, QueueConfiguration $config): int
-{
-    $currentWorkers = $this->calculateCurrent($metrics, $config);
-    $forecastWorkers = $this->calculateForecast($metrics, $config);
-    $confidence = $metrics->trend->confidence ?? 0.5;
-
-    // Weight by confidence
-    $blendedWorkers = ($confidence * $forecastWorkers) + ((1 - $confidence) * $currentWorkers);
-
-    return (int) ceil($blendedWorkers);
-}
-```
-
-### Strategy 3: Exponential Smoothing
-
-Smooth forecasts to reduce noise:
-
-```php
-private function exponentialSmoothing(array $historical, float $alpha = 0.3): float
-{
-    $smoothed = $historical[0];
-
-    foreach (array_slice($historical, 1) as $value) {
-        $smoothed = $alpha * $value + (1 - $alpha) * $smoothed;
-    }
-
-    return $smoothed;
-}
-```
-
-## Examples
-
-### Example 1: Growing Load
-
-**Scenario:**
-- Historical depth: [50, 75, 100, 125, 150]
-- Trend: Increasing by ~25 jobs/sample
-- Current: 150 jobs
-- Forecast 30s ahead: 175 jobs
-
-**Calculation:**
-```php
-// Without trend prediction
-$currentWorkers = 150 / (10 jobs/sec × 60 sec) = 0.25 ≈ 1 worker
-
-// With trend prediction
-$forecastWorkers = 175 / (10 jobs/sec × 60 sec) = 0.29 ≈ 1 worker
-
-// But trend is strong, add safety margin
-$trendWorkers = ceil(1 * 1.3) = 2 workers
-```
-
-Scale to 2 workers **before** the load actually increases.
-
-### Example 2: Spike Detection
-
-**Scenario:**
-- Historical: [100, 100, 100, 150, 250]
-- Rapid increase detected
-- Predict continued growth
-
-**Response:**
-```php
-$recentGrowth = [150, 250];  // Last 2 samples
-$growthRate = 100 jobs/sample;
-
-$predictedNext = 250 + 100 = 350 jobs;
-$aggressiveScaling = true;  // Spike detected
-
-$workers = ceil(350 / (processingRate × sla)) * 1.5;  // 50% buffer
-```
-
-### Example 3: Declining Load
-
-**Scenario:**
-- Historical: [200, 180, 160, 140, 120]
-- Decreasing by ~20 jobs/sample
-- Predict: 100 jobs
-
-**Response:**
-```php
-$currentWorkers = 5;
-$predictedWorkers = 100 / (rate × sla) = 2;
-
-// Gradual scale-down to avoid oscillation
-$scaleDownStep = max(1, ceil($currentWorkers * 0.2));  // 20% at a time
-$targetWorkers = max($predictedWorkers, $currentWorkers - $scaleDownStep);
-```
-
-## Confidence Calculation
-
-Measure prediction reliability:
-
-```php
-public function calculateConfidence(array $historical, float $prediction): float
-{
-    // Factor 1: Trend strength (R²)
-    $trendStrength = $this->calculateTrendStrength($historical);
-
-    // Factor 2: Data recency
-    $dataRecency = min(1.0, count($historical) / 10);  // Max confidence at 10 samples
-
-    // Factor 3: Prediction variance
-    $variance = $this->calculateVariance($historical);
-    $predictionStability = 1 / (1 + $variance);
-
-    // Weighted combination
-    $confidence = (
-        $trendStrength * 0.5 +
-        $dataRecency * 0.3 +
-        $predictionStability * 0.2
-    );
-
-    return max(0, min(1, $confidence));
-}
-```
-
-## Integration with Hybrid Strategy
-
-```php
-class HybridStrategy
-{
-    public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
+    /** @param list<array{timestamp: float, rate: float}> $history */
+    public function forecast(array $history, int $horizonSeconds): ForecastResult
     {
-        $steadyState = $this->littlesLaw($metrics, $config);
-
-        // Check if trend is significant
-        $trend = $metrics->trend ?? null;
-        if (!$trend || $trend->direction === 'stable') {
-            return $steadyState;
+        if (count($history) < 5) {
+            return ForecastResult::insufficientData();
         }
 
-        // Calculate trend-based workers
-        $trendWorkers = $this->trendBased($metrics, $config);
-        $confidence = $trend->confidence ?? 0.5;
-
-        // Use trend if confidence is high
-        if ($confidence > 0.7 && $trendWorkers > $steadyState) {
-            return $trendWorkers;  // Proactive scaling
-        }
-
-        return $steadyState;
-    }
-
-    private function trendBased(object $metrics, QueueConfiguration $config): int
-    {
-        $forecast = $metrics->trend->forecast ?? $metrics->depth->pending;
-        $processingRate = $metrics->processingRate ?? 1.0;
-        $sla = $config->maxPickupTimeSeconds;
-
-        $workers = (int) ceil(($forecast / $sla) / $processingRate);
-
-        // Add buffer for upward trends
-        if ($metrics->trend->direction === 'up') {
-            $workers = (int) ceil($workers * 1.2);  // 20% safety margin
-        }
-
-        return $workers;
+        return new ForecastResult(
+            projectedRate: $this->project($history, $horizonSeconds),
+            rSquared: $this->goodnessOfFit($history),
+            slope: $this->slope($history),
+            sampleCount: count($history),
+            hasSufficientData: true,
+        );
     }
 }
 ```
 
-## Performance Characteristics
+Return an honest `rSquared` — it is the only thing standing between a bad projection and the worker
+count, and the policy's `minRSquared()` gate depends on it entirely.
 
-### Time Complexity
-- **O(n)**: Linear in number of historical samples
-- Typically n = 5-10 samples, very fast
-
-### Space Complexity
-- **O(n)**: Store historical metrics
-- Can limit to recent window for bounded memory
-
-### Accuracy
-- **High** for consistent trends
-- **Medium** for variable trends
-- **Low** for random/chaotic traffic
-
-## Best Practices
-
-1. **Require minimum samples**: At least 3-5 data points
-2. **Use confidence thresholds**: Only act on high-confidence predictions
-3. **Add safety margins**: Buffer for prediction uncertainty
-4. **Smooth data**: Reduce noise with moving averages
-5. **Limit forecast horizon**: Don't predict too far ahead
-6. **Validate predictions**: Track forecast accuracy over time
-
-## Common Pitfalls
-
-### Overfitting
-
-Don't overreact to short-term noise:
+Point a queue at it:
 
 ```php
-// ❌ Bad: Too sensitive
-if ($slope > 0) {
-    $workers = $predictedWorkers * 2;
-}
-
-// ✅ Good: Require significance
-if ($slope > $threshold && $confidence > 0.7) {
-    $workers = $predictedWorkers * 1.2;
-}
+'queues' => [
+    'checkout' => [
+        'forecast' => [
+            'forecaster' => SeasonalForecaster::class,
+            'policy' => ModerateForecastPolicy::class,
+            'horizon_seconds' => 120,
+            'history_seconds' => 600,
+        ],
+    ],
+],
 ```
 
-### Ignoring Seasonality
+## Properties
 
-Account for recurring patterns:
+- **O(n)** in the number of snapshots, with `n <= 30`.
+- Single pass for the regression, single pass for `R²`.
+- No persistence: history is per-process and per-queue, and is discarded on manager restart.
 
-```php
-// Check for daily/weekly patterns
-$hourOfDay = now()->hour;
-$historicalAtThisHour = $this->getHistoricalLoadAtHour($hourOfDay);
+## See also
 
-$seasonalAdjustment = $historicalAtThisHour / $currentLoad;
-$adjustedPrediction = $rawPrediction * $seasonalAdjustment;
-```
-
-### Prediction Drift
-
-Validate and recalibrate:
-
-```php
-// Compare prediction to actual
-$error = abs($predicted - $actual) / $actual;
-
-if ($error > 0.3) {  // 30% error
-    $this->recalibrateModel();
-}
-```
-
-## See Also
-
-- [Little's Law](littles-law.md) - Steady-state calculation
-- [Backlog Drain](backlog-drain.md) - SLA protection
-- [Resource Constraints](resource-constraints.md) - Constraint handling
+- [Little's Law](littles-law.md) — where the blended arrival rate is consumed
+- [Backlog Drain](backlog-drain.md) — the calculation forecasting does not touch
+- [Architecture](architecture.md) — the full decision pipeline

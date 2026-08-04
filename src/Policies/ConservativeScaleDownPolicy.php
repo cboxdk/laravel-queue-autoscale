@@ -8,7 +8,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 /**
- * Policy that limits scale-down to a maximum of 1 worker per evaluation cycle
+ * Policy that limits scale-down to a maximum of at most 25% of the current count per cycle
  *
  * Use Case: Workloads that benefit from gradual scaling to avoid oscillation and thrashing.
  * This policy prevents aggressive scale-down that could cause rapid up/down cycles.
@@ -28,7 +28,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
  * - Slower cost reduction when load drops
  * - May maintain excess workers longer than needed
  */
-final readonly class ConservativeScaleDownPolicy implements ScalingPolicy
+readonly class ConservativeScaleDownPolicy implements ScalingPolicy
 {
     public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
     {

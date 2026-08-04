@@ -10,7 +10,7 @@ use Illuminate\Redis\Connections\Connection;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Support\Facades\Redis;
 
-final class EmaSpawnLatencyTracker implements SpawnLatencyTrackerContract
+class EmaSpawnLatencyTracker implements SpawnLatencyTrackerContract
 {
     private const float MIN_LATENCY = 0.1;
 

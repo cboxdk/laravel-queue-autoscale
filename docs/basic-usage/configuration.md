@@ -61,7 +61,7 @@ QUEUE_METRICS_STORAGE=database
 Then publish and run migrations:
 
 ```bash
-php artisan vendor:publish --tag=laravel-queue-metrics-migrations
+php artisan vendor:publish --tag=queue-metrics-migrations
 php artisan migrate
 ```
 
@@ -97,7 +97,7 @@ return [
 ];
 ```
 
-Five profiles ship with the package (`BalancedProfile`, `CriticalProfile`, `HighVolumeProfile`, `BurstyProfile`, `BackgroundProfile`, plus the single-worker `ExclusiveProfile`). See [Workload Profiles](workload-profiles.md) for what each one sets.
+Six profiles ship with the package: five autoscaling ones (`BalancedProfile`, `CriticalProfile`, `HighVolumeProfile`, `BurstyProfile`, `BackgroundProfile`) plus the pinned single-worker `ExclusiveProfile`. See [Workload Profiles](workload-profiles.md) for what each one sets.
 
 ## Queue Configuration
 
@@ -130,7 +130,7 @@ When you want *almost* the defaults but with one or two changes, pass an array. 
 
 ### The nested config shape
 
-A fully-resolved queue configuration has four sections. You rarely need to see all of them — a profile populates them all — but here's the reference when you need to override specific keys:
+A fully-resolved queue configuration has five sections. You rarely need to see all of them — a profile populates them all — but here's the reference when you need to override specific keys:
 
 ```php
 'payments' => [
@@ -149,10 +149,10 @@ A fully-resolved queue configuration has four sections. You rarely need to see a
     'workers' => [
         'min' => 5,                  // floor — autoscaler won't drop below this
         'max' => 50,                 // ceiling — autoscaler won't exceed this
-        'tries' => 5,                // --tries= on queue:work
-        'timeout_seconds' => 3600,   // --max-time= on queue:work
-        'sleep_seconds' => 1,        // --sleep= on queue:work
-        'shutdown_timeout_seconds' => 30,
+        'tries' => 5,                // parsed and validated, but NOT used per queue
+        'timeout_seconds' => 3600,   // parsed and validated, but NOT used per queue
+        'sleep_seconds' => 1,        // parsed and validated, but NOT used per queue
+        'shutdown_timeout_seconds' => 30,  // ditto
         'scalable' => true,          // set false for pinned/exclusive queues
     ],
     'spawn_compensation' => [
@@ -161,8 +161,32 @@ A fully-resolved queue configuration has four sections. You rarely need to see a
         'min_samples' => 3,
         'ema_alpha' => 0.3,
     ],
+    'fuse' => [
+        'enabled' => true,
+        'failure_threshold_percent' => 40.0,  // trip at/above this failure rate
+        'min_samples' => 10,                  // outcomes needed before the rate is trusted
+        'window_seconds' => 30,               // bucket size for outcome counting
+        'cooldown_seconds' => 30,             // hold this long before probing for recovery
+    ],
 ],
 ```
+
+The `fuse` block is optional — configs written before the fuse existed keep working on package defaults. See [Failure Fuse](failure-fuse.md) for what it does and how to tune it.
+
+> **Only `min`, `max` and `scalable` are used per queue.** `WorkerSpawner` builds the `queue:work` command from the **global** `queue-autoscale.workers` block, so `tries`, `timeout_seconds`, `sleep_seconds` and `shutdown_timeout_seconds` set inside a profile or a per-queue override are parsed and validated but never reach a spawned worker. Set those globally:
+>
+> ```php
+> 'workers' => [
+>     'timeout_seconds' => 3600,   // --max-time= on queue:work (worker lifetime)
+>     'tries' => 3,                // --tries=
+>     'sleep_seconds' => 3,        // --sleep=
+>     'shutdown_timeout_seconds' => 30,  // SIGTERM grace before SIGKILL
+> ],
+> ```
+>
+> `workers.health_check_interval_seconds` is also in the published config, but like `manager.evaluation_interval_seconds` it has an accessor and no callers — worker liveness is checked once per evaluation cycle.
+>
+> Note that `timeout_seconds` maps to `--max-time` (how long a worker lives before recycling), **not** to `--timeout` (per-job limit). The spawner passes neither `--timeout` nor `--memory`.
 
 **The keys most operators touch:**
 
@@ -170,7 +194,7 @@ A fully-resolved queue configuration has four sections. You rarely need to see a
 - `workers.min` / `workers.max` — floor and ceiling on concurrency.
 - `workers.scalable = false` — pin the queue and bypass the scaling engine (see [ExclusiveProfile](#exclusiveprofile--pinned-single-worker-queues)).
 
-Global scaling keys (cooldown, breach threshold, fallback job time) live under `scaling.*` at the top level — see the published config file.
+Global scaling keys (cooldown, breach threshold, fallback job time) live under `scaling.*` at the top level — see the published config file. The fuse's two infrastructure settings live under `fuse.*` at the top level; its thresholds are per-queue, in the block above.
 
 ## Worker Topology (v3)
 
@@ -191,7 +215,7 @@ v3 introduces three new capabilities on top of per-queue autoscaling. Each is ex
 - The first time the manager sees an excluded queue in a cycle, it logs a single `info` line so you can confirm.
 - Exclusion wins over everything: if you put the same name in both `queues` and `excluded`, it is excluded.
 
-**When to use:** queues managed by Horizon or another supervisor, throwaway queues during migrations, or queues with workers started manually via `queue:work` under systemd/supervisord.
+**When to use:** queues managed by another supervisor, throwaway queues during migrations, or queues with workers started manually via `queue:work` under systemd/supervisord.
 
 ### `groups` — multi-queue workers with strict priority
 
@@ -201,7 +225,7 @@ v3 introduces three new capabilities on top of per-queue autoscaling. Each is ex
         'queues'     => ['email', 'sms', 'push'],   // priority order
         'profile'    => BalancedProfile::class,     // optional — defaults to sla_defaults
         'connection' => 'redis',                    // optional — defaults to 'default'
-        'mode'       => 'priority',                 // only supported mode in v2
+        'mode'       => 'priority',                 // the only supported mode
         'overrides'  => [                           // optional partial override
             'sla' => ['target_seconds' => 45],
         ],
@@ -209,9 +233,11 @@ v3 introduces three new capabilities on top of per-queue autoscaling. Each is ex
 ],
 ```
 
+> `profile` + `overrides` is a **groups-only** shape, read by `GroupConfiguration::fromConfig()`. Using those two keys inside a `queues.{name}` entry silently does nothing — see [Workload Profiles → Using a profile](workload-profiles.md#using-a-profile).
+
 - Each worker spawned for the group invokes `queue:work redis --queue=email,sms,push` — Laravel polls them in that order per poll cycle.
 - The group is the scaling unit. Metrics are aggregated across members (`pending`, `throughput`: summed; `oldest_job_age`: max). The SLA target is the group's SLA, not any individual queue's.
-- A queue may appear in **at most one place**: either under `queues.{name}` or inside **one** group. Startup validation throws `InvalidConfigurationException` if this is violated.
+- A queue may appear in **at most one place**: either under `queues.{name}` or inside **one** group. `GroupConfiguration::assertNoQueueConflicts()` throws `InvalidConfigurationException` if this is violated — the manager catches it, logs it at critical level, and runs with all groups disabled until you restart it.
 - Groups cannot use `ExclusiveProfile`. A pinned group is a contradiction — use a per-queue exclusive config instead.
 
 **When to use:** queues that share a failure domain and have compatible SLA expectations, where you want idle capacity in one queue to absorb bursts on another without paying spawn latency.
@@ -245,10 +271,7 @@ Strategies determine HOW workers are calculated. The package includes a hybrid s
 'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy::class,
 ```
 
-The hybrid strategy combines:
-- Little's Law for steady-state
-- Trend prediction for growing loads
-- Backlog drain for SLA breaches
+The hybrid strategy takes the **maximum of two** calculations — Little's Law for steady state, and backlog drain for SLA protection. Forecasting is not a third term: it feeds the arrival rate that Little's Law consumes. See [How It Works](how-it-works.md#2-calculation-phase).
 
 ### Custom Strategy
 
@@ -260,18 +283,19 @@ See [Custom Strategies](../advanced-usage/custom-strategies.md) for implementati
 
 ### Strategy Parameters
 
-Some strategies accept additional configuration:
+There are none. `queue-autoscale.strategy` is a **plain class string** — `AutoscaleConfiguration::strategyClass()` reads it as a string and the service provider resolves it from the container. Writing it as an array (`['class' => ..., 'options' => [...]]`) is not understood and breaks the binding at boot.
+
+Algorithm tuning lives under the global `scaling` key instead:
 
 ```php
-'strategy' => [
-    'class' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy::class,
-    'options' => [
-        'trend_weight' => 0.7,        // How much to trust trend predictions
-        'safety_margin' => 1.2,       // 20% buffer for uncertainty
-        'min_trend_samples' => 3,     // Samples needed for trend analysis
-    ],
+'scaling' => [
+    'fallback_job_time_seconds' => env('QUEUE_AUTOSCALE_FALLBACK_JOB_TIME', 2.0),
+    'breach_threshold' => 0.5,   // ratio of the SLA window, not a percentage
+    'cooldown_seconds' => 60,    // anti-flapping only, see below
 ],
 ```
+
+Other shipped strategies: `BacklogOnlyStrategy`, `ConservativeStrategy`, `SimpleRateStrategy`. `ConservativeStrategy` carries its own hard-coded 25% safety buffer and 0.75 breach threshold as class constants — it does not read `scaling.breach_threshold`.
 
 ## Policy Configuration
 
@@ -290,10 +314,12 @@ The shipped default policies (set in the published config):
 
 Available policy classes:
 
-- `ConservativeScaleDownPolicy` — limits scale-down to one worker per cycle (prevents thrashing)
-- `AggressiveScaleDownPolicy` — allows rapid scale-down (for cost optimisation)
-- `NoScaleDownPolicy` — never scales down (for strict capacity guarantees)
-- `BreachNotificationPolicy` — logs SLA breach risks with built-in rate limiting (see [Alerting](../cookbook/_index.md))
+- `ConservativeScaleDownPolicy` — limits scale-down to `max(1, ceil(currentWorkers * 0.25))` per cycle: 25% of the current count, at least one worker
+- `AggressiveScaleDownPolicy` — forces the full strategy target when the queue is idle and already at 1 or fewer workers; otherwise passes scale-down through untouched. Intended to be listed **after** `ConservativeScaleDownPolicy` so it can override it
+- `NoScaleDownPolicy` — blocks scale-down, except when `currentWorkers` exceeds the host's capacity ceiling (resource-forced scale-down is allowed through). Takes a `CapacityCalculator` via constructor injection
+- `BreachNotificationPolicy` — never modifies a decision; in `afterScaling()` it logs SLA breach risk and high SLA utilisation, gated by `AlertRateLimiter` (see [Alerting](../cookbook/_index.md))
+
+Entries must be **class strings**. `PolicyExecutor` filters the array to `is_string($policy) && class_exists($policy)`, so a policy *instance* or a closure is silently dropped. Classes are resolved through `app()`, so constructor injection works.
 
 Resource constraints and cooldown enforcement are built into the scaling engine itself, not expressed as policies — you don't configure them here.
 
@@ -313,7 +339,9 @@ Resource constraints and cooldown enforcement are built into the scaling engine 
 
 ### Policy Order
 
-Policies execute in the order listed. `beforeScaling()` hooks run top-to-bottom (each may modify the decision), then the scaling action fires, then `afterScaling()` hooks run top-to-bottom.
+Policies execute in the order listed, **after** the strategy, the capacity constraint, the config bounds and the failure fuse have already produced a `ScalingDecision`. `beforeScaling()` hooks run top-to-bottom and each sees the previous policy's modified decision; then the scaling action fires; then `afterScaling()` hooks run top-to-bottom.
+
+An exception thrown by a policy is caught and logged to `manager.log_channel` — it does not abort scaling.
 
 See [Scaling Policies](../advanced-usage/scaling-policies.md) for implementation guide.
 
@@ -323,24 +351,21 @@ The AutoscaleManager orchestrates the entire autoscaling process.
 
 ### Evaluation Interval
 
-```php
-'evaluation_interval_seconds' => 30,  // Check every 30 seconds
+The interval is set **on the command line**, and nowhere else:
+
+```bash
+php artisan queue:autoscale --interval=5   # 5 is the default
 ```
 
-How often to evaluate scaling decisions:
-- **Lower values (10-30s)**: More responsive, higher resource usage
-- **Higher values (60-120s)**: Less responsive, lower resource usage
+> `manager.evaluation_interval_seconds` is present in the published config file but **has no effect**. `AutoscaleConfiguration::evaluationIntervalSeconds()` exists and returns it, but nothing calls that method — the running loop uses the value passed from `--interval`. Set the interval in your supervisor or systemd unit.
 
-Balance based on:
-- Queue traffic patterns
-- SLA requirements
-- System resources
+Lower values (2-5s) react faster and cost more manager CPU; higher values (15-60s) are cheaper and slower. Keep the interval well below your tightest `sla.target_seconds`.
 
 ### Manager Options
 
 ```php
 'manager' => [
-    'evaluation_interval_seconds' => 5,
+    'evaluation_interval_seconds' => 5,   // NOT READ — see above
     'log_channel' => env('QUEUE_AUTOSCALE_LOG_CHANNEL', 'stack'),
     'restart_scope' => env('QUEUE_AUTOSCALE_RESTART_SCOPE'),
     'honor_queue_restart' => env('QUEUE_AUTOSCALE_HONOR_QUEUE_RESTART', true),
@@ -386,13 +411,28 @@ When a profile is almost right but you want to adjust one or two values, pass an
 
 ### Multiple queue connections
 
-Queue names are keys into the `queues` map; the connection is resolved from your Laravel queue config. For one queue on a non-default connection, add a `connection` key:
+Queue names are keys into the `queues` map. `AutoscaleConfiguration::configuredQueues()` reads an optional `connection` key from each entry (defaulting to `'default'`) so the manager knows which connection to seed metrics for:
 
 ```php
 'queues' => [
     'notifications' => [
         'connection' => 'sqs',
         'sla' => ['target_seconds' => 30],
+    ],
+],
+```
+
+### Per-queue resource estimates
+
+A queue whose workers are unusually heavy can declare its own capacity footprint. These are cold-start hints — once enough measured samples exist, measured values take precedence:
+
+```php
+'queues' => [
+    'video-encode' => [
+        'resources' => [
+            'cpu_cores' => 0.5,   // defaults to limits.worker_cpu_core_estimate
+            'memory_mb' => 2048,  // defaults to limits.worker_memory_mb_estimate
+        ],
     ],
 ],
 ```
@@ -467,7 +507,25 @@ QUEUE_AUTOSCALE_ALERT_COOLDOWN=300
 
 # Log channel the manager writes to
 QUEUE_AUTOSCALE_LOG_CHANNEL=stack
+
+# Failure fuse
+QUEUE_AUTOSCALE_FUSE_ENABLED=true
+QUEUE_AUTOSCALE_FUSE_STORE=auto        # auto|cache|null|FQCN
+
+# Telemetry (no-op unless cboxdk/laravel-telemetry is installed)
+QUEUE_AUTOSCALE_TELEMETRY_ENABLED=true
+QUEUE_AUTOSCALE_TELEMETRY_CACHE_TTL=10
+
+# Cluster tuning (only meaningful with cluster mode enabled)
+QUEUE_AUTOSCALE_CLUSTER_HEARTBEAT_TTL=15
+QUEUE_AUTOSCALE_CLUSTER_LEADER_LEASE=15
+QUEUE_AUTOSCALE_CLUSTER_RECOMMENDATION_TTL=30
+QUEUE_AUTOSCALE_CLUSTER_SUMMARY_TTL=30
+QUEUE_AUTOSCALE_DECISION_HISTORY=3600
+QUEUE_AUTOSCALE_DECISION_HISTORY_MAX=10000
 ```
+
+That is the complete list. There is no `QUEUE_AUTOSCALE_EVALUATION_INTERVAL`, `QUEUE_AUTOSCALE_MIN_WORKERS`, `QUEUE_AUTOSCALE_MAX_WORKERS`, `QUEUE_AUTOSCALE_COOLDOWN` or `QUEUE_AUTOSCALE_MAX_PICKUP_TIME` — those keys are plain PHP values in the config file, or (for the interval) a CLI flag.
 
 Per-queue SLA targets are **not** env-driven — they live in profile classes or queue-level override arrays. If you need per-queue env configuration, author a custom Profile class that reads env inside `resolve()`.
 
@@ -518,17 +576,38 @@ Pick a profile per tier:
 
 ## Configuration Validation
 
-Config validation runs at manager startup. If anything is wrong, `php artisan queue:autoscale` fails with a specific `InvalidConfigurationException` pointing at the offending key. The common ones:
+There is no whole-config validation pass, and **a bad config does not fail `php artisan queue:autoscale` at startup**. Validation happens in constructors, during the evaluation cycle, and the manager keeps running.
+
+### What actually throws
+
+`WorkerConfiguration`, `SlaConfiguration` and `GroupConfiguration` guard their own invariants and throw `InvalidConfigurationException`:
 
 - **`workers.min must be >= 0`** / **`workers.max (X) must be >= workers.min (Y)`** — inconsistent worker bounds.
+- **`workers.tries must be >= 1`**, **`workers.timeout_seconds must be > 0`**.
 - **`workers.scalable=false requires workers.min (X) to equal workers.max (Y)`** — non-scalable (pinned) configs must declare exactly one target count.
 - **`workers.scalable=false requires workers.min >= 1`** — a pinned queue needs at least one worker.
+- **`sla.target_seconds must be > 0`**, **`sla.percentile must be one of 50, 75, 90, 95, 99`**, **`sla.window_seconds must be >= 60`**, **`sla.min_samples must be >= 1`**.
+- **`Group 'X' must declare at least one queue`**.
+- **`Group 'X' has unsupported mode '...'`** — only `'priority'` is supported.
 - **`Group 'X' cannot use a non-scalable profile`** — you pointed a group at `ExclusiveProfile`; use a per-queue exclusive config instead.
-- **`Queue 'X' is configured both in 'queues' and in group 'Y'`** — each queue may only appear once across `queues` and all groups.
-- **`Queue 'X' appears in multiple groups (...)`** — a queue may only belong to one group.
-- **`Group 'X' must declare at least one queue`** — the group's `queues` list was empty.
+- **`Group 'X' lists queue 'Y' more than once`**.
+- **`Queue 'X' is configured both in 'queues' and in group 'Y'`** and **`Queue 'X' appears in multiple groups (...)`** — from `GroupConfiguration::assertNoQueueConflicts()`.
 
-Fix the config and restart the manager.
+A numerically-indexed `queues` array throws `InvalidArgumentException` from `AutoscaleConfiguration::configuredQueues()` — keys must be queue names.
+
+### What happens when one throws
+
+- **Per-queue config errors** surface during the evaluation cycle. The manager's run loop wraps every cycle in a `catch (\Throwable)`, logs `Autoscale evaluation failed` with the message and trace to `manager.log_channel`, sleeps, and runs the next cycle. You get one error line per interval, not a crash.
+- **Group conflicts** are checked once and cached. On failure the manager logs `Group configuration is invalid — groups disabled until manager restart` at **critical** level, disables all groups for the lifetime of the process, and continues with per-queue autoscaling.
+
+### The only real startup failures
+
+`php artisan queue:autoscale` exits immediately in exactly two cases:
+
+- `queue-autoscale.enabled` is false — prints `Queue autoscale is disabled in config` and returns a failure code.
+- The host manager lock cannot be acquired, because another manager for this app is already running on this host. Use `--replace` to take over its lock.
+
+Fix the config and restart the manager. Watch the log — the manager will not tell you on stdout.
 
 ## Configuration Testing
 

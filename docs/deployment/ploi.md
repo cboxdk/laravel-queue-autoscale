@@ -1,6 +1,6 @@
 ---
 title: "Ploi"
-description: "Run Queue Autoscale as a Ploi Daemon"
+description: "Run the Queue Autoscale manager as a Ploi Daemon, without fighting Ploi queue workers"
 weight: 3
 ---
 
@@ -46,10 +46,14 @@ For manual operations, you can still use Ploi's **Daemons → Restart** button o
 
 ## 4. Verify
 
-In Ploi: **Daemons → View Logs**. First line should be something like:
+In Ploi: **Daemons → View Logs**. The manager prints its banner to stdout on start, so the first lines
+should look like:
 
-```
-[2026-04-17 12:34:56] local.INFO: Autoscale manager started
+```text
+Starting Queue Autoscale Manager
+   Manager ID: web-01-3f9c1a2b4d5e
+   Mode: single-host
+   Evaluation interval: 5s
 ```
 
 If you see a stack trace, 9 times out of 10 it's one of: missing Redis connection, missing `laravel-queue-metrics` publish, or a config cache from before the autoscaler was installed (`php artisan config:clear`).

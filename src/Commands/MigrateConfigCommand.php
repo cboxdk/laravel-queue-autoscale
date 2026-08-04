@@ -10,7 +10,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 
-final class MigrateConfigCommand extends Command
+class MigrateConfigCommand extends Command
 {
     protected $signature = 'queue-autoscale:migrate-config
                             {--source= : v1 config file path (default: config/queue-autoscale.php)}
@@ -111,6 +111,29 @@ final class MigrateConfigCommand extends Command
     }
 
     /**
+     * Config arrays are string-keyed by construction; filtering rather than
+     * asserting keeps a malformed positional entry out of the translation.
+     *
+     * @return array<string, mixed>
+     */
+    private function stringKeyed(mixed $value): array
+    {
+        if (! is_array($value)) {
+            return [];
+        }
+
+        $resolved = [];
+
+        foreach ($value as $key => $entry) {
+            if (is_string($key)) {
+                $resolved[$key] = $entry;
+            }
+        }
+
+        return $resolved;
+    }
+
+    /**
      * Translate a single v1 queue override array into a v2 partial override array.
      * Only changed keys are included; v2 deep-merges these on top of sla_defaults.
      *
@@ -133,15 +156,21 @@ final class MigrateConfigCommand extends Command
         }
 
         if (isset($v1Queue['max_pickup_time_seconds']) && is_numeric($v1Queue['max_pickup_time_seconds'])) {
-            $v2Queue['sla']['target_seconds'] = (int) $v1Queue['max_pickup_time_seconds'];
+            $v2Queue['sla'] = ['target_seconds' => (int) $v1Queue['max_pickup_time_seconds']];
         }
 
+        $workers = [];
+
         if (isset($v1Queue['min_workers']) && is_numeric($v1Queue['min_workers'])) {
-            $v2Queue['workers']['min'] = (int) $v1Queue['min_workers'];
+            $workers['min'] = (int) $v1Queue['min_workers'];
         }
 
         if (isset($v1Queue['max_workers']) && is_numeric($v1Queue['max_workers'])) {
-            $v2Queue['workers']['max'] = (int) $v1Queue['max_workers'];
+            $workers['max'] = (int) $v1Queue['max_workers'];
+        }
+
+        if ($workers !== []) {
+            $v2Queue['workers'] = $workers;
         }
 
         // scale_cooldown_seconds is global in v2; skip silently per-queue.
@@ -156,7 +185,7 @@ final class MigrateConfigCommand extends Command
     private function translate(array $v1): array
     {
         $oldScaling = is_array($v1['scaling'] ?? null) ? $v1['scaling'] : [];
-        $oldSla = is_array($v1['sla_defaults'] ?? null) ? $v1['sla_defaults'] : [];
+        $oldSla = $this->stringKeyed($v1['sla_defaults'] ?? null);
 
         // Build sla_defaults: resolved array with user values overlaid on BalancedProfile defaults.
         $slaDefaults = $this->buildSlaDefaults($oldSla);

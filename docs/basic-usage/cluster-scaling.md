@@ -72,4 +72,37 @@ The cluster summary includes:
 - `scale_signal.current_hosts`
 - `scale_signal.recommended_hosts`
 
-This signal is also emitted as the `ClusterScalingSignalUpdated` event whenever the leader publishes a new cluster summary.
+Every time the leader publishes a summary it dispatches two events, in this order:
+
+```php
+use Cbox\LaravelQueueAutoscale\Events\ClusterScalingSignalUpdated;
+use Cbox\LaravelQueueAutoscale\Events\ClusterSummaryPublished;
+use Illuminate\Support\Facades\Event;
+
+Event::listen(function (ClusterSummaryPublished $event) {
+    $event->clusterId;    // string
+    $event->leaderId;     // string
+    $event->summary;      // array<string, mixed> — the full summary
+    $event->publishedAt;  // int timestamp
+});
+
+Event::listen(function (ClusterScalingSignalUpdated $event) {
+    $event->clusterId;
+    $event->leaderId;
+    $event->currentHosts;      // int
+    $event->recommendedHosts;  // int
+    $event->currentCapacity;   // int — cluster-wide worker capacity
+    $event->requiredWorkers;   // int — cluster-wide demand
+    $event->action;            // string, 'hold' when the summary carries none
+    $event->reason;            // string
+});
+```
+
+Two more cluster events fire from every manager, not just the leader:
+
+- `ClusterLeaderChanged` — `clusterId`, `previousLeaderId`, `currentLeaderId`, `observedByManagerId`, `changedAt`
+- `ClusterManagerPresenceChanged` — `clusterId`, `managerIds`, `addedManagerIds`, `removedManagerIds`, `leaderId`, `observedByManagerId`, `observedAt`
+
+## Telemetry
+
+With `cboxdk/laravel-telemetry` installed, cluster state is also exposed as observable gauges evaluated at scrape time from the Redis summary: `queue_autoscale.cluster.managers`, `.workers`, `.required_workers`, `.capacity`, `.utilization`, `.recommended_hosts`, plus `.host.workers` and `.host.capacity` labelled by host. These report nothing in single-host mode. See [Monitoring → Telemetry integration](monitoring.md#telemetry-integration).

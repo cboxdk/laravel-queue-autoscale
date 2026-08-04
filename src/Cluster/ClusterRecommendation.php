@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Cluster;
 
-final readonly class ClusterRecommendation
+readonly class ClusterRecommendation
 {
     /**
      * @param  array<string, int>  $workloads
@@ -27,14 +27,29 @@ final readonly class ClusterRecommendation
         return sprintf('group:%s:%s', $connection, $group);
     }
 
-    public function targetForQueue(string $connection, string $queue): int
+    /**
+     * The leader's target for a workload, or null if it published none.
+     *
+     * Absent is NOT the same as zero. The leader emits a key for every
+     * workload on every active manager, so a missing key means the leader
+     * does not know about this workload — a rolling deploy where the leader's
+     * config lacks a group, or a leader that failed group validation and
+     * published nothing. Reading that as a target of zero made every follower
+     * terminate all of its group workers, stopping those queues cluster-wide
+     * with a single log line on the leader as the only signal.
+     */
+    public function targetForQueue(string $connection, string $queue): ?int
     {
-        return (int) ($this->workloads[self::queueWorkloadKey($connection, $queue)] ?? 0);
+        $key = self::queueWorkloadKey($connection, $queue);
+
+        return isset($this->workloads[$key]) ? (int) $this->workloads[$key] : null;
     }
 
-    public function targetForGroup(string $connection, string $group): int
+    public function targetForGroup(string $connection, string $group): ?int
     {
-        return (int) ($this->workloads[self::groupWorkloadKey($connection, $group)] ?? 0);
+        $key = self::groupWorkloadKey($connection, $group);
+
+        return isset($this->workloads[$key]) ? (int) $this->workloads[$key] : null;
     }
 
     /**

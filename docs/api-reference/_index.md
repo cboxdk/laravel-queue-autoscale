@@ -1,6 +1,6 @@
 ---
 title: "API Reference"
-description: "Contracts, value objects, events, and shipped implementations for Queue Autoscale for Laravel v2"
+description: "Contracts, value objects, events and shipped implementations for Queue Autoscale for Laravel v3"
 weight: 70
 ---
 
@@ -31,11 +31,15 @@ interface ScalingStrategyContract
 }
 ```
 
+`queue-autoscale.strategy` is a **plain class string**, read by `AutoscaleConfiguration::strategyClass()`. It is not an array and takes no options.
+
 **Shipped implementations** (`src/Scaling/Strategies/`):
-- `HybridStrategy` — default. Combines Little's Law, arrival-rate forecasting, and backlog-drain calculators.
-- `BacklogOnlyStrategy` — uses only backlog-drain, no forecasting.
-- `ConservativeStrategy` — damped version of hybrid for stable workloads.
-- `SimpleRateStrategy` — pure Little's Law, no prediction.
+- `HybridStrategy` — default. `max(littlesLaw, backlogDrain)`, with the arrival rate supplied by `ArrivalRateEstimator` (forecast-blended), retry-noise correction, a saturation boost and `TargetSmoother` hysteresis.
+- `BacklogOnlyStrategy` — backlog-drain only, no arrival-rate term.
+- `ConservativeStrategy` — Little's Law + backlog-drain with a class-constant 25% safety buffer and its own 0.75 breach threshold (it does not read `scaling.breach_threshold`).
+- `SimpleRateStrategy` — Little's Law only, no backlog term, no prediction.
+
+There is no `PredictiveStrategy`.
 
 ### `ScalingPolicy`
 
@@ -51,11 +55,15 @@ interface ScalingPolicy
 }
 ```
 
+Policies are loaded by `PolicyExecutor` from `queue-autoscale.policies`, which must contain **class strings** — the list is filtered with `is_string($policy) && class_exists($policy)`, so an instance or closure is silently dropped. Each class is resolved via `app()`. An exception thrown in either hook is caught and logged; scaling continues.
+
 **Shipped implementations** (`src/Policies/`):
-- `ConservativeScaleDownPolicy` — limits scale-down to one worker per cycle.
-- `AggressiveScaleDownPolicy` — allows rapid scale-down.
-- `NoScaleDownPolicy` — prevents all scale-down.
-- `BreachNotificationPolicy` — logs SLA breach risks with built-in rate-limiting.
+- `ConservativeScaleDownPolicy` — caps scale-down at `max(1, (int) ceil($decision->currentWorkers * 0.25))` per cycle: 25% of the current count, minimum 1.
+- `AggressiveScaleDownPolicy` — only acts on scale-downs where the queue is idle (`predictedPickupTime` null or `0.0`) **and** `targetWorkers <= 1`, forcing that exact target; otherwise returns `null`. Intended to be listed **after** `ConservativeScaleDownPolicy` so it can override that clamp.
+- `NoScaleDownPolicy` — replaces a scale-down with a hold, **except** when `currentWorkers > capacity->finalMaxWorkers`, in which case resource-forced scale-down is allowed through. Takes a `CapacityCalculator` via constructor injection.
+- `BreachNotificationPolicy` — `beforeScaling()` always returns `null`; `afterScaling()` logs SLA breach risk (warning) and ≥90% SLA utilisation (notice), each gated by `AlertRateLimiter`.
+
+There is no `ScalingPolicyContract` — the interface is named `ScalingPolicy`.
 
 ### `ProfileContract`
 
@@ -66,12 +74,24 @@ namespace Cbox\LaravelQueueAutoscale\Contracts;
 
 interface ProfileContract
 {
-    /** @return array{sla: array, forecast: array, workers: array, spawn_compensation: array} */
+    /**
+     * @return array{
+     *     sla: array{target_seconds: int, percentile: int, window_seconds: int, min_samples: int},
+     *     forecast: array{forecaster: class-string, policy: class-string, horizon_seconds: int, history_seconds: int},
+     *     workers: array{min: int, max: int, tries: int, timeout_seconds: int, sleep_seconds: int, shutdown_timeout_seconds: int, scalable?: bool},
+     *     spawn_compensation: array{enabled: bool, fallback_seconds: float, min_samples: int, ema_alpha: float},
+     *     fuse?: array{enabled: bool, failure_threshold_percent: float, min_samples: int, window_seconds: int, cooldown_seconds: int},
+     * }
+     */
     public function resolve(): array;
 }
 ```
 
 **Shipped profiles** (`src/Configuration/Profiles/`): `CriticalProfile`, `HighVolumeProfile`, `BalancedProfile`, `BurstyProfile`, `BackgroundProfile`, `ExclusiveProfile`. See [Workload Profiles](../basic-usage/workload-profiles.md) for what each one sets.
+
+Each `resolve()` returns the keys `sla`, `forecast`, `workers`, `spawn_compensation` and `fuse`.
+
+`ProfilePresets` was removed in v3 — `ProfilePresets::balanced()` no longer exists. Reference the profile classes directly.
 
 ### `ForecasterContract`
 
@@ -182,7 +202,7 @@ All `final readonly`. Live in `src/Configuration/`.
 Per-queue resolved configuration. Built by `QueueConfiguration::fromConfig($connection, $queue)`.
 
 ```php
-final readonly class QueueConfiguration
+readonly class QueueConfiguration
 {
     public function __construct(
         public string $connection,
@@ -191,33 +211,48 @@ final readonly class QueueConfiguration
         public ForecastConfiguration $forecast,
         public SpawnCompensationConfiguration $spawnCompensation,
         public WorkerConfiguration $workers,
+        public FuseConfiguration $fuse = new FuseConfiguration(
+            enabled: true,
+            failureThresholdPercent: 50.0,
+            minSamples: 20,
+            windowSeconds: 60,
+            cooldownSeconds: 60,
+        ),
         public array $memberQueues = [],  // populated when adapted from a GroupConfiguration
     ) {}
 
     /** @return list<string> Real queue names to aggregate signals across (group support). */
     public function sampleQueues(): array;
+
+    public static function fromConfig(string $connection, string $queue): self;
 }
+
+`fromConfig()` resolves `queue-autoscale.queues.{queue}` through `resolveProfileOrArray()`: a `ProfileContract` class string, or a literal partial-override array deep-merged over `sla_defaults`. It does **not** understand `['profile' => ..., 'overrides' => [...]]` — that shape belongs to `GroupConfiguration` only.
+
+Access is nested: `$config->workers->min`, `$config->workers->max`, `$config->sla->targetSeconds`. There is no `$config->minWorkers`, `$config->maxWorkers` or `$config->maxPickupTimeSeconds`.
 ```
 
 ### `SlaConfiguration`
 
 ```php
 public function __construct(
-    public int $targetSeconds,   // pickup SLA
-    public int $percentile,      // 50-99
-    public int $windowSeconds,   // rolling window for the percentile
-    public int $minSamples,      // below this many samples, fall back to oldest_job_age
+    public int $targetSeconds,   // > 0
+    public int $percentile,      // one of 50, 75, 90, 95, 99
+    public int $windowSeconds,   // >= 60
+    public int $minSamples,      // >= 1; below this many samples, fall back to oldest_job_age
 ) {}
 ```
+
+The constructor throws `InvalidConfigurationException` on any violation of those constraints.
 
 ### `WorkerConfiguration`
 
 ```php
 public function __construct(
-    public int $min,
-    public int $max,
-    public int $tries,
-    public int $timeoutSeconds,
+    public int $min,                  // >= 0
+    public int $max,                  // >= $min
+    public int $tries,                // >= 1
+    public int $timeoutSeconds,       // > 0
     public int $sleepSeconds,
     public int $shutdownTimeoutSeconds,
     public bool $scalable = true,   // false = supervised/pinned (ExclusiveProfile)
@@ -225,6 +260,10 @@ public function __construct(
 
 public function pinnedCount(): int;   // returns $min; used when scalable=false
 ```
+
+Constructor guards throw `InvalidConfigurationException`, including `scalable=false` requiring `min === max` and `min >= 1`.
+
+> Only `min`, `max` and `scalable` affect a running worker. `WorkerSpawner` builds the `queue:work` command from the **global** `queue-autoscale.workers` block, so a per-queue `tries` / `timeout_seconds` / `sleep_seconds` / `shutdown_timeout_seconds` is validated but never used.
 
 ### `ForecastConfiguration`
 
@@ -248,24 +287,50 @@ public function __construct(
 ) {}
 ```
 
+### `FuseConfiguration`
+
+```php
+readonly class FuseConfiguration
+{
+    public function __construct(
+        public bool $enabled,
+        public float $failureThresholdPercent,  // (0, 100]
+        public int $minSamples,                 // >= 1
+        public int $windowSeconds,              // >= 1
+        public int $cooldownSeconds,
+    ) {}
+
+    public static function fromArray(array $config): self;
+}
+```
+
+See [Failure Fuse](../basic-usage/failure-fuse.md).
+
 ### `GroupConfiguration`
 
 Multi-queue priority worker group. See [Queue Topology → Groups](../basic-usage/queue-topology.md#worker-groups).
 
 ```php
-final readonly class GroupConfiguration
+readonly class GroupConfiguration
 {
     public const MODE_PRIORITY = 'priority';
 
     public function __construct(
         public string $name,
         public string $connection,
-        public array $queues,           // list<string> in priority order
-        public string $mode,            // only MODE_PRIORITY supported in v2
+        public array $queues,           // array<int, string> in priority order
+        public string $mode,            // MODE_PRIORITY is the only supported value
         public SlaConfiguration $sla,
         public ForecastConfiguration $forecast,
         public SpawnCompensationConfiguration $spawnCompensation,
         public WorkerConfiguration $workers,
+        public FuseConfiguration $fuse = new FuseConfiguration(
+            enabled: true,
+            failureThresholdPercent: 50.0,
+            minSamples: 20,
+            windowSeconds: 60,
+            cooldownSeconds: 60,
+        ),
     ) {}
 
     public function queueArgument(): string;                    // 'email,sms,push'
@@ -276,6 +341,10 @@ final readonly class GroupConfiguration
 }
 ```
 
+`fromConfig()` reads `queues`, `connection` (default `'default'`), `mode` (default `'priority'`), `profile` and `overrides`. The `profile` + `overrides` pair is **groups-only**; the per-queue resolver does not understand it.
+
+The constructor throws `InvalidConfigurationException` for an empty queue list, an unsupported mode, a non-scalable profile, or a duplicate queue within the group. `assertNoQueueConflicts()` throws when a queue appears both under `queues` and in a group, or in two groups.
+
 ## Scaling Decision
 
 Returned by `ScalingEngine::evaluate()` and dispatched in `ScalingDecisionMade` / `SlaBreachPredicted` events.
@@ -283,7 +352,7 @@ Returned by `ScalingEngine::evaluate()` and dispatched in `ScalingDecisionMade` 
 ```php
 namespace Cbox\LaravelQueueAutoscale\Scaling;
 
-final readonly class ScalingDecision
+readonly class ScalingDecision
 {
     public function __construct(
         public string $connection,
@@ -303,9 +372,39 @@ final readonly class ScalingDecision
     public function workersToAdd(): int;
     public function workersToRemove(): int;
     public function action(): string;           // 'scale_up' | 'scale_down' | 'hold'
-    public function isSlaBreachRisk(): bool;
+    public function isSlaBreachRisk(): bool;    // predictedPickupTime > slaTarget
 }
 ```
+
+There is **no** `confidence` property on `ScalingDecision`, or anywhere else in the package.
+
+Do not confuse `ScalingDecision::action()` (`'scale_up' | 'scale_down' | 'hold'`) with `WorkersScaled::$action`, which is always `'up'` or `'down'`.
+
+### `CapacityCalculationResult`
+
+`ScalingDecision::$capacity`, in `Cbox\LaravelQueueAutoscale\Scaling\DTOs`:
+
+```php
+readonly class CapacityCalculationResult
+{
+    public function __construct(
+        public int $maxWorkersByCpu,
+        public int $maxWorkersByMemory,
+        public int $maxWorkersByConfig,
+        public int $finalMaxWorkers,
+        public string $limitingFactor,
+        public array $details = [],
+    ) {}
+
+    public function isCpuLimited(): bool;
+    public function isMemoryLimited(): bool;
+    public function isConfigLimited(): bool;
+    public function getSummary(): string;
+    public function getFormattedDetails(): array;
+}
+```
+
+`limitingFactor` values seen on a decision: `cpu`, `memory`, `balanced`, `config`, `strategy`, `fuse`, `system_metrics_unavailable`.
 
 ## Events
 
@@ -334,7 +433,7 @@ Cache-lock-based cooldown helper. Used internally by `BreachNotificationPolicy` 
 ```php
 namespace Cbox\LaravelQueueAutoscale\Alerting;
 
-final readonly class AlertRateLimiter
+readonly class AlertRateLimiter
 {
     public function __construct(public int $cooldownSeconds = 300) {}
 
@@ -353,7 +452,7 @@ A live `queue:work` subprocess wrapped with spawn metadata.
 ```php
 namespace Cbox\LaravelQueueAutoscale\Workers;
 
-final class WorkerProcess
+class WorkerProcess
 {
     public function __construct(
         public readonly Process $process,
@@ -366,26 +465,103 @@ final class WorkerProcess
     public function pid(): ?int;
     public function isRunning(): bool;
     public function isDead(): bool;
+    public function isTerminating(): bool;
+    public function markTerminationRequested(Carbon $requestedAt, int $timeoutSeconds): void;
+    public function terminationDeadlinePassed(Carbon $now): bool;
     public function uptimeSeconds(): int;
     public function matches(string $connection, string $queue): bool;        // false for group workers
     public function matchesGroup(string $connection, string $group): bool;
     public function isGroupWorker(): bool;
+    public function getIncrementalOutput(): string;
+    public function getIncrementalErrorOutput(): string;
 }
 ```
 
 ### `WorkerPool`
 
-Collection wrapper over `WorkerProcess` with add/remove/filter helpers. Internal to the manager; useful when writing custom tooling.
+Collection wrapper over `WorkerProcess`, held in-process by the manager daemon. A web request cannot see it.
+
+```php
+namespace Cbox\LaravelQueueAutoscale\Workers;
+
+class WorkerPool
+{
+    public function add(WorkerProcess $worker): void;
+    public function addMany(Collection $workers): void;
+    public function removeWorker(WorkerProcess $worker): void;
+    public function remove(string $connection, string $queue, int $count): Collection;
+    public function removeFromGroup(string $connection, string $group, int $count): Collection;
+
+    public function count(string $connection, string $queue): int;
+    public function countGroup(string $connection, string $group): int;
+    public function totalCount(): int;
+    public function queueCounts(): array;
+    public function groupCounts(): array;
+
+    public function all(): Collection;
+    public function getDeadWorkers(): Collection;
+    public function getTerminatingWorkers(): Collection;
+    public function getByConnection(string $connection, string $queue): array;
+    public function getTerminatable(string $connection, string $queue, int $count): Collection;
+    public function getTerminatableFromGroup(string $connection, string $group, int $count): Collection;
+    public function findByPid(int $pid): ?WorkerProcess;
+    public function reset(): void;
+}
+```
+
+There is no `getWorkerCount()` — use `count($connection, $queue)`, `countGroup()`, `totalCount()`, `queueCounts()` or `groupCounts()`.
+
+### `WorkerSpawner`
+
+Spawns `queue:work` subprocesses. The command it builds is exactly:
+
+```bash
+{PHP_BINARY} artisan queue:work {connection} \
+    --queue={queue} \
+    --tries={queue-autoscale.workers.tries} \
+    --max-time={queue-autoscale.workers.timeout_seconds} \
+    --sleep={queue-autoscale.workers.sleep_seconds}
+```
+
+Those three values come from the **global** `queue-autoscale.workers` block, not from the queue's resolved `WorkerConfiguration`. `--timeout` and `--memory` are never passed.
+
+The only environment variables injected into a worker are:
+
+```text
+LARAVEL_AUTOSCALE_WORKER=true
+AUTOSCALE_MANAGER_ID=<manager id>
+AUTOSCALE_WORKER_GROUP=<group name>   # group workers only
+```
+
+## Facade
+
+`Cbox\LaravelQueueAutoscale\Facades\LaravelQueueAutoscale` proxies `Cbox\LaravelQueueAutoscale\LaravelQueueAutoscale`, which has exactly two public methods:
+
+```php
+readonly class LaravelQueueAutoscale
+{
+    /** @return array<string, mixed> The Redis cluster summary; [] when cluster mode is off. */
+    public function cluster(): array;
+
+    /** @return array<int, array{name: string, value: int|float, labels: array<string, scalar|null>}> */
+    public function clusterMetrics(): array;
+}
+```
+
+There is no runtime API for overriding a queue's bounds or forcing a scale — no `overrideMinWorkers()`, `scaleToCapacity()` or `resetToNormal()`. Use config, or a [scaling policy](../basic-usage/scaling-policies.md).
 
 ## Console Commands
 
-| Command | Purpose |
+| Command | Signature |
 |---|---|
-| `queue:autoscale` | Main daemon. Accepts `--interval=N`, `--replace`, and `-v` / `-vv` / `-vvv` verbosity flags. |
-| `queue:autoscale:debug` | Dump queue state and metrics for diagnosis. `--queue=X --connection=Y`. |
-| `queue:autoscale:cluster` | Show cluster leader, active managers, host capacity, workload targets, and host scale signal. Add `--json` for machine-readable output. |
-| `queue:autoscale:cluster` | Show cluster leader, active managers, host capacity, workload targets, and host scale signal. Add `--json` for machine-readable output. |
-| `queue-autoscale:migrate-config` | Translate a v2 config file to v3 shape. `--source` and `--destination` options. |
+| `queue:autoscale` | `{--interval=5} {--replace}` — the daemon. `--interval` is the **only** way to set the evaluation interval. |
+| `queue:autoscale:cluster` | `{--json}` — cluster leader, active managers, host capacity, workload targets, host scale signal. |
+| `queue:autoscale:debug` | `{--queue=default} {--connection=}` — dump queue state and metrics for diagnosis. |
+| `queue:autoscale:install` | `{--topology=} {--metrics-connection=} {--publish-migrations} {--write-env} {--env-file=} {--force} {--no-publish}` — `--topology` is one of `single-low`, `single-redis`, `cluster`. |
+| `queue:autoscale:restart` | Signal running managers to restart gracefully. |
+| `queue-autoscale:migrate-config` | `{--source=} {--destination=}` — migrates a **v1** config to **v2** shape. Default destination is `config/queue-autoscale.v2.php`; it warns and skips if the source does not look like a v1 config. |
+
+`queue-autoscale:debug-queue` does not exist — the debug command is `queue:autoscale:debug`.
 
 ## Service Provider Bindings
 
@@ -400,6 +576,27 @@ $this->app->bind(
 ```
 
 See [Custom Strategies](../advanced-usage/custom-strategies.md) for writing your own implementations.
+
+## Not in this package
+
+Names that appear in older documentation, blog posts or generated code but do **not** exist in v3:
+
+| Name | Reality |
+|---|---|
+| `ScalingPolicyContract` | The interface is `ScalingPolicy`. |
+| `PredictiveStrategy` | Only `HybridStrategy`, `BacklogOnlyStrategy`, `ConservativeStrategy`, `SimpleRateStrategy` ship. |
+| `ProfilePresets` (`::balanced()` etc.) | Removed in v3. Use the profile classes. |
+| `ResourceConstraintChecker`, `ResourceConstraintPolicy` | Resource limits live in `CapacityCalculator`, applied inside `ScalingEngine`. |
+| `ScalingDecision::$confidence` | No confidence value exists anywhere in the package. |
+| `WorkerHealthCheckFailed` | No worker-health event exists. `ProcessHealthCheck` only answers whether a PID is alive. |
+| `WorkersScaled::$newCount` | The properties are `from` and `to`. |
+| `QueueConfiguration::$minWorkers` / `$maxWorkers` / `$maxPickupTimeSeconds` | Nested: `$config->workers->min`, `$config->workers->max`, `$config->sla->targetSeconds`. |
+| `AutoscaleManager::getWorkerCount()` | The manager exposes only `configure()`, `setOutput()`, `setRenderer()` and `run()`. |
+| `queue-autoscale:debug-queue` | The command is `queue:autoscale:debug`. |
+| Cost/budget config (`cost_limits`, spot-instance keys) | No cost feature exists. |
+| `'strategy' => ['class' => ..., 'options' => [...]]` | `strategy` is a plain class string. |
+| `trend_weight`, `safety_margin`, `min_trend_samples` | No such config keys. |
+| `QUEUE_AUTOSCALE_EVALUATION_INTERVAL` and similar env vars | Not read. The interval is `queue:autoscale --interval=`. |
 
 ## See Also
 
