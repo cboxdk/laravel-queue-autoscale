@@ -34,7 +34,27 @@ The fuse watches the recent job failure rate per queue and interrupts that loop:
 - The manager logs `Autoscaling held back by failure fuse` at warning level for as long as a queue is held, rate-limited by `alerting.cooldown_seconds`. Scaling actions are only logged when they happen, and a held queue scales once — down to `workers.min` on the trip — then holds, so the log previously fell silent for the rest of the outage.
 - `queue:autoscale:debug` now reports failure-fuse state, the observed failure rate against the configured thresholds, and warns when the fuse is inert because outcome tracking is disabled or the `array` cache driver is in use. This answers "why is this queue stuck at `workers.min`?" without reading manager logs.
 
+### Changed
+- **Package classes are no longer `final`.** Sealing blocks consumers from extending, decorating or subclassing what the package ships. The arch test now asserts immutability instead, and a new rule keeps the classes open.
+- **PHPStan runs at level max with no baseline.** Three of the baseline's four entries were suppressing "unreachable code" findings in the SIGTERM-wait-SIGKILL escalation, which is live code that analysis could not model; `WorkerProcess::isRunning()`/`isDead()` are now marked `@phpstan-impure`. The remaining errors were genuine typing holes, fixed at the cause.
+- Dropped `spatie/laravel-package-tools`, a runtime dependency referenced nowhere in `src/`.
+- Added `limits.max_total_workers`, an optional hard ceiling on total workers per host.
+- Per-queue `workers.tries` / `timeout_seconds` / `sleep_seconds` now reach the spawned worker. They were parsed and then ignored.
+- Declared `ext-pcntl` and `ext-posix`, which the manager calls unguarded and which are commonly absent from the official PHP Docker images.
+
 ### Fixed
+- **The manager no longer blocks for a full second every evaluation cycle.** CPU usage was sampled by sleeping between two counter reads (measured 1004.91 ms); it is now derived by diffing against the previous tick's snapshot. On the default 5-second interval a fifth of the manager's wall clock was spent asleep and every decision was computed from metrics a second stale. The test suite drops from ~70s to ~10s as a side effect.
+- **Shutdown no longer orphans workers.** Workers were terminated serially, each blocking up to `shutdown_timeout_seconds`, so a supervisor's stop deadline killed the manager before it reached the end of the pool. Termination now runs under one shared deadline.
+- **`SIGQUIT` and `SIGHUP` reach graceful shutdown.** They were unhandled, so PHP terminated the manager outright and its workers were never signalled.
+- **A leader that publishes no group workloads no longer drains them cluster-wide.** An absent workload key was read as a target of zero; it now means "the leader does not know about this workload" and followers leave it alone.
+- **Scaling events report what actually started.** Failed spawns were dropped by the spawner but still reported as successes to telemetry, logs and the cluster heartbeat.
+- **Per-queue forecast configuration applies to every queue.** The shared estimator was configured once per process, so the first queue evaluated set the forecaster and policy for all of them.
+- The failure fuse fails open when its store is unreachable, rather than aborting the whole evaluation cycle and freezing autoscaling for every queue on the host.
+- The failure fuse works for queue groups. It read the group name while workers record under the real queue, so a grouped queue could never trip it.
+- The failure fuse's half-open probe has a deadline. A queue whose jobs were slower than `2 x window_seconds / min_samples` could never gather enough samples to close it, and stayed pinned at the probe ceiling after the dependency recovered.
+- `limitingFactor` is an enum. As a string it had drifted from three documented values to six live ones, and the `-vvv` output silently printed nothing while the fuse was holding a queue down.
+- The manager's per-PID output buffers are pruned when a worker is removed, and `managerId()` is memoised — it performed a DNS lookup inside per-manager loops.
+- `queue:autoscale:install` published metrics migrations under a tag that does not exist. `vendor:publish` exits 0 on an unknown tag, so a database-preset install reported success while writing no migration and failing later on missing tables.
 - `ClusterStore::recentDecisions()` no longer returns malformed decision records that decoded from JSON as positional arrays rather than objects.
 - The test suite pins `CACHE_STORE` and `QUEUE_CONNECTION` in `phpunit.xml.dist`. It previously inherited them from the Testbench skeleton `.env`, which is created the first time anyone runs `vendor/bin/testbench` and points both at `database` — silently breaking ~70 cache- and queue-dependent specs against a test database that has neither table.
 
