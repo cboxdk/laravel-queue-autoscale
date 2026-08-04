@@ -23,7 +23,7 @@ function makeBaseConfig(string $queue, array $members = []): QueueConfiguration
             300,
         ),
         spawnCompensation: new SpawnCompensationConfiguration(true, 2.0, 5, 0.2),
-        workers: new WorkerConfiguration(1, 10, 3, 3600, 3, 30),
+        workers: new WorkerConfiguration(1, 10, 3, 3600, 300, 3, 30),
         memberQueues: $members,
     );
 }

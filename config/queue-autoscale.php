@@ -232,22 +232,6 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Worker configuration
-    |--------------------------------------------------------------------------
-    |
-    | Settings for spawned queue workers. These control how queue:work
-    | processes are started by the autoscale manager.
-    |
-    */
-    'workers' => [
-        'timeout_seconds' => 3600,
-        'tries' => 3,
-        'sleep_seconds' => 3,
-        'shutdown_timeout_seconds' => 30,
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
     | Manager process
     |--------------------------------------------------------------------------
     |
@@ -261,6 +245,14 @@ return [
     */
     'manager' => [
         'evaluation_interval_seconds' => 5,
+
+        /*
+         * How long a handover waits for the outgoing manager to finish
+         * draining, and the floor for a pool-wide drain. This is about the
+         * MANAGER process — a worker's own drain window is per-queue, in the
+         * profile's workers.shutdown_timeout_seconds.
+         */
+        'shutdown_grace_seconds' => 30,
         'log_channel' => env('QUEUE_AUTOSCALE_LOG_CHANNEL', 'stack'),
         'restart_scope' => env('QUEUE_AUTOSCALE_RESTART_SCOPE'),
         'honor_queue_restart' => env('QUEUE_AUTOSCALE_HONOR_QUEUE_RESTART', true),

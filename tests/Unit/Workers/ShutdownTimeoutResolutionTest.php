@@ -24,7 +24,7 @@ function idleWorker(string $queue = 'default', ?string $group = null): WorkerPro
 }
 
 beforeEach(function (): void {
-    config()->set('queue-autoscale.workers.shutdown_timeout_seconds', 30);
+    config()->set('queue-autoscale.manager.shutdown_grace_seconds', 30);
 });
 
 test('uses the profile window when the queue sets none of its own', function (): void {
@@ -41,13 +41,24 @@ test('honours a per-queue window', function (): void {
     expect(resolveTimeout(idleWorker('slow-reports')))->toBe(300);
 });
 
-test('group workers use the global window', function (): void {
+test('group workers take their window from the group profile', function (): void {
     // A group worker polls a comma-separated list, which is not a
-    // configurable queue name.
-    config()->set('queue-autoscale.workers.shutdown_timeout_seconds', 45);
+    // configurable queue name, so the group's own profile supplies it.
+    config()->set('queue-autoscale.groups.notifications', [
+        'queues' => ['email', 'sms'],
+        'connection' => 'redis',
+        'overrides' => ['workers' => ['shutdown_timeout_seconds' => 90]],
+    ]);
 
-    expect(resolveTimeout(idleWorker('email,sms', group: 'notifications')))->toBe(45)
-        ->and(resolveTimeout(idleWorker('email,sms')))->toBe(45);
+    expect(resolveTimeout(idleWorker('email,sms', group: 'notifications')))->toBe(90);
+});
+
+test('a worker whose configuration no longer resolves is still terminable', function (): void {
+    // A queue removed from config while its worker was running must not be
+    // un-killable; the manager-level grace is the fallback.
+    config()->set('queue-autoscale.manager.shutdown_grace_seconds', 45);
+
+    expect(resolveTimeout(idleWorker('email,sms', group: 'group-that-no-longer-exists')))->toBe(45);
 });
 
 test('a whole-pool shutdown waits for the slowest queue, not the shortest', function (): void {

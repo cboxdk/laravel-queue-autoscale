@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Workers;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
@@ -39,13 +40,10 @@ readonly class WorkerSpawner
     ): Collection {
         $workers = new Collection;
 
-        // Per-queue settings when the caller resolved them, otherwise the
-        // global block. These used to be parsed per queue and then silently
-        // ignored — the spawner only ever read the global values, so a
-        // profile's tries/sleep/timeout never reached a worker.
-        $tries = $workerConfig !== null ? $workerConfig->tries : AutoscaleConfiguration::workerTries();
-        $maxTime = $workerConfig !== null ? $workerConfig->timeoutSeconds : AutoscaleConfiguration::workerTimeoutSeconds();
-        $sleep = $workerConfig !== null ? $workerConfig->sleepSeconds : AutoscaleConfiguration::workerSleepSeconds();
+        // The profile is the only source of worker settings. A caller that
+        // cannot resolve one is a bug, not a supported path, so fall back to
+        // the shipped default profile rather than to a second config surface.
+        $workerConfig ??= QueueConfiguration::fromConfig($connection, $queue)->workers;
 
         for ($i = 0; $i < $count; $i++) {
             $process = new Process([
@@ -54,9 +52,10 @@ readonly class WorkerSpawner
                 'queue:work',
                 $connection,
                 '--queue='.$queue,
-                '--tries='.$tries,
-                '--max-time='.$maxTime,
-                '--sleep='.$sleep,
+                '--tries='.$workerConfig->tries,
+                '--max-time='.$workerConfig->maxTimeSeconds,
+                '--timeout='.$workerConfig->timeoutSeconds,
+                '--sleep='.$workerConfig->sleepSeconds,
             ]);
 
             // Inject environment variables for monitoring

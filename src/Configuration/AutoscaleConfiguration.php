@@ -215,6 +215,19 @@ readonly class AutoscaleConfiguration
         return self::intConfig('queue-autoscale.manager.evaluation_interval_seconds', 5);
     }
 
+    /**
+     * How long a manager handover waits for the outgoing process, and the
+     * floor for a pool-wide drain.
+     *
+     * Manager-level on purpose: a worker's drain window is per-queue and
+     * lives in the profile. These used to be the same key, so lengthening one
+     * queue's drain also lengthened every deploy's handover.
+     */
+    public static function shutdownGraceSeconds(): int
+    {
+        return max(1, self::intConfig('queue-autoscale.manager.shutdown_grace_seconds', 30));
+    }
+
     public static function logChannel(): string
     {
         return self::stringConfig('queue-autoscale.manager.log_channel', 'stack');
@@ -290,26 +303,6 @@ readonly class AutoscaleConfiguration
     public static function reserveCpuCores(): float
     {
         return self::floatConfig('queue-autoscale.limits.reserve_cpu_cores', 0.2);
-    }
-
-    public static function workerTimeoutSeconds(): int
-    {
-        return self::intConfig('queue-autoscale.workers.timeout_seconds', 3600);
-    }
-
-    public static function workerTries(): int
-    {
-        return self::intConfig('queue-autoscale.workers.tries', 3);
-    }
-
-    public static function workerSleepSeconds(): int
-    {
-        return self::intConfig('queue-autoscale.workers.sleep_seconds', 3);
-    }
-
-    public static function shutdownTimeoutSeconds(): int
-    {
-        return self::intConfig('queue-autoscale.workers.shutdown_timeout_seconds', 30);
     }
 
     public static function strategyClass(): string

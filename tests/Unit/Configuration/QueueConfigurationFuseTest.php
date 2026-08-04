@@ -98,7 +98,7 @@ test('a literal profile array predating the fuse still resolves', function (): v
                 'history_seconds' => 300,
             ],
             'workers' => [
-                'min' => 1, 'max' => 8, 'tries' => 3, 'timeout_seconds' => 3600,
+                'min' => 1, 'max' => 8, 'tries' => 3, 'max_time_seconds' => 3600, 'timeout_seconds' => 300,
                 'sleep_seconds' => 3, 'shutdown_timeout_seconds' => 30,
             ],
             'spawn_compensation' => ['enabled' => true, 'fallback_seconds' => 2.0, 'min_samples' => 5, 'ema_alpha' => 0.2],
