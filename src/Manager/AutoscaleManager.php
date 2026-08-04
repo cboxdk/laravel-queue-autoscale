@@ -2495,7 +2495,6 @@ class AutoscaleManager
         return new OutputData(
             queueStats: $this->currentQueueStats,
             workers: $workers,
-            recentJobs: [],
             scalingLog: $this->scalingLog,
             timestamp: new \DateTimeImmutable,
         );

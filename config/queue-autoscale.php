@@ -244,7 +244,6 @@ return [
         'tries' => 3,
         'sleep_seconds' => 3,
         'shutdown_timeout_seconds' => 30,
-        'health_check_interval_seconds' => 10,
     ],
 
     /*

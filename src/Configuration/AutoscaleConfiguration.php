@@ -220,25 +220,9 @@ readonly class AutoscaleConfiguration
         return self::stringConfig('queue-autoscale.manager.log_channel', 'stack');
     }
 
-    /**
-     * Get scaling config value with backwards compatibility for 'prediction' key
-     */
     private static function scalingConfig(string $key, mixed $default): mixed
     {
-        // Try new 'scaling' key first, then fall back to deprecated 'prediction'
-        return config("queue-autoscale.scaling.{$key}")
-            ?? config("queue-autoscale.prediction.{$key}")
-            ?? $default;
-    }
-
-    public static function trendWindowSeconds(): int
-    {
-        return self::intValue(self::scalingConfig('trend_window_seconds', 300), 300);
-    }
-
-    public static function forecastHorizonSeconds(): int
-    {
-        return self::intValue(self::scalingConfig('forecast_horizon_seconds', 60), 60);
+        return config("queue-autoscale.scaling.{$key}") ?? $default;
     }
 
     public static function breachThreshold(): float
@@ -326,11 +310,6 @@ readonly class AutoscaleConfiguration
     public static function shutdownTimeoutSeconds(): int
     {
         return self::intConfig('queue-autoscale.workers.shutdown_timeout_seconds', 30);
-    }
-
-    public static function healthCheckIntervalSeconds(): int
-    {
-        return self::intConfig('queue-autoscale.workers.health_check_interval_seconds', 10);
     }
 
     public static function strategyClass(): string
