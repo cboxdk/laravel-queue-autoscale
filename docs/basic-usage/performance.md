@@ -215,6 +215,37 @@ The host ceiling is then divided among queues: each queue's share is `hostCeilin
 
 System metrics are cached for 4 seconds inside the capacity calculator, because sampling CPU blocks for a second. If the system-metrics read fails entirely, the calculator falls back to a conservative fixed ceiling and reports `limitingFactor: 'system_metrics_unavailable'`.
 
+### Cost of measuring pickup time
+
+The p95 that drives every SLA decision is built from samples recorded as jobs are picked up, which
+puts one write on the hot path of every job the application runs. Two things keep that cheap.
+
+The write is a single round trip — the push and the trim that caps the sample list travel as one
+call, rather than as two commands against the same Redis instance the queue itself is using.
+
+Above a configurable rate, each worker process forwards only a uniformly random subset of pickups:
+
+```php
+'pickup_time' => [
+    'max_samples_per_queue' => 1000,
+    'sampling' => [
+        'enabled' => true,
+        'max_per_second' => 100,
+    ],
+],
+```
+
+This costs nothing in accuracy, and at high throughput it buys some. Only `max_samples_per_queue`
+entries survive, so a queue running well above that rate was paying to write samples that were
+trimmed away moments later — and the ones that survived all described the last instant of the window
+rather than the window as a whole. A random subset spans the window instead, and because every job in
+a window has the same chance of being chosen, its p95 estimates the p95 of everything that ran.
+
+The rate is per worker process, so a host running twenty workers forwards up to twenty times
+`max_per_second`. Queues below the threshold record every pickup and are unaffected. Setting
+`max_per_second` to zero disables sampling rather than silencing the signal — a misconfigured rate
+must not blind the p95.
+
 ### Queue prioritisation
 
 Route jobs to appropriate queues:
