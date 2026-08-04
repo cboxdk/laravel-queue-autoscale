@@ -100,9 +100,11 @@ test('a profile can be combined with overrides', function (): void {
     expect($config->workers->max)->toBe(5)
         ->and($config->workers->min)->toBe(0)
         ->and($config->workers->scalable)->toBeTrue()
-        // Untouched fields still come from the profile.
+        // Untouched fields still come from the profile. Read from the profile
+        // rather than restated, so this stays a test of composition and does
+        // not have to be edited whenever the profile is tuned.
         ->and($config->fuse->enabled)->toBeTrue()
-        ->and($config->sla->targetSeconds)->toBe(300);
+        ->and($config->sla->targetSeconds)->toBe((new ConnectionLimitedProfile)->resolve()['sla']['target_seconds']);
 });
 
 test('a bare profile class still works', function (): void {

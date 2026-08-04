@@ -126,3 +126,26 @@ function createMetrics(array $overrides = []): QueueMetricsData
         'calculated_at' => now()->toIso8601String(),
     ], $overrides));
 }
+
+/**
+ * ElasticMQ speaks the SQS wire protocol and backs the SQS integration specs.
+ * Shared here rather than in one spec file so every suite that needs it can
+ * ask, including when a single file is run on its own.
+ *
+ *     docker run -d --name autoscale-elasticmq -p 9324:9324 \
+ *         softwaremill/elasticmq-native:1.6.11
+ */
+function elasticMqEndpoint(): string
+{
+    $endpoint = env('SQS_TEST_ENDPOINT', 'http://localhost:9324');
+
+    return rtrim(is_string($endpoint) ? $endpoint : 'http://localhost:9324', '/');
+}
+
+function elasticMqReachable(): bool
+{
+    $context = stream_context_create(['http' => ['timeout' => 1, 'ignore_errors' => true]]);
+    $body = @file_get_contents(elasticMqEndpoint().'/?Action=ListQueues', false, $context);
+
+    return is_string($body) && str_contains($body, 'ListQueuesResponse');
+}

@@ -289,3 +289,53 @@ it('recomputes distribution when cached assignments exceed host capacity', funct
         ->and($result2['b'])->toBeLessThanOrEqual(2)
         ->and(array_sum($result2))->toBeLessThanOrEqual(4);
 });
+
+it('never lets a connection-limited queue exceed its cap across the fleet', function () {
+    // The promise a per-tenant connection limit rests on: workers.max is a
+    // FLEET cap, not a per-host one. The leader caps the workload target once
+    // and then splits that number, so five workers stay five however many
+    // hosts are running. A per-host cap would authorise five per machine and
+    // silently triple the concurrent callers hitting the tenant's API.
+    $managers = [
+        makeManagerState('a', maxWorkers: 40),
+        makeManagerState('b', maxWorkers: 40),
+        makeManagerState('c', maxWorkers: 40),
+    ];
+
+    $assignedTotals = ['a' => 0, 'b' => 0, 'c' => 0];
+    $cap = 5;
+
+    $assignments = invokeDistributeClusterTarget($managers, 'queue:redis:tenant.42', $cap, $assignedTotals);
+
+    expect(array_sum($assignments))->toBe($cap);
+});
+
+it('keeps every tenant within its own cap when many share the fleet', function () {
+    // A hundred tenants at five each is more than these hosts can carry, so
+    // the cluster is under real contention. No tenant may be handed more than
+    // its cap regardless, because the cap is a limit on a third party, not a
+    // preference the allocator may trade away.
+    $managers = [
+        makeManagerState('a', maxWorkers: 60),
+        makeManagerState('b', maxWorkers: 60),
+    ];
+
+    $assignedTotals = ['a' => 0, 'b' => 0];
+    $cap = 5;
+
+    for ($tenant = 0; $tenant < 100; $tenant++) {
+        $assignments = invokeDistributeClusterTarget(
+            $managers,
+            "queue:redis:tenant.{$tenant}",
+            $cap,
+            $assignedTotals,
+        );
+
+        expect(array_sum($assignments))->toBeLessThanOrEqual($cap);
+    }
+
+    // And the hosts themselves are never oversubscribed while doing it.
+    foreach ($assignedTotals as $managerId => $total) {
+        expect($total)->toBeLessThanOrEqual(60, "host {$managerId} oversubscribed");
+    }
+});

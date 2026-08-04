@@ -58,12 +58,17 @@ readonly class ConnectionLimitedProfile implements ProfileContract
     {
         return [
             'sla' => [
-                // Throughput work, not latency work. A pickup target this loose
-                // keeps the SLA machinery reporting without letting it argue
-                // for workers the downstream limit forbids anyway.
-                'target_seconds' => 300,
+                // Tight on purpose, and not because anyone is waiting on these
+                // jobs. `workers.max` is a ceiling, not a target: the engine
+                // asks for the workers the SLA needs and the cap only stops it
+                // going further. With a loose target a large backlog is not
+                // "late" for a long time, so the queue trickles along at two or
+                // three workers while the downstream system would happily take
+                // the full allowance. The SLA is the lever that makes a
+                // connection-limited queue actually use what it is allowed.
+                'target_seconds' => 60,
                 'percentile' => 95,
-                'window_seconds' => 600,
+                'window_seconds' => 300,
                 'min_samples' => 20,
             ],
             'forecast' => [

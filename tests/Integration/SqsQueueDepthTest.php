@@ -21,21 +21,6 @@ use Illuminate\Support\Facades\Queue;
  *
  * They skip when it is not reachable, so the default suite stays hermetic.
  */
-function elasticMqEndpoint(): string
-{
-    $endpoint = env('SQS_TEST_ENDPOINT', 'http://localhost:9324');
-
-    return rtrim(is_string($endpoint) ? $endpoint : 'http://localhost:9324', '/');
-}
-
-function elasticMqReachable(): bool
-{
-    $context = stream_context_create(['http' => ['timeout' => 1, 'ignore_errors' => true]]);
-    $body = @file_get_contents(elasticMqEndpoint().'/?Action=ListQueues', false, $context);
-
-    return is_string($body) && str_contains($body, 'ListQueuesResponse');
-}
-
 function pushToSqs(string $queue, int $count): void
 {
     for ($i = 0; $i < $count; $i++) {
