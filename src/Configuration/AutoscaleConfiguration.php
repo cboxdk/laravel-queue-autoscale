@@ -287,6 +287,22 @@ readonly class AutoscaleConfiguration
         return self::floatConfig('queue-autoscale.limits.worker_cpu_core_estimate', 0.2);
     }
 
+    /**
+     * Hard host-wide worker ceiling, or null when unbounded.
+     */
+    public static function maxTotalWorkers(): ?int
+    {
+        $configured = config('queue-autoscale.limits.max_total_workers');
+
+        if (! is_numeric($configured)) {
+            return null;
+        }
+
+        $value = (int) $configured;
+
+        return $value > 0 ? $value : null;
+    }
+
     public static function reserveCpuCores(): float
     {
         return self::floatConfig('queue-autoscale.limits.reserve_cpu_cores', 0.2);

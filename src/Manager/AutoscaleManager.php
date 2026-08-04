@@ -141,6 +141,45 @@ class AutoscaleManager
      * breach risk is, so a long outage produces a periodic line rather than
      * one per evaluation cycle.
      */
+    /**
+     * Trim a spawn request to what the host-wide ceiling still allows.
+     *
+     * Capacity is enforced per queue, and workers.min is applied AFTER the
+     * CPU/memory clamp so a floor always beats measured capacity. That is
+     * deliberate for one queue, but queues are DISCOVERED from metrics rather
+     * than only read from config: an app with per-tenant queue names presents
+     * thousands of queues, each of which is then raised to its floor. Nothing
+     * bounded the sum. This is that bound.
+     */
+    private function clampToHostCeiling(int $requested): int
+    {
+        $ceiling = AutoscaleConfiguration::maxTotalWorkers();
+
+        if ($ceiling === null || $requested <= 0) {
+            return max(0, $requested);
+        }
+
+        $headroom = max(0, $ceiling - $this->pool->totalCount());
+
+        if ($headroom >= $requested) {
+            return $requested;
+        }
+
+        if ($this->alerts->allow('host_ceiling:'.AutoscaleConfiguration::hostLabel())) {
+            Log::channel(AutoscaleConfiguration::logChannel())->warning(
+                'Host worker ceiling reached; spawn request trimmed',
+                [
+                    'ceiling' => $ceiling,
+                    'running' => $this->pool->totalCount(),
+                    'requested' => $requested,
+                    'granted' => $headroom,
+                ]
+            );
+        }
+
+        return $headroom;
+    }
+
     private function logFuseHold(ScalingDecision $decision): void
     {
         if ($decision->capacity?->limitingFactor !== LimitingFactor::Fuse) {
@@ -1982,7 +2021,11 @@ class AutoscaleManager
 
     private function scaleUpGroup(GroupConfiguration $group, ScalingDecision $decision): void
     {
-        $toAdd = $decision->workersToAdd();
+        $toAdd = $this->clampToHostCeiling($decision->workersToAdd());
+
+        if ($toAdd === 0) {
+            return;
+        }
 
         $this->verbose("  ⬆️  Scaling group UP: spawning {$toAdd} worker(s) for [{$group->queueArgument()}]", 'info');
 
@@ -2210,7 +2253,11 @@ class AutoscaleManager
 
     private function scaleUp(ScalingDecision $decision): void
     {
-        $toAdd = $decision->workersToAdd();
+        $toAdd = $this->clampToHostCeiling($decision->workersToAdd());
+
+        if ($toAdd === 0) {
+            return;
+        }
 
         $this->verbose("  ⬆️  Scaling UP: spawning {$toAdd} worker(s)", 'info');
 

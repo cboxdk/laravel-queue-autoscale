@@ -20,7 +20,7 @@ return [
     |--------------------------------------------------------------------------
     |
     | Provide a ProfileContract class OR a literal array matching the shape
-    | returned by BalancedProfile::resolve(). See docs/upgrade-guide-v3.md
+    | returned by BalancedProfile::resolve(). See docs/advanced-usage/upgrade-guide-v3.md
     | for migration details from v2.
     |
     */
@@ -214,6 +214,20 @@ return [
         'worker_memory_mb_estimate' => 128,
         'worker_cpu_core_estimate' => 0.2,
         'reserve_cpu_cores' => 0.2,
+
+        /*
+         * Hard ceiling on total workers this host may run, across every queue
+         * and group. null means no ceiling.
+         *
+         * Per-queue workers.min is applied AFTER the CPU/memory clamp, so a
+         * floor always wins over measured capacity — by design, since the
+         * floor is your decision. The consequence is that many queues each
+         * with a small floor can oversubscribe a host, and queues are
+         * DISCOVERED from metrics rather than only read from config: a few
+         * thousand historical per-tenant queue names become a few thousand
+         * workers. This is the backstop for that.
+         */
+        'max_total_workers' => env('QUEUE_AUTOSCALE_MAX_TOTAL_WORKERS'),
     ],
 
     /*

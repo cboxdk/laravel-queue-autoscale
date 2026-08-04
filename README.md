@@ -625,9 +625,9 @@ a best-effort basis, and fixes land on the current major line. See
   - [SlackNotificationPolicy](examples/Policies/SlackNotificationPolicy.php) — Slack alerts on scaling events
   - [MetricsLoggingPolicy](examples/Policies/MetricsLoggingPolicy.php) — log detailed metrics to a dedicated file
 
-> The files under `examples/` predate v3 and still use the v1 configuration schema and pre-v3 class
-> names. Treat them as sketches, not as copy-paste sources — the authoritative, verified examples are
-> in [the documentation](docs/index.md).
+> `examples/config-examples.php` is written against the current schema. The strategy and policy
+> classes implement the real contracts and are meant to be adapted, not dropped in as-is. The
+> authoritative reference is [the documentation](docs/index.md).
 
 ## License
 

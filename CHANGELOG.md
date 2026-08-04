@@ -372,7 +372,7 @@ The autoscale manager exits gracefully for a supervised restart when Laravel's n
 - `PredictiveStrategy` removed — replaced by `HybridStrategy`
 - `ProfilePresets` static methods removed — replaced by `ProfileContract` implementations
 - `QueueConfiguration` properties restructured (`sla->targetSeconds`, `workers->min/max`)
-- Config file shape rewritten — run `php artisan queue-autoscale:migrate-config`
+- Config file shape rewritten — run `php artisan queue:autoscale:migrate-config`
 - `TrendScalingPolicy` enum replaced by `ForecastPolicyContract` classes
 
 ### Added
@@ -402,7 +402,7 @@ The autoscale manager exits gracefully for a supervised restart when Laravel's n
 
 - `queue:autoscale:restart` — graceful restart
 - `AlertRateLimiter` — rate-limited SLA breach alerts
-- `queue-autoscale:install` — interactive installer
+- `queue:autoscale:install` — interactive installer
 - Cookbook recipes (Slack, Email, Log) and deployment guides (Forge, Ploi, Docker)
 
 ### Fixed
