@@ -15,6 +15,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
@@ -162,7 +163,7 @@ test('a downstream outage is ridden out and recovered from without manual interv
         $decision = $engine->evaluate($metrics, $config, currentWorkers: $workers);
         $workers = $decision->targetWorkers;
         $targets[$tick] = $workers;
-        $heldByFuse[$tick] = $decision->capacity?->limitingFactor === 'fuse';
+        $heldByFuse[$tick] = $decision->capacity?->limitingFactor === LimitingFactor::Fuse;
 
         $clock += TICK_SECONDS;
     }
@@ -251,7 +252,7 @@ test('the fuse never trips during a long healthy run', function (): void {
     // Asserted on the fuse's own signal rather than on worker counts: the
     // exact count per tick depends on wall-clock-derived arrival rate, but
     // "the fuse never constrained this queue" is exact.
-    expect($limiters)->not->toContain('fuse');
+    expect($limiters)->not->toContain(LimitingFactor::Fuse);
     Event::assertNotDispatched(FuseTripped::class);
 });
 
@@ -296,6 +297,6 @@ test('a brief failure spike does not trip a queue tuned to tolerate it', functio
         $clock += TICK_SECONDS;
     }
 
-    expect($limiters)->not->toContain('fuse');
+    expect($limiters)->not->toContain(LimitingFactor::Fuse);
     Event::assertNotDispatched(FuseTripped::class);
 });

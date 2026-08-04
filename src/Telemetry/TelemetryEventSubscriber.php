@@ -98,7 +98,7 @@ class TelemetryEventSubscriber
 
         if ($decision->capacity !== null) {
             $telemetry->gauge('queue_autoscale.capacity.max_workers', description: 'Host worker capacity ceiling', unit: '{workers}')
-                ->set((float) $decision->capacity->finalMaxWorkers, ['limiter' => $decision->capacity->limitingFactor]);
+                ->set((float) $decision->capacity->finalMaxWorkers, ['limiter' => $decision->capacity->limitingFactor->value]);
         }
 
         $this->flushDebounced($telemetry);

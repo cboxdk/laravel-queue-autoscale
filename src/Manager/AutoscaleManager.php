@@ -28,6 +28,7 @@ use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\QueueStats;
 use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\WorkerStatus;
 use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\ResourceEstimate;
 use Cbox\LaravelQueueAutoscale\Scaling\FairShareAllocator;
 use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
@@ -142,7 +143,7 @@ class AutoscaleManager
      */
     private function logFuseHold(ScalingDecision $decision): void
     {
-        if ($decision->capacity?->limitingFactor !== 'fuse') {
+        if ($decision->capacity?->limitingFactor !== LimitingFactor::Fuse) {
             return;
         }
 
@@ -320,7 +321,7 @@ class AutoscaleManager
             totalWorkers: $this->pool->totalCount(),
             maxWorkers: $capacity->finalMaxWorkers,
             availableWorkerCapacity: max($capacity->finalMaxWorkers - $this->pool->totalCount(), 0),
-            capacityLimiter: $this->clusterString($capacity->limitingFactor, 'unknown'),
+            capacityLimiter: $capacity->limitingFactor->value,
             cpuPercent: $this->clusterFloat($cpuDetails['current_cpu_percent'] ?? 0.0),
             cpuCores: is_numeric($cpuDetails['total_cores'] ?? null) ? (float) $cpuDetails['total_cores'] : 0.0,
             cpuUsableCores: is_numeric($cpuDetails['usable_cores'] ?? null) ? (float) $cpuDetails['usable_cores'] : 0.0,
@@ -1666,14 +1667,22 @@ class AutoscaleManager
             }
 
             // Explain the capacity factor
+            // Exhaustive: a new limiting factor is a compile error here
+            // rather than a silently missing explanation. The fuse case used
+            // to be absent, so verbose mode printed nothing at all while a
+            // queue was being held down.
             $factor = $decision->capacity->limitingFactor;
-            if ($factor === 'cpu' || $factor === 'memory') {
-                $this->verbose("     ⚠️  Constrained by system capacity: {$factor}", 'warn');
-            } elseif ($factor === 'config') {
-                $this->verbose('     ⚠️  Constrained by workers.max config limit', 'warn');
-            } elseif ($factor === 'strategy') {
-                $this->verbose('     ✓ Optimal worker count determined by demand analysis', 'debug');
-            }
+            [$level, $icon] = match ($factor) {
+                LimitingFactor::Cpu,
+                LimitingFactor::Memory,
+                LimitingFactor::Balanced,
+                LimitingFactor::SystemMetricsUnavailable => ['warn', '⚠️ '],
+                LimitingFactor::Fuse => ['warn', '🔌'],
+                LimitingFactor::Config => ['warn', '⚠️ '],
+                LimitingFactor::Strategy => ['debug', '✓'],
+            };
+
+            $this->verbose("     {$icon} ".ucfirst($factor->description()), $level);
         }
 
         // 6b. Store queue stats for renderer

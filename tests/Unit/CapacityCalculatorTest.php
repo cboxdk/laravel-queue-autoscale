@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\ResourceEstimate;
 
 /**
@@ -22,7 +23,7 @@ it('returns capacity calculation result with detailed breakdown', function () {
         ->and($result->maxWorkersByCpu)->toBeInt()
         ->and($result->maxWorkersByMemory)->toBeInt()
         ->and($result->maxWorkersByConfig)->toBeInt()
-        ->and($result->limitingFactor)->toBeString();
+        ->and($result->limitingFactor)->toBeInstanceOf(LimitingFactor::class);
 });
 
 it('returns conservative fallback when system metrics fail', function () {
@@ -80,7 +81,7 @@ it('identifies limiting factor correctly', function () {
     $result = $calculator->calculateMaxWorkers(0, ResourceEstimate::globalDefault());
 
     // Limiting factor should be one of: cpu, memory, balanced
-    expect($result->limitingFactor)->toBeIn(['cpu', 'memory', 'balanced']);
+    expect($result->limitingFactor)->toBeIn([LimitingFactor::Cpu, LimitingFactor::Memory, LimitingFactor::Balanced]);
 });
 
 it('provides helper methods for limiting factor checks', function () {
@@ -89,7 +90,7 @@ it('provides helper methods for limiting factor checks', function () {
     $result = $calculator->calculateMaxWorkers(0, ResourceEstimate::globalDefault());
 
     // One of the helper methods should return true (unless 'balanced')
-    if ($result->limitingFactor !== 'balanced') {
+    if ($result->limitingFactor !== LimitingFactor::Balanced) {
         $hasLimitingFactorTrue = $result->isCpuLimited() || $result->isMemoryLimited();
         expect($hasLimitingFactorTrue)->toBeTrue();
     }

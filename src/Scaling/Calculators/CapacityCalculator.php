@@ -6,6 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Scaling\Calculators;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\ResourceEstimate;
 use Cbox\SystemMetrics\DTO\Metrics\Cpu\CpuSnapshot;
 use Cbox\SystemMetrics\SystemMetrics;
@@ -64,7 +65,7 @@ class CapacityCalculator
                 maxWorkersByMemory: 5,
                 maxWorkersByConfig: PHP_INT_MAX,
                 finalMaxWorkers: 5,
-                limitingFactor: 'system_metrics_unavailable',
+                limitingFactor: LimitingFactor::SystemMetricsUnavailable,
                 details: [
                     'cpu_explanation' => 'system metrics unavailable - using fallback',
                     'memory_explanation' => 'system metrics unavailable - using fallback',
@@ -107,9 +108,9 @@ class CapacityCalculator
         $finalMaxWorkers = max(min($maxWorkersByCpu, $maxWorkersByMemory), 0);
 
         $limitingFactor = match (true) {
-            $maxWorkersByCpu < $maxWorkersByMemory => 'cpu',
-            $maxWorkersByMemory < $maxWorkersByCpu => 'memory',
-            default => 'balanced', // Both are equal
+            $maxWorkersByCpu < $maxWorkersByMemory => LimitingFactor::Cpu,
+            $maxWorkersByMemory < $maxWorkersByCpu => LimitingFactor::Memory,
+            default => LimitingFactor::Balanced,
         };
 
         // Build detailed explanation

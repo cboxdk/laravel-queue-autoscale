@@ -6,6 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Tests\Simulation;
 
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\ResourceEstimate;
 
 /**
@@ -23,7 +24,7 @@ final class UnlimitedCapacityCalculator extends CapacityCalculator
             maxWorkersByMemory: PHP_INT_MAX,
             maxWorkersByConfig: PHP_INT_MAX,
             finalMaxWorkers: PHP_INT_MAX,
-            limitingFactor: 'none',
+            limitingFactor: LimitingFactor::Strategy,
             details: [
                 'cpu_explanation' => 'unlimited (simulation)',
                 'memory_explanation' => 'unlimited (simulation)',

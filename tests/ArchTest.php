@@ -38,6 +38,7 @@ arch('package classes are not sealed against consumers')
     ->ignoring([
         'Cbox\LaravelQueueAutoscale\Fuse\FuseState',
         'Cbox\LaravelQueueAutoscale\Scaling\DTOs\EstimateSource',
+        'Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor',
     ]);
 
 arch('profiles implement ProfileContract')

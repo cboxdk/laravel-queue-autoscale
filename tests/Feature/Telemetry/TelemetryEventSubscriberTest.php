@@ -13,6 +13,7 @@ use Cbox\LaravelQueueAutoscale\Events\SlaBreached;
 use Cbox\LaravelQueueAutoscale\Events\SlaRecovered;
 use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Telemetry\TelemetryEventSubscriber;
 use Cbox\Telemetry\Facades\Telemetry;
@@ -56,7 +57,7 @@ it('records the capacity ceiling gauge with its limiting factor label', function
         maxWorkersByMemory: 12,
         maxWorkersByConfig: 20,
         finalMaxWorkers: 8,
-        limitingFactor: 'cpu',
+        limitingFactor: LimitingFactor::Cpu,
     );
 
     $this->subscriber->handleScalingDecisionMade(new ScalingDecisionMade(makeScalingDecision(['capacity' => $capacity])));

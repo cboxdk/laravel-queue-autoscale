@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Illuminate\Support\Facades\Log;
 
@@ -21,7 +22,7 @@ function decisionLimitedBy(string $limiter, string $queue = 'default'): ScalingD
             maxWorkersByMemory: 20,
             maxWorkersByConfig: 20,
             finalMaxWorkers: 2,
-            limitingFactor: $limiter,
+            limitingFactor: LimitingFactor::from($limiter),
         ),
     );
 }

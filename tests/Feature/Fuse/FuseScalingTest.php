@@ -11,6 +11,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\Calculators\ArrivalRateEstimator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\BacklogDrainCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
@@ -81,7 +82,7 @@ beforeEach(function (): void {
  */
 function fuseConstrained(ScalingDecision $decision): bool
 {
-    return $decision->capacity?->limitingFactor === 'fuse'
+    return $decision->capacity?->limitingFactor === LimitingFactor::Fuse
         || str_contains($decision->reason, 'fuse');
 }
 
@@ -102,7 +103,7 @@ test('holds an overloaded queue at workers.min once the fuse trips', function ()
     expect($decision->action())->toBe('scale_down');
     expect($decision->reason)->toContain('fuse OPEN');
     expect($decision->reason)->toContain('90.0% failure rate');
-    expect($decision->capacity?->limitingFactor)->toBe('fuse');
+    expect($decision->capacity?->limitingFactor)->toBe(LimitingFactor::Fuse);
 });
 
 test('keeps holding while the fuse stays open on later cycles', function (): void {
@@ -111,7 +112,7 @@ test('keeps holding while the fuse stays open on later cycles', function (): voi
     $decision = $this->engine->evaluate($this->overloadedMetrics, $this->config, currentWorkers: 8);
 
     expect($decision->targetWorkers)->toBe(2);
-    expect($decision->capacity?->limitingFactor)->toBe('fuse');
+    expect($decision->capacity?->limitingFactor)->toBe(LimitingFactor::Fuse);
 });
 
 test('allows a single-worker probe when the cooldown expires', function (): void {
@@ -124,7 +125,7 @@ test('allows a single-worker probe when the cooldown expires', function (): void
     // exact floor-of-one guarantee is pinned in FuseVerdictTest; here the
     // claim is only that the fuse, not capacity, set the ceiling.
     expect($decision->targetWorkers)->toBeLessThanOrEqual(1)
-        ->and($decision->capacity?->limitingFactor)->toBe('fuse')
+        ->and($decision->capacity?->limitingFactor)->toBe(LimitingFactor::Fuse)
         ->and($decision->reason)->toContain('fuse HALF-OPEN');
 });
 
@@ -219,7 +220,7 @@ test('reports the fuse as the limiting factor ahead of capacity', function (): v
 
     $decision = $this->engine->evaluate($this->overloadedMetrics, $this->config, currentWorkers: 8, totalPoolWorkers: 500);
 
-    expect($decision->capacity?->limitingFactor)->toBe('fuse')
+    expect($decision->capacity?->limitingFactor)->toBe(LimitingFactor::Fuse)
         ->and($decision->targetWorkers)->toBe(2);
 });
 

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 
 test('creates instance with all properties', function () {
     $result = new CapacityCalculationResult(
@@ -10,7 +11,7 @@ test('creates instance with all properties', function () {
         maxWorkersByMemory: 15,
         maxWorkersByConfig: 10,
         finalMaxWorkers: 10,
-        limitingFactor: 'config',
+        limitingFactor: LimitingFactor::Config,
         details: ['key' => 'value'],
     );
 
@@ -18,7 +19,7 @@ test('creates instance with all properties', function () {
         ->and($result->maxWorkersByMemory)->toBe(15)
         ->and($result->maxWorkersByConfig)->toBe(10)
         ->and($result->finalMaxWorkers)->toBe(10)
-        ->and($result->limitingFactor)->toBe('config')
+        ->and($result->limitingFactor)->toBe(LimitingFactor::Config)
         ->and($result->details)->toBe(['key' => 'value']);
 });
 
@@ -28,7 +29,7 @@ test('isCpuLimited returns true when cpu is limiting factor', function () {
         maxWorkersByMemory: 20,
         maxWorkersByConfig: 30,
         finalMaxWorkers: 10,
-        limitingFactor: 'cpu',
+        limitingFactor: LimitingFactor::Cpu,
     );
 
     expect($result->isCpuLimited())->toBeTrue()
@@ -42,7 +43,7 @@ test('isMemoryLimited returns true when memory is limiting factor', function () 
         maxWorkersByMemory: 10,
         maxWorkersByConfig: 20,
         finalMaxWorkers: 10,
-        limitingFactor: 'memory',
+        limitingFactor: LimitingFactor::Memory,
     );
 
     expect($result->isMemoryLimited())->toBeTrue()
@@ -56,7 +57,7 @@ test('isConfigLimited returns true when config is limiting factor', function () 
         maxWorkersByMemory: 20,
         maxWorkersByConfig: 10,
         finalMaxWorkers: 10,
-        limitingFactor: 'config',
+        limitingFactor: LimitingFactor::Config,
     );
 
     expect($result->isConfigLimited())->toBeTrue()
@@ -70,7 +71,7 @@ test('getSummary returns formatted string', function () {
         maxWorkersByMemory: 15,
         maxWorkersByConfig: 10,
         finalMaxWorkers: 10,
-        limitingFactor: 'config',
+        limitingFactor: LimitingFactor::Config,
     );
 
     $summary = $result->getSummary();
@@ -88,7 +89,7 @@ test('getFormattedDetails returns formatted array', function () {
         maxWorkersByMemory: 15,
         maxWorkersByConfig: 10,
         finalMaxWorkers: 10,
-        limitingFactor: 'config',
+        limitingFactor: LimitingFactor::Config,
         details: [
             'cpu_explanation' => '8 cores available',
             'memory_explanation' => '4GB free',
@@ -113,7 +114,7 @@ test('getFormattedDetails handles missing details', function () {
         maxWorkersByMemory: 15,
         maxWorkersByConfig: 10,
         finalMaxWorkers: 10,
-        limitingFactor: 'cpu',
+        limitingFactor: LimitingFactor::Cpu,
     );
 
     $formatted = $result->getFormattedDetails();
@@ -123,7 +124,7 @@ test('getFormattedDetails handles missing details', function () {
         ->and($formatted['Final Capacity'])->toContain('constrained by CPU');
 });
 
-test('getFormattedDetails shows correct factor descriptions', function (string $factor, string $expected) {
+test('getFormattedDetails describes every limiting factor', function (LimitingFactor $factor, string $expected) {
     $result = new CapacityCalculationResult(
         maxWorkersByCpu: 10,
         maxWorkersByMemory: 10,
@@ -132,16 +133,27 @@ test('getFormattedDetails shows correct factor descriptions', function (string $
         limitingFactor: $factor,
     );
 
-    $formatted = $result->getFormattedDetails();
-
-    expect($formatted['Final Capacity'])->toContain($expected);
+    expect($result->getFormattedDetails()['Final Capacity'])->toContain($expected);
 })->with([
-    ['cpu', 'constrained by CPU'],
-    ['memory', 'constrained by memory'],
-    ['config', 'constrained by max_workers'],
-    ['strategy', 'optimal based on demand'],
-    ['unknown', 'limited by: unknown'],
+    [LimitingFactor::Cpu, 'constrained by CPU'],
+    [LimitingFactor::Memory, 'constrained by memory'],
+    [LimitingFactor::Balanced, 'CPU and memory constrain equally'],
+    [LimitingFactor::Config, 'constrained by workers.max'],
+    [LimitingFactor::Strategy, 'optimal based on demand'],
+    [LimitingFactor::Fuse, 'held back by the failure fuse'],
+    [LimitingFactor::SystemMetricsUnavailable, 'system metrics unavailable'],
 ]);
+
+test('every limiting factor has a description, so none can leak a raw token', function (): void {
+    // The old string version fell through to "limited by: <token>" for any
+    // value its match did not know, which is how operators saw
+    // "limited by: system_metrics_unavailable" in verbose output.
+    foreach (LimitingFactor::cases() as $factor) {
+        expect($factor->description())
+            ->not->toContain('_')          // no raw snake_case token
+            ->not->toContain('limited by:'); // no fall-through phrasing
+    }
+});
 
 test('handles non-string values in details gracefully', function () {
     $result = new CapacityCalculationResult(
@@ -149,7 +161,7 @@ test('handles non-string values in details gracefully', function () {
         maxWorkersByMemory: 15,
         maxWorkersByConfig: 10,
         finalMaxWorkers: 10,
-        limitingFactor: 'config',
+        limitingFactor: LimitingFactor::Config,
         details: [
             'cpu_explanation' => 123,
             'memory_explanation' => ['array'],

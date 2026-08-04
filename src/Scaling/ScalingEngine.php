@@ -10,6 +10,7 @@ use Cbox\LaravelQueueAutoscale\Fuse\FailureFuse;
 use Cbox\LaravelQueueAutoscale\Fuse\NullFailureWindowStore;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
 readonly class ScalingEngine
@@ -87,7 +88,7 @@ readonly class ScalingEngine
 
         // 6. Determine final limiting factor after all constraints
         $finalLimitingFactor = $fuseVerdict->isTripped()
-            ? 'fuse'
+            ? LimitingFactor::Fuse
             : $this->determineFinalLimitingFactor(
                 $capacityResult,
                 $strategyRecommendation,
@@ -179,16 +180,16 @@ readonly class ScalingEngine
         int $finalTarget,
         int $configMinWorkers,
         int $configMaxWorkers,
-    ): string {
+    ): LimitingFactor {
         // If config max_workers capped the target
         if ($finalTarget < $afterSystemCapacity && $finalTarget === $configMaxWorkers) {
-            return 'config';
+            return LimitingFactor::Config;
         }
 
         // If config min_workers raised the target above what strategy/capacity allowed
         // This means we have low/no demand, not a capacity constraint
         if ($finalTarget > $afterSystemCapacity && $finalTarget === $configMinWorkers) {
-            return 'strategy';
+            return LimitingFactor::Strategy;
         }
 
         // If system capacity reduced the strategy recommendation
@@ -197,6 +198,6 @@ readonly class ScalingEngine
         }
 
         // Strategy recommendation was within capacity and config bounds
-        return 'strategy';
+        return LimitingFactor::Strategy;
     }
 }

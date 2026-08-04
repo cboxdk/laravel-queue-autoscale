@@ -23,7 +23,7 @@ readonly class CapacityCalculationResult
      * @param  int  $maxWorkersByMemory  Maximum workers based on memory constraints
      * @param  int  $maxWorkersByConfig  Maximum workers based on configuration limit
      * @param  int  $finalMaxWorkers  Actual maximum (minimum of all constraints)
-     * @param  string  $limitingFactor  Which constraint is limiting ('cpu', 'memory', 'config')
+     * @param  LimitingFactor  $limitingFactor  Which constraint decided the final count
      * @param  array<string, mixed>  $details  Additional calculation details for debugging
      */
     public function __construct(
@@ -31,7 +31,7 @@ readonly class CapacityCalculationResult
         public int $maxWorkersByMemory,
         public int $maxWorkersByConfig,
         public int $finalMaxWorkers,
-        public string $limitingFactor,
+        public LimitingFactor $limitingFactor,
         public array $details = [],
     ) {}
 
@@ -40,7 +40,7 @@ readonly class CapacityCalculationResult
      */
     public function isCpuLimited(): bool
     {
-        return $this->limitingFactor === 'cpu';
+        return $this->limitingFactor === LimitingFactor::Cpu;
     }
 
     /**
@@ -48,7 +48,7 @@ readonly class CapacityCalculationResult
      */
     public function isMemoryLimited(): bool
     {
-        return $this->limitingFactor === 'memory';
+        return $this->limitingFactor === LimitingFactor::Memory;
     }
 
     /**
@@ -56,7 +56,7 @@ readonly class CapacityCalculationResult
      */
     public function isConfigLimited(): bool
     {
-        return $this->limitingFactor === 'config';
+        return $this->limitingFactor === LimitingFactor::Config;
     }
 
     /**
@@ -70,7 +70,7 @@ readonly class CapacityCalculationResult
             $this->maxWorkersByMemory,
             $this->maxWorkersByConfig,
             $this->finalMaxWorkers,
-            $this->limitingFactor
+            $this->limitingFactor->value
         );
     }
 
@@ -114,13 +114,7 @@ readonly class CapacityCalculationResult
      */
     private function getFactorDescription(): string
     {
-        return match ($this->limitingFactor) {
-            'cpu' => 'constrained by CPU',
-            'memory' => 'constrained by memory',
-            'config' => 'constrained by max_workers',
-            'strategy' => 'optimal based on demand',
-            default => "limited by: {$this->limitingFactor}",
-        };
+        return $this->limitingFactor->description();
     }
 
     /**
