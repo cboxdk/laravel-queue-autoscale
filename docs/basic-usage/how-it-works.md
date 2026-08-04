@@ -1,6 +1,6 @@
 ---
 title: "How It Works"
-description: "Comprehensive guide to understanding how the autoscaler makes scaling decisions"
+description: "What the manager does each cycle, and why it decided what it decided"
 weight: 10
 ---
 

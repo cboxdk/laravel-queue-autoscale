@@ -1,6 +1,6 @@
 ---
 title: "Algorithms"
-description: "The real formulas behind the autoscaler: Little's Law, backlog drain, forecasting and capacity limits"
+description: "How a pickup-time target becomes a worker count — the derivations, with worked examples"
 weight: 50
 ---
 

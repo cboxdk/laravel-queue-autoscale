@@ -1,6 +1,6 @@
 ---
 title: "Introduction"
-description: "SLA-driven autoscaling for Laravel queue workers, built on Little's Law and backlog-drain math"
+description: "Declare how long a job may wait. The autoscaler works out how many workers that takes."
 weight: 1
 ---
 
@@ -27,6 +27,53 @@ Here you state the outcome you actually care about:
 
 Every evaluation cycle the manager measures the queue, solves for the worker count that satisfies
 that target, bounds it by what the host can actually run, and moves the pool toward it.
+
+## Who does the translation?
+
+Every scaling model eventually needs one number: how many workers to run. The models differ in who
+works it out — you, or the autoscaler.
+
+| What you configure | What the system does with it | What you had to know |
+|---|---|---|
+| A fixed count | Nothing. It runs what you set. | How many workers your load needs. |
+| A ceiling, split by queue depth | Divides your ceiling between queues in proportion to how deep each one is. | How many workers your load needs — the ceiling *is* that guess. |
+| A jobs-per-worker target | Divides queue depth by your target. | How many jobs one worker clears in an acceptable time. |
+| **A pickup-time target** | Measures how long jobs actually take and how fast they arrive, then solves for the count. | **How long a job may wait before it matters to you.** |
+
+Only the last one asks a question you can answer from the business. "Password resets must go out within
+ten seconds" is a fact about your product. "Password resets need four workers" is a derivation from
+that fact, made with information you do not have on a Tuesday afternoon — how long the job takes this
+week, how many are arriving right now, how long a new worker takes to start.
+
+The first three are not wrong. They are fast, they need almost no measurement, and a fixed pool is
+genuinely the right answer for a queue whose load never changes. But each of them makes you do the
+arithmetic once, in advance, from numbers that move.
+
+### Why queue depth is a proxy, and where it breaks
+
+Depth is the cheapest signal there is — one call to any queue driver returns it. That is why most
+scaling models are built on it. It is also a stand-in for the thing you care about, and stand-ins
+break in specific ways:
+
+- **Jobs are not the same size.** Ten jobs at 100 ms and ten jobs at sixty seconds are the same
+  depth and nine minutes apart in real terms.
+- **Retries look like new work.** A job that fails and is released re-enters the queue. Depth goes
+  up, but no new work arrived.
+- **Contention looks like load.** Laravel's own `RateLimited` and `WithoutOverlapping` middleware
+  *release jobs back onto the queue* rather than running them. Under contention, depth measures how
+  many jobs are waiting for a lock — and adding workers makes it strictly worse. A depth-driven
+  scaler reads this as demand and scales into the spiral.
+
+That last case is why this package has a [failure fuse](basic-usage/failure-fuse.md): when jobs are
+failing rather than queueing, more workers are the wrong answer, and something has to say so.
+
+Pickup time has none of those failure modes, because it is not a proxy. It is the number you were
+trying to control in the first place, measured directly.
+
+**The trade you are making:** deriving workers from latency requires measurement that depth-based
+models do not — how long jobs take, when they were enqueued, when they were picked up. That is why
+this package depends on `cboxdk/laravel-queue-metrics`, and why it needs a few minutes of traffic
+before its estimates settle. A depth-based scaler works from nothing. This one works from evidence.
 
 ## Key features
 
