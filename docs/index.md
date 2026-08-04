@@ -107,6 +107,51 @@ names are discovered rather than configured.
 The failure mode of a queue-depth scaler under a backlog it cannot drain is to keep adding workers.
 The failure mode here is to stop at what the machine has and say why.
 
+## What the number counts
+
+A worker count only means something once you know what it is counted over. Three models, three
+different answers — and the difference shows up as either surprise cost or surprise latency.
+
+**Counted per host.** A process supervisor running on each machine scales that machine and knows
+nothing about the others. Set a ceiling of twenty and run six hosts and you have authorised a hundred
+and twenty workers against one database. The ceiling reads like a budget and behaves like a budget
+per replica. Making it a real fleet budget means dividing it by your host count by hand and redoing
+that arithmetic every time you add or lose a machine.
+
+**Counted per container.** One worker to a container makes the platform's own limits the enforcement
+mechanism, which is a genuinely sound trade: nothing can oversubscribe a box, because nothing shares
+one. You pay for it in granularity. Each worker carries a full container's allocation and a full cold
+start, so a queue that needs eleven workers for ninety seconds costs eleven containers spun up and
+torn down, and the memory a worker does not use is not available to anything else.
+
+**Counted per fleet.** Here the leader solves for the demand of a workload once, across every host,
+and then hands each host a share weighted by the capacity that host actually reported. A host with
+more headroom takes more; a host already busy with other queues takes fewer; every host still applies
+its own resource ceiling to whatever it is handed. The ceiling you configure is the number of workers
+that will exist, not the number that will exist somewhere.
+
+## Queues you forgot to configure still get processed
+
+Naming your queues is the step everyone gets wrong eventually. A developer adds
+`dispatch(new ThingJob)->onQueue('exports')` and nobody adds `exports` to the supervisor config. A
+queue name is misspelled in one of the two places it appears. A tenant-specific queue is created at
+runtime and no config file knows about it. In every case the jobs are enqueued successfully, nothing
+errors, and they are never picked up — until someone notices days later.
+
+This package does not read its list of queues from configuration. It reads it from the metrics
+package, which sees every queue that has actually received a job. Anything that appears there is
+managed, using your default profile, with no configuration at all. Configuration exists to *change*
+how a queue is treated, not to make it visible.
+
+That trades one failure mode for another, so both halves ship:
+
+- [`excluded`](basic-usage/configuration.md) takes glob patterns for queues this package must never
+  touch — the ones another supervisor owns, or throwaway queues you do not want workers for.
+- [`limits.max_total_workers`](basic-usage/configuration.md) caps the whole host. Discovery means an
+  application that generates queue names per tenant can present thousands of them, and each would
+  otherwise be raised to its floor. The cap is the backstop; it is worth setting the moment queue
+  names are dynamic.
+
 ## Key features
 
 **SLA-based scaling.** Declare a target pickup time. Worker counts are derived from measurements,
