@@ -258,8 +258,23 @@ LUA;
                 continue;
             }
 
-            if (is_array($decoded)) {
-                $decisions[] = $decoded;
+            if (! is_array($decoded)) {
+                continue;
+            }
+
+            // A decision is persisted as a JSON object, so its keys are
+            // strings. Anything that decoded to a positional array is a
+            // malformed record no reader could interpret.
+            $decision = [];
+
+            foreach ($decoded as $key => $value) {
+                if (is_string($key)) {
+                    $decision[$key] = $value;
+                }
+            }
+
+            if ($decision !== []) {
+                $decisions[] = $decision;
             }
         }
 
