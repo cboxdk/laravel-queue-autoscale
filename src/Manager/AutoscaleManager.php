@@ -2152,6 +2152,7 @@ class AutoscaleManager
                 $queue,
                 $toAdd,
                 $config->spawnCompensation,
+                workerConfig: $config->workers,
             );
 
             foreach ($workers as $worker) {
