@@ -130,7 +130,7 @@ When you want *almost* the defaults but with one or two changes, pass an array. 
 
 ### The nested config shape
 
-A fully-resolved queue configuration has four sections. You rarely need to see all of them — a profile populates them all — but here's the reference when you need to override specific keys:
+A fully-resolved queue configuration has five sections. You rarely need to see all of them — a profile populates them all — but here's the reference when you need to override specific keys:
 
 ```php
 'payments' => [
@@ -161,8 +161,17 @@ A fully-resolved queue configuration has four sections. You rarely need to see a
         'min_samples' => 3,
         'ema_alpha' => 0.3,
     ],
+    'fuse' => [
+        'enabled' => true,
+        'failure_threshold_percent' => 40.0,  // trip at/above this failure rate
+        'min_samples' => 10,                  // outcomes needed before the rate is trusted
+        'window_seconds' => 30,               // bucket size for outcome counting
+        'cooldown_seconds' => 30,             // hold this long before probing for recovery
+    ],
 ],
 ```
+
+The `fuse` block is optional — configs written before the fuse existed keep working on package defaults. See [Failure Fuse](failure-fuse.md) for what it does and how to tune it.
 
 **The keys most operators touch:**
 
@@ -170,7 +179,7 @@ A fully-resolved queue configuration has four sections. You rarely need to see a
 - `workers.min` / `workers.max` — floor and ceiling on concurrency.
 - `workers.scalable = false` — pin the queue and bypass the scaling engine (see [ExclusiveProfile](#exclusiveprofile--pinned-single-worker-queues)).
 
-Global scaling keys (cooldown, breach threshold, fallback job time) live under `scaling.*` at the top level — see the published config file.
+Global scaling keys (cooldown, breach threshold, fallback job time) live under `scaling.*` at the top level — see the published config file. The fuse's two infrastructure settings live under `fuse.*` at the top level; its thresholds are per-queue, in the block above.
 
 ## Worker Topology (v3)
 

@@ -16,6 +16,7 @@ Find your symptom in the list below, then follow the diagnosis steps in order. E
 - [Logs show the same SLA breach line every few seconds](#logs-show-the-same-sla-breach-line-every-few-seconds)
 - [Manager starts but produces no output](#manager-starts-but-produces-no-output)
 - [Manager crashes on startup](#manager-crashes-on-startup)
+- [A queue is stuck at `workers.min` while its backlog grows](#a-queue-is-stuck-at-workersmin-while-its-backlog-grows)
 - [An exclusive queue keeps respawning its worker](#an-exclusive-queue-keeps-respawning-its-worker)
 - [A group never scales up even though its members have jobs](#a-group-never-scales-up-even-though-its-members-have-jobs)
 - [Deploy finishes but new config is not applied](#deploy-finishes-but-new-config-is-not-applied)
@@ -109,6 +110,41 @@ Check the first lines of stderr/the log. Common failures:
 - **`Queue autoscale is disabled in config`** — set `'enabled' => true` or `QUEUE_AUTOSCALE_ENABLED=true`.
 - **`queue-autoscale.pickup_time.store must be a class that implements PickupTimeStoreContract`** — your `pickup_time.store` config value is not a valid class. Run `vendor:publish` again and merge manually.
 - **`Group configuration is invalid — groups disabled until manager restart`** — a queue appears in both `queues` and a group, or in multiple groups. Fix the config; the manager will still run but with groups disabled until you restart.
+
+## A queue is stuck at `workers.min` while its backlog grows
+
+This is usually the [failure fuse](failure-fuse.md) doing its job: the queue's jobs are failing, and adding workers would only increase pressure on whatever is failing.
+
+**Confirm it:**
+
+```bash
+php artisan queue:autoscale:debug --queue=<your-queue>
+```
+
+The `=== Failure Fuse ===` section reports the current state and the evidence behind it:
+
+```text
+=== Failure Fuse ===
++--------------+------------------------+
+| Metric       | Value                  |
++--------------+------------------------+
+| State        | open                   |
+| Failure rate | 75.6% (93 of 123 jobs) |
+| Trips at     | 50.0% over >= 20 jobs  |
+| Window       | 60s                    |
+| Cooldown     | 60s                    |
+| Worker range | 1 - 10                 |
++--------------+------------------------+
+TRIPPED: scaling is held at 1 worker(s). A probe runs automatically after 60s.
+```
+
+**Then:**
+
+1. **If the failure rate is real** — the fix is upstream. Find out what your jobs are failing against. The fuse will probe for recovery on its own every `cooldown_seconds` and release scaling once the probe succeeds; no manual intervention is needed.
+2. **If the failure rate looks wrong** — your threshold may be too close to the queue's baseline. Jobs hitting rate limits count as failures too. See [Tuning](failure-fuse.md#tuning).
+3. **If you need to scale regardless** — disable the fuse for that queue with `'fuse' => ['enabled' => false]`, or globally with `QUEUE_AUTOSCALE_FUSE_ENABLED=false`. Understand that you are choosing to scale into a failure.
+
+If the reason string does **not** mention the fuse, the cause is elsewhere — see [Jobs are piling up but no workers are spawning](#jobs-are-piling-up-but-no-workers-are-spawning).
 
 ## An exclusive queue keeps respawning its worker
 

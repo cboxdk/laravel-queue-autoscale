@@ -146,6 +146,31 @@ For group workers, `$queue` holds the group name. For supervisor respawns on exc
 
 **Use for:** cost accounting, scaling audit logs.
 
+### `FuseTripped` / `FuseProbing` / `FuseRecovered`
+
+Fired when the [failure fuse](failure-fuse.md) changes state — on transitions only, never per cycle.
+
+```php
+final class FuseTripped
+{
+    public function __construct(
+        public readonly string $connection,
+        public readonly string $queue,
+        public readonly float $failureRate,
+        public readonly int $samples,
+        public readonly int $failures,
+        public readonly float $thresholdPercent,
+        public readonly int $heldAtWorkers,
+    ) {}
+}
+```
+
+`FuseProbing` carries `$probeWorkers` and `$cooldownSeconds`; `FuseRecovered` carries `$failureRate` and `$samples`.
+
+`FuseTripped` is a stronger signal than an SLA breach: the queue's work is *failing*, not merely late. Because these fire once per transition, they do not need rate-limiting.
+
+**Use for:** incident alerting, incident duration metrics. See [Alert on a Fuse Trip](../cookbook/alert-on-fuse-trip.md).
+
 ## Listening to Events
 
 ### Method 1: Event Listeners

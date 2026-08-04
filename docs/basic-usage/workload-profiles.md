@@ -29,6 +29,19 @@ Six profiles ship with the package:
 | **BackgroundProfile** | 300s | 0 | 5 | p95 | Hint-only | Cleanup, analytics |
 | **ExclusiveProfile** (v3) | 60s | 1 (pinned) | 1 (pinned) | p95 | Disabled | Sequential integrations |
 
+Each profile also ships [failure fuse](failure-fuse.md) tuning matched to its traffic shape:
+
+| Profile | Fuse threshold | Min samples | Window | Cooldown |
+|---|---|---|---|---|
+| **CriticalProfile** | 40% | 10 | 30s | 30s |
+| **HighVolumeProfile** | 50% | 100 | 60s | 60s |
+| **BalancedProfile** ⭐ | 50% | 20 | 60s | 60s |
+| **BurstyProfile** | 50% | 20 | 120s | 60s |
+| **BackgroundProfile** | 60% | 10 | 300s | 300s |
+| **ExclusiveProfile** | — | — | — | disabled |
+
+Higher-volume profiles demand more samples before acting; lower-volume ones widen the window so `min_samples` is reachable at all. `ExclusiveProfile` disables the fuse because a pinned queue has no scale-up to hold back.
+
 `BalancedProfile` is the default `sla_defaults`. Change it only if your typical queue has a tighter or looser SLA than 30 seconds.
 
 ## Using a profile

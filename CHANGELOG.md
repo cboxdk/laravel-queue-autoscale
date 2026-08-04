@@ -5,6 +5,39 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Failure fuse (circuit breaker for scaling decisions)
+
+A downstream outage is indistinguishable from load to an autoscaler: jobs fail, get released, the backlog grows and the oldest job ages — so the naive response is to add workers, which only increases pressure on the failing dependency and burns each job's retry budget faster.
+
+The fuse watches the recent job failure rate per queue and interrupts that loop:
+
+- **Trips** when the failure rate crosses the threshold with enough samples behind it, and holds the queue at `workers.min` instead of scaling up
+- **Probes** with a single worker after a cooldown, then either closes (normal scaling resumes) or re-trips
+- **Events:** `FuseTripped`, `FuseProbing`, `FuseRecovered` for alerting; scaling decisions report `fuse` as their limiting factor and explain themselves in the decision reason
+- Per-queue tuning via the profile `fuse` block (`failure_threshold_percent`, `min_samples`, `window_seconds`, `cooldown_seconds`); each built-in profile ships tuning matched to its traffic shape, and `ExclusiveProfile` opts out since a pinned queue has no scale-up to hold back
+- Applies to every strategy — including custom ones — because it lives in `ScalingEngine`, and constrains cluster-wide demand as well as per-host decisions
+- Failures are counted from `JobExceptionOccurred` rather than `JobFailed`, so detection does not wait for retries to be exhausted
+- Outcome counters go through Laravel's cache (any driver), so the fuse works in single-host mode without Redis
+- Disable globally with `QUEUE_AUTOSCALE_FUSE_ENABLED=false`, or per queue with `'fuse' => ['enabled' => false]`
+
+**Telemetry:** with `cboxdk/laravel-telemetry` installed, the fuse publishes `queue_autoscale.fuse.state` (0 closed, 1 half-open, 2 open), a `queue_autoscale.fuse.trips` counter, and `queue_autoscale.fuse.tripped` / `.probing` / `.recovered` OTLP events.
+
+**Failure classification:** `ignored_exceptions` lists exception classes that carry no signal about capacity — a job that threw a validation error on its own payload never reached the dependency. Matched by `instanceof`; ignored exceptions are dropped entirely rather than counted as successes. For decisions a class list cannot express, implement `FailureClassifierContract` and point `fuse.classifier` at it. Rate limits and auth errors are counted by default, deliberately unlike a job-level circuit breaker: more workers never fix either.
+
+**Detection latency:** the fuse sums the current and previous window bucket so it never loses its evidence at a bucket boundary. The cost is that pre-outage traffic dilutes the failure rate until it ages out, so worst-case time to trip is `2 x window_seconds`. Shorten the window for faster detection.
+
+**Docs:** [Failure Fuse](docs/basic-usage/failure-fuse.md) covers the state machine, tuning, detection latency and troubleshooting; [Alert on a Fuse Trip](docs/cookbook/alert-on-fuse-trip.md) is a paste-and-go listener recipe.
+
+### Added
+- The manager logs `Autoscaling held back by failure fuse` at warning level for as long as a queue is held, rate-limited by `alerting.cooldown_seconds`. Scaling actions are only logged when they happen, and a held queue scales once — down to `workers.min` on the trip — then holds, so the log previously fell silent for the rest of the outage.
+- `queue:autoscale:debug` now reports failure-fuse state, the observed failure rate against the configured thresholds, and warns when the fuse is inert because outcome tracking is disabled or the `array` cache driver is in use. This answers "why is this queue stuck at `workers.min`?" without reading manager logs.
+
+### Fixed
+- `ClusterStore::recentDecisions()` no longer returns malformed decision records that decoded from JSON as positional arrays rather than objects.
+- The test suite pins `CACHE_STORE` and `QUEUE_CONNECTION` in `phpunit.xml.dist`. It previously inherited them from the Testbench skeleton `.env`, which is created the first time anyone runs `vendor/bin/testbench` and points both at `database` — silently breaking ~70 cache- and queue-dependent specs against a test database that has neither table.
+
 ## v3.11.1 - 2026-07-15
 
 ### Fixed

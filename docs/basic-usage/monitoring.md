@@ -137,6 +137,26 @@ $confidence = $event->decision->confidence;  // 0.0 - 1.0
 - Low confidence (<0.7) → May need more historical data
 - Always high → Strategy calibration working well
 
+#### Failure Fuse State
+
+Whether the [failure fuse](failure-fuse.md) is currently holding a queue back from scaling.
+
+```php
+Event::listen(FuseTripped::class, function ($event) {
+    $rate = $event->failureRate;      // percent, over $event->samples outcomes
+    $held = $event->heldAtWorkers;    // workers.min
+});
+```
+
+With `cboxdk/laravel-telemetry` installed this is also a gauge — `queue_autoscale.fuse.state`, where `0` is closed, `1` half-open and `2` open. Alert on `queue_autoscale_fuse_state > 0`.
+
+Without any wiring at all, the manager logs `Autoscaling held back by failure fuse` at warning level to its configured channel for as long as a queue is held, rate-limited by `alerting.cooldown_seconds`.
+
+**Monitor for:**
+- Any trip → treat as an incident. This is a stronger signal than an SLA breach: the queue's work is failing, not just late.
+- Repeated trip/recover cycles on one queue → a flapping dependency, or a threshold set too close to the queue's baseline failure rate.
+- A queue that never trips during a known outage → `min_samples` may be unreachable at that queue's throughput. See [Tuning](failure-fuse.md#tuning).
+
 #### Predicted vs Actual Pickup Time
 Compare predictions to reality.
 

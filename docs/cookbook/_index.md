@@ -15,16 +15,13 @@ The autoscaler emits a handful of events your app can listen to. These recipes h
 - [Alert via Laravel Log](alert-via-log.md) — zero setup, uses your existing log stack
 - [Alert via Slack](alert-via-slack.md) — one webhook URL, done
 - [Alert via Email](alert-via-email.md) — via Laravel Notifications
+- [Alert on a Fuse Trip](alert-on-fuse-trip.md) — page on-call when a queue's jobs start failing
+
+All three transport recipes use the built-in `AlertRateLimiter` so you don't get 50 Slack pings for one breach.
 
 ## Cluster Monitoring
 
 - [Export Cluster Metrics](cluster-metrics-export.md) — expose `clusterMetrics()` and `ClusterScalingSignalUpdated` to Prometheus, dashboards, or `cboxdk/laravel-queue-monitor`
-
-## Cluster Monitoring
-
-- [Export Cluster Metrics](cluster-metrics-export.md) — expose `clusterMetrics()` and `ClusterScalingSignalUpdated` to Prometheus, dashboards, or `cboxdk/laravel-queue-monitor`
-
-All three use the built-in `AlertRateLimiter` so you don't get 50 Slack pings for one breach.
 
 ## Events the autoscaler emits
 
@@ -35,8 +32,11 @@ All three use the built-in `AlertRateLimiter` so you don't get 50 Slack pings fo
 | `SlaBreachPredicted` | Forecaster predicts pickup time will exceed SLA | Per evaluation cycle during risk |
 | `WorkersScaled` | Workers spawn or terminate | Per scaling action |
 | `ScalingDecisionMade` | Any scaling decision (including HOLD) | Per evaluation cycle |
+| `FuseTripped` | Failure rate crosses the threshold, scaling held at `workers.min` | Once on state entry |
+| `FuseProbing` | Cooldown elapsed, a probe tests for recovery | Once per probe |
+| `FuseRecovered` | Probe succeeded, normal scaling resumes | Once on state exit |
 
-`SlaBreached`/`SlaRecovered` already fire at most once per state change, so they don't need additional rate-limiting. `SlaBreachPredicted` and `WorkersScaled` can fire rapidly during flapping — those are the events where rate-limiting matters.
+`SlaBreached`/`SlaRecovered` and all three fuse events already fire at most once per state change, so they don't need additional rate-limiting. `SlaBreachPredicted` and `WorkersScaled` can fire rapidly during flapping — those are the events where rate-limiting matters.
 
 ## The rate limiter in one line
 
