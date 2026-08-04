@@ -10,9 +10,9 @@ Zero to a working autoscaled queue in about 5 minutes. Every command and file pa
 
 ## Prerequisites
 
-- PHP 8.3+ and Laravel 11+
+- PHP 8.3+ and Laravel 11+, with `ext-pcntl` and `ext-posix` available
 - Redis configured in `config/database.php` only if you plan to use the Redis or cluster presets
-- `cboxdk/laravel-queue-metrics` already set up — see [Installation](installation.md)
+- `cboxdk/laravel-queue-metrics` already set up — see [Installation](basic-usage/installation.md)
 
 ## Step 1 — Install and publish config
 
@@ -33,13 +33,16 @@ php artisan queue:autoscale -v
 
 You should see something like:
 
-```
+```text
 Starting Queue Autoscale Manager
-   Manager ID: your-host
+   Manager ID: your-host-3f9c1a2b4d5e
+   Mode: single-host
    Evaluation interval: 5s
 ```
 
-The manager evaluates every 5 seconds. Leave it running.
+The manager ID is your hostname plus a short hash derived from container/machine identity, so two
+managers on the same host never collide. The interval comes from `--interval` (default 5); the
+`manager.evaluation_interval_seconds` config key is not consulted. Leave the manager running.
 
 > Use `-vv` for debug-level output (per-queue metrics and decisions) and `-vvv` to also see the capacity breakdown used for each scaling decision.
 
@@ -56,15 +59,17 @@ php artisan tinker
 
 Within a few evaluation cycles you'll see output like:
 
-```
+```text
 Evaluating queue: redis:default
   Metrics: pending=42, oldest_age=14s, active_workers=1, throughput=6/min
   📊 Decision: 1 → 6 workers
-     Reason: Little's Law (λ=0.80, W=1.00s) + backlog drain to target
+     Reason: backlog=42 requires 5.8 workers to prevent SLA breach (oldest_age=14.0s, effective_sla=29.1s)
   ⬆️  Scaling UP: spawning 5 worker(s)
 ```
 
-When the backlog drains, the manager scales back down (respecting `cooldown_seconds`, default 60s).
+When the backlog drains, the manager scales back down. Because scaling down is a *reversal* of the
+previous direction, it waits out `scaling.cooldown_seconds` (default 60s) first — the cooldown only
+gates direction changes, never scaling further the same way.
 
 ## Step 4 — Tune for your workload
 
@@ -72,20 +77,25 @@ The defaults cover ~80% of cases. When they don't, pick a shipped profile or ove
 
 ### Pick a profile
 
-Five profiles ship with the package. Each is a pre-tuned bundle of SLA, worker limits, and forecast settings.
+Six profiles ship with the package. Each is a pre-tuned bundle of SLA, worker limits, forecast and
+fuse settings.
 
 ```php
 // config/queue-autoscale.php
-use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
 use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BackgroundProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
 
-'sla_defaults' => \Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile::class,
+'sla_defaults' => BalancedProfile::class,      // 30s SLA (p95), 1-10 workers
 
 'queues' => [
-    'payments' => CriticalProfile::class,      // 10s SLA, 5-50 workers
-    'analytics' => BackgroundProfile::class,   // 300s SLA, 0-5 workers
+    'payments' => CriticalProfile::class,      // 10s SLA (p99), 5-50 workers
+    'analytics' => BackgroundProfile::class,   // 300s SLA (p95), 0-5 workers
 ],
 ```
+
+The other three are `HighVolumeProfile` (20s, 3–40 workers), `BurstyProfile` (60s at p90, 0–100
+workers) and `ExclusiveProfile` (pinned to exactly 1 worker, never scaled).
 
 See [Workload Profiles](basic-usage/workload-profiles.md) for the full comparison.
 

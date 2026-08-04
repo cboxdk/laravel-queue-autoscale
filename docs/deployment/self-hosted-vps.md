@@ -103,7 +103,7 @@ For systemd on a modern distro, journald handles rotation. If you append to a fi
 
 `/etc/logrotate.d/queue-autoscale`:
 
-```
+```text
 /var/log/queue-autoscale*.log {
     daily
     missingok
@@ -117,8 +117,20 @@ For systemd on a modern distro, journald handles rotation. If you append to a fi
 
 ## Troubleshooting
 
-**Manager keeps restarting every few seconds.** Check the log — usually config validation failure or missing Redis. `journalctl -u queue-autoscale -n 100`.
+**Manager keeps restarting every few seconds.** Check the log with `journalctl -u queue-autoscale -n 100`.
+The usual causes are a failure to acquire the host process lock (another manager is already running —
+use `queue:autoscale --replace`), a missing `.env`, or `queue-autoscale.enabled` being false, which
+makes the command exit immediately with an error.
+
+**Log fills with "Autoscale evaluation failed".** Invalid queue configuration does not crash the
+manager: each evaluation cycle is wrapped in a catch-all that logs the error and continues, so a bad
+profile produces one error line per interval rather than a restart loop. Read the logged message —
+it names the offending key, for example `sla.target_seconds must be > 0`. Invalid *group* config is
+handled separately: it is logged once as critical and groups are then skipped until the manager is
+restarted.
 
 **Workers spawn but die immediately.** Run `php artisan queue:work redis --queue=default` manually as the same user. The error will be obvious (missing `.env`, wrong path, bad permissions).
 
-**Manager runs but nothing scales.** Verify metrics: `php artisan queue-autoscale:debug-queue default`. If metrics are empty, `laravel-queue-metrics` isn't collecting — check its storage backend.
+**Manager runs but nothing scales.** Verify metrics: `php artisan queue:autoscale:debug --queue=default`
+(add `--connection=redis` if the queue is not on your default connection). If metrics are empty,
+`laravel-queue-metrics` isn't collecting — check its storage backend.

@@ -1,487 +1,260 @@
 ---
 title: "Resource Constraints"
-description: "System resource management and constraint enforcement for safe autoscaling"
+description: "How CPU and memory capacity, per-worker resource estimates and config bounds cap the worker target"
 weight: 54
 ---
 
 # Resource Constraints
 
-System resource management and constraint enforcement for safe autoscaling.
+The strategy answers "how many workers does this queue need?". Resource constraints answer "how
+many can this host actually run?". `ScalingEngine` applies the second to the first.
 
-## Overview
+Three source files do all of the work:
 
-Resource constraints ensure autoscaling doesn't:
-- Exhaust system memory
-- Overload CPU
-- Exceed budget limits
-- Violate infrastructure capacity
+- `src/Scaling/Calculators/CapacityCalculator.php` — CPU and memory capacity from live system metrics
+- `src/Scaling/ResourceEstimateResolver.php` — per-worker CPU/memory estimates, per queue
+- `src/Scaling/DTOs/CapacityCalculationResult.php` — the breakdown handed back to the decision
 
-**Goal:** Scale efficiently while respecting physical and economic limits.
+There is no cost, budget or spend constraint in this package.
 
-## Constraint Types
+## Per-worker estimates
 
-### 1. System Resource Constraints
+Capacity math needs a cost per worker. `ResourceEstimateResolver::resolve(connection, queue)`
+resolves CPU and memory **independently**, each through the same three-source chain:
 
-Prevent resource exhaustion:
+| Precedence | Source | Where it comes from |
+|---|---|---|
+| 1 | `EstimateSource::Measured` | Runtime measurements fed in via `setMeasured()` / `setMeasuredCpu()` / `setMeasuredMemory()` |
+| 2 | `EstimateSource::Config` | The queue's `resources` key in `queue-autoscale.queues.<queue>` |
+| 3 | `EstimateSource::Default` | `limits.worker_cpu_core_estimate` / `limits.worker_memory_mb_estimate` |
 
-```php
-'limits' => [
-    'max_cpu_percent' => 85,            // Skip spawning when host CPU ≥ this
-    'max_memory_percent' => 85,         // Same for memory
-    'worker_memory_mb_estimate' => 128, // Used in the per-worker memory ceiling
-    'worker_cpu_core_estimate' => 0.2,  // Baseline CPU cores per worker (fallback)
-    'reserve_cpu_cores' => 0.2,         // Cores reserved for OS / other services
-],
-```
-
-### 2. Configuration Constraints
-
-Per-queue bounds live under the `workers` section of a queue's config (or inside the profile class):
+A queue can have measured CPU and config memory at the same time; the dimensions never borrow each
+other's source.
 
 ```php
+// config/queue-autoscale.php
 'queues' => [
-    'payments' => [
-        'workers' => [
-            'min' => 1,           // Never scale below
-            'max' => 20,          // Never scale above
+    'video-encode' => [
+        'resources' => [
+            'cpu_cores' => 1.5,    // cores per worker
+            'memory_mb' => 2048,   // MB per worker
         ],
     ],
 ],
 ```
 
-### 3. Economic Constraints
+Only numeric values are accepted (`AutoscaleConfiguration::queueResources()` filters to `int|float`),
+and the resolver floors the result at `0.01` cores and `16.0` MB.
 
-Cost-based limits:
+The resulting `ResourceEstimate` carries both values, both `EstimateSource` enums, and the sample
+counts behind any measured value — which is what makes `queue:autoscale:debug` able to say *why* a
+number was used.
+
+## Capacity calculation
+
+`CapacityCalculator::calculateMaxWorkers(int $currentWorkers, ResourceEstimate $estimate)` returns a
+`CapacityCalculationResult`. `$currentWorkers` is the **total workers already running on this host
+across all queues**, and it appears in both formulas:
+
+```text
+availableCpuPercent    = max(limits.max_cpu_percent - currentCpuPercent, 0)
+usableCores            = max(totalCores - limits.reserve_cpu_cores, 0)
+availableCoreEquiv     = usableCores * (availableCpuPercent / 100)
+maxWorkersByCpu        = currentWorkers + floor(availableCoreEquiv / max(cpuCoresPerWorker, 0.01))
+
+availableMemoryPercent = max(limits.max_memory_percent - currentMemoryPercent, 0)
+maxWorkersByMemory     = currentWorkers + floor(
+                             totalMemoryMb * (availableMemoryPercent / 100)
+                             / max(memoryMbPerWorker, 1.0)
+                         )
+
+finalMaxWorkers        = max(min(maxWorkersByCpu, maxWorkersByMemory), 0)
+```
+
+The `currentWorkers +` term is not optional. The percentages measured are *current* usage, which
+already includes the running workers — so the division yields how many workers can be **added**, and
+the running ones must be added back to get a total ceiling. Dropping the term would make the
+autoscaler terminate workers it had just decided were affordable.
+
+`limitingFactor` is `'cpu'` when `maxWorkersByCpu < maxWorkersByMemory`, `'memory'` in the reverse
+case, and `'balanced'` when they are equal.
+
+### System metrics and caching
+
+Live values come from `SystemMetrics`: `limits()` for total cores and total memory, `cpuUsage(1.0)`
+for current CPU, `memory()` for current memory. The CPU sample **blocks for one second**, so results
+are cached for `CACHE_TTL_SECONDS = 4.0` — one measurement per evaluation tick, not one per queue.
+`invalidateCache()` forces a fresh read.
+
+Degradation is layered:
+
+- `SystemMetrics::limits()` fails — the whole calculation is abandoned and a fixed fallback is
+  returned: `maxWorkersByCpu: 5`, `maxWorkersByMemory: 5`, `maxWorkersByConfig: PHP_INT_MAX`,
+  `finalMaxWorkers: 5`, `limitingFactor: 'system_metrics_unavailable'`.
+- Only the CPU read fails — current CPU is assumed to be `50.0%`.
+- Only the memory read fails — current memory is assumed to be `50.0%`, total memory `4096.0` MB.
+
+### Configuration
 
 ```php
-'cost_limits' => [
-    'max_hourly_cost' => 100.00,        // Budget cap
-    'worker_cost_per_hour' => 0.50,     // Cost per worker
-    'alert_threshold' => 80.00,         // Alert at 80%
+// config/queue-autoscale.php
+'limits' => [
+    'max_cpu_percent' => 85,            // host CPU headroom ceiling
+    'max_memory_percent' => 85,         // host memory headroom ceiling
+    'worker_memory_mb_estimate' => 128, // default MB per worker
+    'worker_cpu_core_estimate' => 0.2,  // default cores per worker
+    'reserve_cpu_cores' => 0.2,         // cores held back for the OS and the manager
 ],
 ```
 
-## Implementation
-
-### System Resource Checker
+Per-queue bounds are separate and live in the queue's profile or override:
 
 ```php
-class ResourceConstraintChecker
-{
-    public function canAddWorkers(int $additionalWorkers, QueueConfiguration $config): bool
-    {
-        // Check 1: Total worker limit
-        if (!$this->checkTotalWorkerLimit($additionalWorkers)) {
-            return false;
-        }
-
-        // Check 2: Memory availability
-        if (!$this->checkMemoryAvailability($additionalWorkers, $config)) {
-            return false;
-        }
-
-        // Check 3: CPU capacity
-        if (!$this->checkCpuCapacity($additionalWorkers)) {
-            return false;
-        }
-
-        // Check 4: Budget limit
-        if (!$this->checkBudgetLimit($additionalWorkers)) {
-            return false;
-        }
-
-        return true;
-    }
-
-    private function checkTotalWorkerLimit(int $additional): bool
-    {
-        $current = $this->getCurrentTotalWorkers();
-        $limit = config('queue-autoscale.resource_limits.max_total_workers');
-
-        return ($current + $additional) <= $limit;
-    }
-
-    private function checkMemoryAvailability(int $additional, QueueConfiguration $config): bool
-    {
-        $systemMemoryMb = $this->getSystemMemoryMb();
-        $usedMemoryMb = $this->getUsedMemoryMb();
-        $reservedMemoryMb = config('queue-autoscale.resource_limits.reserved_memory_mb');
-        $workerMemoryMb = $config->workerMemory ?? 256;
-
-        $availableMemoryMb = $systemMemoryMb - $usedMemoryMb - $reservedMemoryMb;
-        $requiredMemoryMb = $additional * $workerMemoryMb;
-
-        return $requiredMemoryMb <= $availableMemoryMb;
-    }
-
-    private function checkCpuCapacity(int $additional): bool
-    {
-        $currentCpuPercent = $this->getCurrentCpuPercent();
-        $maxCpuPercent = config('queue-autoscale.resource_limits.max_cpu_percent');
-        $cpuPerWorker = $this->estimateCpuPerWorker();
-
-        $projectedCpu = $currentCpuPercent + ($additional * $cpuPerWorker);
-
-        return $projectedCpu <= $maxCpuPercent;
-    }
-
-    private function checkBudgetLimit(int $additional): bool
-    {
-        $currentCost = $this->getCurrentHourlyCost();
-        $maxCost = config('queue-autoscale.cost_limits.max_hourly_cost');
-        $workerCost = config('queue-autoscale.cost_limits.worker_cost_per_hour');
-
-        $projectedCost = $currentCost + ($additional * $workerCost);
-
-        return $projectedCost <= $maxCost;
-    }
-}
+'queues' => [
+    'payments' => [
+        'workers' => [
+            'min' => 1,
+            'max' => 20,
+        ],
+    ],
+],
 ```
 
-### Constraint Enforcement Policy
+## How the engine applies capacity
 
-```php
-class ResourceConstraintPolicy implements ScalingPolicyContract
-{
-    public function beforeScaling(object $metrics, QueueConfiguration $config, int $currentWorkers): void
-    {
-        // Check current resource usage
-        $memoryPercent = $this->getMemoryUsagePercent();
-        $cpuPercent = $this->getCpuUsagePercent();
+`ScalingEngine::evaluate()`, in order:
 
-        if ($memoryPercent > 90 || $cpuPercent > 95) {
-            logger()->warning('System resources critically high', [
-                'memory_percent' => $memoryPercent,
-                'cpu_percent' => $cpuPercent,
-                'queue' => $config->queue,
-            ]);
-        }
-    }
+```text
+1. targetWorkers = strategy.calculateTargetWorkers(metrics, config)
 
-    public function afterScaling(ScalingDecision $decision, QueueConfiguration $config, int $currentWorkers): void
-    {
-        $workerChange = $decision->targetWorkers - $currentWorkers;
+2. effectiveTotalWorkers = max(totalPoolWorkers, currentWorkers)
+   estimate       = resolver.resolve(connection, queue)
+   capacityResult = capacity.calculateMaxWorkers(effectiveTotalWorkers, estimate)
 
-        if ($workerChange <= 0) {
-            return;  // Scaling down, no constraint check needed
-        }
+3. otherQueuesWorkers   = effectiveTotalWorkers - currentWorkers
+   availableForThisQueue = max(capacityResult.finalMaxWorkers - otherQueuesWorkers, 0)
+   targetWorkers = min(targetWorkers, availableForThisQueue)
 
-        // Enforce constraints on scale-up
-        $checker = new ResourceConstraintChecker();
+4. targetWorkers = max(targetWorkers, workers.min)
+   targetWorkers = min(targetWorkers, workers.max)
 
-        if (!$checker->canAddWorkers($workerChange, $config)) {
-            // Reduce target to maximum allowed
-            $maxAllowed = $this->calculateMaxAllowedWorkers($currentWorkers, $config);
-
-            // Modify decision (using reflection for readonly properties)
-            $this->modifyDecision($decision, $maxAllowed);
-
-            logger()->warning('Scaling limited by resource constraints', [
-                'requested_workers' => $decision->targetWorkers,
-                'allowed_workers' => $maxAllowed,
-                'queue' => $config->queue,
-            ]);
-        }
-    }
-
-    private function calculateMaxAllowedWorkers(int $current, QueueConfiguration $config): int
-    {
-        $limits = [
-            $this->maxByTotalLimit($current),
-            $this->maxByMemoryLimit($current, $config),
-            $this->maxByCpuLimit($current),
-            $this->maxByBudgetLimit($current),
-            $config->maxWorkers,  // Configuration limit
-        ];
-
-        return min($limits);
-    }
-}
+5. fuseCeiling = fuse.evaluate(config).workerCeiling(workers.min)
+   if fuseCeiling !== null:
+       targetWorkers = min(targetWorkers, max(0, min(fuseCeiling, workers.max)))
 ```
 
-## Examples
+Step 3 is why one busy queue cannot claim the whole host: system capacity is host-wide, so each
+queue's ceiling is the host ceiling minus what every other queue is already using.
 
-### Example 1: Memory Constraint
+Note the ordering of steps 3 and 4: `workers.min` is applied **after** the capacity cut, so a
+configured minimum wins over a capacity shortfall. A queue with `min: 5` keeps five workers even on
+a saturated host.
 
-**Scenario:**
-- System memory: 16 GB
-- Used memory: 12 GB
-- Reserved memory: 2 GB
-- Available: 2 GB
-- Worker memory: 512 MB
-- Target workers: 10
+`evaluateDemand()` — used by the cluster leader — deliberately skips step 2 and 3 entirely. Local
+CPU and memory say nothing about cluster-wide demand; per-host capacity is enforced when each
+manager executes.
 
-**Calculation:**
-```php
-$availableMb = 16384 - 12288 - 2048 = 2048 MB
-$requiredMb = 10 workers × 512 MB = 5120 MB
+## The result object
 
-2048 < 5120  // NOT ENOUGH MEMORY
+`CapacityCalculationResult` is attached to every `ScalingDecision` as `$decision->capacity`:
 
-$maxWorkers = floor(2048 / 512) = 4 workers
+| Property | Meaning |
+|---|---|
+| `maxWorkersByCpu` | CPU-derived ceiling (includes `currentWorkers`) |
+| `maxWorkersByMemory` | Memory-derived ceiling (includes `currentWorkers`) |
+| `maxWorkersByConfig` | `PHP_INT_MAX` from the calculator; overwritten with `workers.max` by the engine |
+| `finalMaxWorkers` | From the calculator, the min of CPU and memory; on the engine's copy, the final target |
+| `limitingFactor` | `'cpu'`, `'memory'`, `'balanced'`, `'system_metrics_unavailable'`, or after the engine `'config'`, `'strategy'`, `'fuse'` |
+| `details` | `cpu_explanation`, `memory_explanation`, and nested `cpu_details` / `memory_details` including the estimate sources |
+
+Helpers: `isCpuLimited()`, `isMemoryLimited()`, `isConfigLimited()`, `getSummary()`,
+`getFormattedDetails()`. The `-vvv` output of `queue:autoscale` prints `getFormattedDetails()`
+verbatim.
+
+The engine's `determineFinalLimitingFactor()` resolves the post-clamp label: `'config'` when
+`workers.max` capped the target, `'strategy'` when `workers.min` raised it or nothing constrained
+it, and the capacity result's own factor when system capacity cut the strategy recommendation.
+A tripped fuse overrides all of them with `'fuse'`.
+
+## Worked examples
+
+### Example 1: CPU is the limiting factor
+
+| Input | Value |
+|---|---|
+| Total cores | 8 |
+| Current CPU | 60% |
+| Total memory | 16384 MB |
+| Current memory | 50% |
+| Workers on host | 6 |
+| Estimate | 0.2 cores, 128 MB per worker |
+
+```text
+availableCpuPercent = max(85 - 60, 0) = 25
+usableCores         = max(8 - 0.2, 0) = 7.8
+availableCoreEquiv  = 7.8 * 0.25 = 1.95
+maxWorkersByCpu     = 6 + floor(1.95 / 0.2) = 6 + 9 = 15
+
+availableMemPercent = max(85 - 50, 0) = 35
+maxWorkersByMemory  = 6 + floor(16384 * 0.35 / 128) = 6 + 44 = 50
+
+finalMaxWorkers     = min(15, 50) = 15        (limitingFactor: cpu)
 ```
 
-Scale to 4 workers instead of 10.
+### Example 2: this queue's share
 
-### Example 2: CPU Constraint
+Continuing from Example 1, with this queue running 4 of the 6 workers and the strategy asking for
+25:
 
-**Scenario:**
-- Current CPU: 70%
-- Max CPU: 90%
-- CPU per worker: 5%
-- Target workers: 8 additional
-
-**Calculation:**
-```php
-$projectedCpu = 70% + (8 × 5%) = 110%
-
-110% > 90%  // EXCEEDS LIMIT
-
-$availableCpu = 90% - 70% = 20%
-$maxAdditionalWorkers = floor(20% / 5%) = 4 workers
+```text
+otherQueuesWorkers    = 6 - 4 = 2
+availableForThisQueue = max(15 - 2, 0) = 13
+targetWorkers         = min(25, 13) = 13
 ```
 
-Add 4 workers instead of 8.
+Then `workers.min`/`workers.max` and the fuse apply.
 
-### Example 3: Budget Constraint
+### Example 3: a memory-heavy queue
 
-**Scenario:**
-- Hourly budget: $100
-- Current cost: $80
-- Cost per worker: $0.50
-- Target: 50 additional workers
+Same host, but the queue declares `'resources' => ['cpu_cores' => 0.5, 'memory_mb' => 2048]`:
 
-**Calculation:**
-```php
-$projectedCost = $80 + (50 × $0.50) = $105
+```text
+maxWorkersByCpu    = 6 + floor(1.95 / 0.5)          = 6 + 3  = 9
+maxWorkersByMemory = 6 + floor(16384 * 0.35 / 2048) = 6 + 2  = 8
 
-$105 > $100  // EXCEEDS BUDGET
-
-$availableBudget = $100 - $80 = $20
-$maxWorkers = floor($20 / $0.50) = 40 workers
+finalMaxWorkers    = min(9, 8) = 8                  (limitingFactor: memory)
 ```
 
-Add 40 workers instead of 50.
+The per-queue estimate changed the ceiling from 15 to 8 without any global config change.
 
-### Example 4: Multiple Constraints
+### Example 4: saturated host
 
-**Scenario:**
-- Memory allows: 10 workers
-- CPU allows: 8 workers
-- Budget allows: 12 workers
-- Config max: 20 workers
+```text
+Current CPU 90% (above max_cpu_percent 85)
 
-**Calculation:**
-```php
-$maxWorkers = min(10, 8, 12, 20) = 8 workers
+availableCpuPercent = max(85 - 90, 0) = 0
+availableCoreEquiv  = 0
+maxWorkersByCpu     = 6 + 0 = 6
+finalMaxWorkers     = 6
 ```
 
-Most restrictive constraint wins (CPU).
+No new workers anywhere on the host; existing ones are not forcibly reclaimed by this calculation.
 
-## Advanced Constraint Handling
+## Interaction with policies
 
-### Dynamic Reserve Calculation
+`NoScaleDownPolicy` blocks scale-down decisions **except** when
+`currentWorkers > capacity->finalMaxWorkers` — resource-forced reductions are always allowed
+through, because the alternative is running workers the host cannot support. It takes a
+`CapacityCalculator` by constructor injection.
 
-Adjust reserved resources based on load:
+## Properties
 
-```php
-public function calculateDynamicReserve(): int
-{
-    $baseReserve = 1024;  // 1 GB base
-    $currentLoad = $this->getCurrentSystemLoad();
+- **O(1)** arithmetic per queue.
+- One blocking CPU sample per 4-second cache window, shared across every queue in the tick.
+- No persistent storage; measured estimates live in the resolver for the manager's lifetime.
 
-    // Increase reserve during high load
-    if ($currentLoad > 0.8) {
-        return (int) ($baseReserve * 1.5);  // 1.5 GB
-    }
+## See also
 
-    return $baseReserve;
-}
-```
-
-### Predictive Resource Planning
-
-Forecast resource needs:
-
-```php
-public function predictResourceNeeds(object $metrics, int $targetWorkers, QueueConfiguration $config): array
-{
-    $workerMemory = $config->workerMemory ?? 256;
-    $estimatedCpuPerWorker = 5;  // percentage
-
-    return [
-        'memory_mb' => $targetWorkers * $workerMemory,
-        'cpu_percent' => $targetWorkers * $estimatedCpuPerWorker,
-        'cost' => $targetWorkers * $this->workerCostPerHour,
-    ];
-}
-```
-
-### Constraint Violation Handling
-
-Handle resource exhaustion gracefully:
-
-```php
-public function handleConstraintViolation(string $constraint, int $requested, int $allowed): void
-{
-    logger()->error('Resource constraint violated', [
-        'constraint' => $constraint,
-        'requested_workers' => $requested,
-        'allowed_workers' => $allowed,
-        'system_memory_mb' => $this->getSystemMemoryMb(),
-        'used_memory_mb' => $this->getUsedMemoryMb(),
-        'cpu_percent' => $this->getCurrentCpuPercent(),
-    ]);
-
-    // Alert operations team
-    $this->alert->send([
-        'severity' => 'warning',
-        'title' => "Autoscaling limited by {$constraint}",
-        'message' => "Requested {$requested} workers, limited to {$allowed}",
-    ]);
-
-    // Optionally trigger infrastructure scaling
-    if ($constraint === 'memory' || $constraint === 'cpu') {
-        event(new InfrastructureScalingNeeded($constraint, $requested));
-    }
-}
-```
-
-## Constraint Priorities
-
-When multiple constraints conflict:
-
-```php
-public function applyConstraintPriorities(ScalingDecision $decision, QueueConfiguration $config): int
-{
-    $limits = [
-        // Priority 1: Safety limits (prevent system crash)
-        'memory' => $this->maxByMemoryLimit($decision->targetWorkers, $config),
-        'cpu' => $this->maxByCpuLimit($decision->targetWorkers),
-
-        // Priority 2: Hard configuration limits
-        'config_max' => $config->maxWorkers,
-        'total_workers' => $this->maxByTotalWorkerLimit(),
-
-        // Priority 3: Soft economic limits
-        'budget' => $this->maxByBudgetLimit($decision->targetWorkers),
-    ];
-
-    // Safety limits are mandatory
-    $safeLimits = min($limits['memory'], $limits['cpu']);
-
-    // Configuration limits
-    $configLimits = min($limits['config_max'], $limits['total_workers']);
-
-    // Take most restrictive of safety and config
-    $hardLimit = min($safeLimits, $configLimits);
-
-    // Budget is advisory - can exceed with warning
-    if ($limits['budget'] < $hardLimit) {
-        logger()->warning('Exceeding budget limit for SLA compliance', [
-            'budget_allows' => $limits['budget'],
-            'scaling_to' => $hardLimit,
-        ]);
-    }
-
-    return $hardLimit;
-}
-```
-
-## Performance Characteristics
-
-### Time Complexity
-- **O(1)**: Constant time constraint checks
-- Very fast, negligible overhead
-
-### Space Complexity
-- **O(1)**: No additional storage required
-- May cache system metrics briefly
-
-### Overhead
-- **Minimal**: <1ms for all constraint checks
-- Can be performed on every evaluation
-
-## Best Practices
-
-1. **Set appropriate reserves**: 10-20% system resources reserved
-2. **Monitor constraint hits**: Track which constraints are activated
-3. **Alert on violations**: Notify when scaling is limited
-4. **Plan capacity**: Provision infrastructure ahead of known peaks
-5. **Use soft limits**: Warning thresholds before hard limits
-6. **Test constraints**: Validate limits work as expected
-
-## Integration with Hybrid Strategy
-
-```php
-class HybridStrategy
-{
-    public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
-    {
-        // Calculate ideal workers (unconstrained)
-        $idealWorkers = $this->calculateIdeal($metrics, $config);
-
-        // Apply resource constraints
-        $constrainedWorkers = $this->applyConstraints($idealWorkers, $config);
-
-        // Log if constrained
-        if ($constrainedWorkers < $idealWorkers) {
-            logger()->info('Scaling limited by constraints', [
-                'ideal_workers' => $idealWorkers,
-                'constrained_workers' => $constrainedWorkers,
-                'queue' => $config->queue,
-            ]);
-        }
-
-        return $constrainedWorkers;
-    }
-
-    private function applyConstraints(int $ideal, QueueConfiguration $config): int
-    {
-        $checker = app(ResourceConstraintChecker::class);
-        $current = $this->getCurrentWorkers($config);
-
-        $additional = $ideal - $current;
-
-        if ($additional <= 0) {
-            return $ideal;  // Scaling down, no constraints
-        }
-
-        if (!$checker->canAddWorkers($additional, $config)) {
-            return $checker->calculateMaxAllowed($current, $config);
-        }
-
-        return $ideal;
-    }
-}
-```
-
-## Monitoring Constraint Impact
-
-Track how often constraints limit scaling:
-
-```php
-DB::table('constraint_events')->insert([
-    'queue' => $config->queue,
-    'constraint_type' => 'memory',
-    'requested_workers' => $requested,
-    'allowed_workers' => $allowed,
-    'memory_available_mb' => $availableMemory,
-    'cpu_percent' => $currentCpu,
-    'timestamp' => now(),
-]);
-
-// Query for analysis
-$constraintFrequency = DB::table('constraint_events')
-    ->where('timestamp', '>=', now()->subHours(24))
-    ->groupBy('constraint_type')
-    ->selectRaw('constraint_type, COUNT(*) as occurrences')
-    ->get();
-```
-
-## See Also
-
-- [Little's Law](littles-law.md) - Base calculation
-- [Trend Prediction](trend-prediction.md) - Predictive scaling
-- [Backlog Drain](backlog-drain.md) - SLA protection
-- [Performance Tuning](../basic-usage/performance.md) - Performance tuning
+- [Architecture](architecture.md) — where capacity sits in the decision pipeline
+- [Backlog Drain](backlog-drain.md) — what produces the target being capped
+- [Performance Tuning](../basic-usage/performance.md) — choosing limits for your host

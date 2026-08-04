@@ -28,7 +28,11 @@ During the first few days after deployment, watch for:
 
 - `Worker spawned` / `Worker terminated gracefully` — the autoscaler is actively managing processes.
 - `Failed to spawn worker` — the PHP binary, `artisan`, or `queue:work` cannot launch. Check the paths and the user permissions.
-- `Group configuration is invalid — groups disabled until manager restart` — FATAL. Fix config and redeploy.
+- `Group configuration is invalid — groups disabled until manager restart` — logged once at CRITICAL.
+  The manager keeps running and keeps managing per-queue config; only groups are skipped, and only a
+  restart re-checks them. Fix the config and redeploy.
+- `Autoscale evaluation failed` — an exception inside one evaluation cycle. The loop catches it and
+  continues, so this repeats once per interval until the underlying cause is fixed.
 - Nothing at all — the manager may not be running. `ps aux | grep queue:autoscale` on the host.
 
 See [Cookbook → Alert via Log](../cookbook/alert-via-log.md) for a production-ready log-alerting setup.

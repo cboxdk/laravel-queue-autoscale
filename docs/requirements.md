@@ -48,13 +48,13 @@ Redis **is required** when:
 - **Cluster mode** is enabled (multi-host coordination, leader election, heartbeats)
 - You want **Redis-backed predictive signals** on a single host (pickup-time percentiles, spawn-latency tracking)
 
-See [Installation](installation.md) for deployment shape options.
+See [Installation](basic-usage/installation.md) for deployment shape options.
 
 ### Process Supervisor (production)
 
 In production, use **Supervisor** or **systemd** to keep the `php artisan queue:autoscale` manager process running and to restart it on failure. The autoscale manager replaces manual `queue:work` process management — you do not need Supervisor entries for individual queue workers.
 
-See [Deployment Guides](deployment/docker.md) for platform-specific setup.
+See [Deployment](deployment/_index.md) for platform-specific setup.
 
 ## SLA Timing Floor
 
@@ -68,4 +68,4 @@ Setting `sla.target_seconds` below 5 is not recommended. See [Understanding SLA 
 
 ## Next Steps
 
-Ready to install? Follow the [Installation](installation.md) guide.
+Ready to install? Follow the [Installation](basic-usage/installation.md) guide.

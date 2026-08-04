@@ -219,7 +219,7 @@ The thresholds are per-queue and live in the profile's `fuse` block:
 | `window_seconds` | `60` | Bucket size for outcome counting |
 | `cooldown_seconds` | `60` | How long to hold before probing for recovery |
 
-The block is optional. Configs written before the fuse existed keep working on the defaults above — see the [upgrade guide](../upgrade-guide-v3.md).
+The block is optional. Configs written before the fuse existed keep working on the defaults above — see the [upgrade guide](../advanced-usage/upgrade-guide-v3.md).
 
 ## Per-profile defaults
 
@@ -263,7 +263,7 @@ Three events fire on state transitions — on transitions only, never on every c
 ```php
 namespace Cbox\LaravelQueueAutoscale\Events;
 
-final class FuseTripped
+class FuseTripped
 {
     public function __construct(
         public readonly string $connection,
@@ -282,7 +282,7 @@ final class FuseTripped
 ### `FuseProbing`
 
 ```php
-final class FuseProbing
+class FuseProbing
 {
     public function __construct(
         public readonly string $connection,
@@ -298,7 +298,7 @@ final class FuseProbing
 ### `FuseRecovered`
 
 ```php
-final class FuseRecovered
+class FuseRecovered
 {
     public function __construct(
         public readonly string $connection,

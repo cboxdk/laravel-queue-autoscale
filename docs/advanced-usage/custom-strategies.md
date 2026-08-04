@@ -1,574 +1,286 @@
 ---
 title: "Custom Strategies"
-description: "Implement custom scaling strategies in Queue Autoscale for Laravel"
+description: "Write a scaling strategy against the real ScalingStrategyContract, QueueMetricsData and QueueConfiguration types"
 weight: 30
 ---
 
 # Custom Strategies
 
-Guide to implementing custom scaling strategies in Queue Autoscale for Laravel.
+A scaling strategy answers one question: **how many workers should this queue have right now?**
+It is the only pluggable piece that runs *before* the engine — everything after it (system capacity,
+`workers.min`/`workers.max`, the failure fuse, policies) constrains whatever number you return.
 
-## Table of Contents
-- [Overview](#overview)
-- [Strategy Contract](#strategy-contract)
-- [Implementation Steps](#implementation-steps)
-- [Strategy Examples](#strategy-examples)
-- [Testing Strategies](#testing-strategies)
-- [Best Practices](#best-practices)
-- [Common Patterns](#common-patterns)
+The package ships four strategies. Replace them when your workload has a signal the shipped
+algorithms cannot see: an external schedule, a tenant tier, a business calendar, or a
+domain-specific arrival model.
 
-## Overview
-
-Scaling strategies determine **how many workers** are needed based on queue metrics. The package provides a default `HybridStrategy`, but you can implement custom strategies for specific needs.
-
-### When to Create Custom Strategies
-
-Create a custom strategy when:
-- You have unique scaling requirements
-- Default algorithm doesn't match your traffic patterns
-- You need domain-specific optimizations
-- You want to integrate external data sources
-- You need custom cost optimization logic
-
-### Strategy Responsibilities
-
-A scaling strategy must:
-1. **Calculate target workers** based on metrics
-2. **Provide reasoning** for scaling decisions
-3. **Return predictions** about queue performance
-
-## Strategy Contract
-
-All strategies must implement `ScalingStrategyContract`:
+## The contract
 
 ```php
-<?php
-
 namespace Cbox\LaravelQueueAutoscale\Contracts;
 
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
 interface ScalingStrategyContract
 {
-    /**
-     * Calculate target number of workers needed
-     *
-     * @param object $metrics Queue metrics object
-     * @param QueueConfiguration $config Queue configuration
-     * @return int Target worker count
-     */
-    public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int;
+    public function calculateTargetWorkers(QueueMetricsData $metrics, QueueConfiguration $config): int;
 
-    /**
-     * Get human-readable reason for last calculation
-     *
-     * @return string Explanation of scaling decision
-     */
     public function getLastReason(): string;
 
-    /**
-     * Get predicted pickup time for next job
-     *
-     * @return float|null Predicted seconds until pickup (null if unknown)
-     */
     public function getLastPrediction(): ?float;
 }
 ```
 
-### Metrics Object Structure
+`calculateTargetWorkers()` is called once per queue per evaluation cycle. `getLastReason()` and
+`getLastPrediction()` are read by `ScalingEngine` immediately afterwards, so both refer to the most
+recent call — a strategy is expected to keep that state on the instance. The strategy is resolved as
+a container singleton, so the state is shared across every queue; store only what you read back in
+the same cycle.
 
-The `$metrics` object contains:
+`getLastPrediction()` becomes `ScalingDecision::predictedPickupTime` and drives
+`isSlaBreachRisk()`, the `SlaBreachPredicted` event and `BreachNotificationPolicy`. Return `null`
+when you genuinely cannot predict a pickup time (that is what `SimpleRateStrategy` does), and `0.0`
+when the answer is "no wait at all".
+
+## The metrics you receive
+
+`$metrics` is `Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData` — a `final readonly`
+class with a flat property list. There is no nested `depth`, `trend` or `resources` object.
+
+| Property | Type | Meaning |
+|---|---|---|
+| `connection` | `string` | Queue connection name |
+| `queue` | `string` | Queue name |
+| `depth` | `int` | Total jobs on the queue |
+| `pending` | `int` | Jobs waiting to be picked up — the backlog every shipped strategy uses |
+| `scheduled` | `int` | Delayed jobs not yet available |
+| `reserved` | `int` | Jobs currently held by a worker |
+| `oldestJobAge` | `int` | Seconds since the oldest pending job was queued |
+| `ageStatus` | `string` | Metrics-package classification of that age |
+| `throughputPerMinute` | `float` | Completed jobs per minute |
+| `avgDuration` | `float` | Average job duration **in seconds** (see below) |
+| `failureRate` | `float` | Lifetime failure rate as a **percentage** (0–100) |
+| `utilizationRate` | `float` | Worker busy percentage (0–100) |
+| `activeWorkers` | `int` | Workers the metrics package can see on this queue |
+| `driver` | `string` | `redis`, `database`, … |
+| `health` | `HealthStats` | `status, score, depth, oldestJobAge, failureRate, utilizationRate` |
+| `calculatedAt` | `Carbon` | When the snapshot was computed |
+
+Helper methods: `isEmpty()`, `isBacklogged()`, `hasActiveWorkers()`, `toArray()`.
+
+### avgDuration is seconds, not milliseconds
+
+The metrics package reports `avg_duration_ms`. `AutoscaleManager::mapMetricsFields()` divides by
+1000 before constructing the DTO, so by the time a strategy sees it, `avgDuration` is **seconds**.
+The cluster path does the same conversion. Every shipped strategy treats it as seconds and guards
+the low end:
 
 ```php
-object {
-    // Current processing rate (jobs/second)
-    float processingRate;
-
-    // Number of active workers
-    int activeWorkerCount;
-
-    // Queue depth information
-    object depth {
-        int pending;              // Jobs waiting in queue
-        float oldestJobAgeSeconds; // Age of oldest pending job
-    };
-
-    // Trend data (may be null for new queues)
-    ?object trend {
-        string direction;         // 'up', 'down', 'stable'
-        ?float forecast;          // Predicted future processing rate
-        ?float confidence;        // Confidence in forecast (0-1)
-    };
-
-    // Resource information
-    ?object resources {
-        float cpuPercent;         // Current CPU usage
-        float memoryPercent;      // Current memory usage
-        int availableMemoryMb;    // Available system memory
-    };
-}
-```
-
-## Implementation Steps
-
-### Step 1: Create Strategy Class
-
-Create a new class implementing the contract:
-
-```php
-<?php
-
-namespace App\Autoscale\Strategies;
-
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
-
-class SimpleRateBasedStrategy implements ScalingStrategyContract
+private function determineJobTime(QueueMetricsData $metrics): float
 {
-    private string $lastReason = '';
-    private ?float $lastPrediction = null;
-
-    public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
-    {
-        // Your calculation logic here
-        $targetWorkers = $this->calculate($metrics, $config);
-
-        // Store reason and prediction
-        $this->lastReason = $this->buildReason($metrics, $targetWorkers);
-        $this->lastPrediction = $this->predictPickupTime($metrics, $targetWorkers);
-
-        return $targetWorkers;
+    if ($metrics->avgDuration >= 0.01) {
+        return $metrics->avgDuration;
     }
 
-    public function getLastReason(): string
-    {
-        return $this->lastReason;
-    }
-
-    public function getLastPrediction(): ?float
-    {
-        return $this->lastPrediction;
-    }
-
-    private function calculate(object $metrics, QueueConfiguration $config): int
-    {
-        // Implementation here
-    }
-
-    private function buildReason(object $metrics, int $workers): string
-    {
-        // Build explanation
-    }
-
-    private function predictPickupTime(object $metrics, int $workers): ?float
-    {
-        // Predict performance
-    }
+    return AutoscaleConfiguration::fallbackJobTimeSeconds();
 }
 ```
 
-### Step 2: Register Strategy
+`fallbackJobTimeSeconds()` reads `queue-autoscale.scaling.fallback_job_time_seconds`
+(env `QUEUE_AUTOSCALE_FALLBACK_JOB_TIME`, default `2.0`). Copy this guard — a fresh queue reports
+`0.0` and dividing by it is the classic way to produce a nonsense target.
 
-Configure your strategy in `config/queue-autoscale.php`:
+### There is no trend or resource data on the metrics object
+
+Forecasting lives in `ArrivalRateEstimator` and the classes under `Scaling/Forecasting/`, not on the
+DTO. System CPU and memory are read by `CapacityCalculator` inside the engine, after your strategy
+has already returned. If you need either, inject the collaborator yourself.
+
+## The configuration you receive
+
+`$config` is `Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration`, also `readonly`, and
+its values are grouped:
 
 ```php
-'strategy' => \App\Autoscale\Strategies\SimpleRateBasedStrategy::class,
+$config->connection;              // string
+$config->queue;                   // string
+$config->workers->min;            // int
+$config->workers->max;            // int
+$config->workers->tries;          // int
+$config->workers->timeoutSeconds; // int
+$config->workers->scalable;       // bool — false for pinned queues
+$config->sla->targetSeconds;      // int
+$config->sla->percentile;         // int — 50|75|90|95|99
+$config->sla->windowSeconds;      // int — >= 60
+$config->sla->minSamples;         // int
+$config->forecast->horizonSeconds;
+$config->spawnCompensation->enabled;
+$config->fuse->failureThresholdPercent;
+$config->sampleQueues();          // list<string> — member queues for a group, else [$queue]
 ```
 
-### Step 3: Test Strategy
+There is no `$config->minWorkers`, `$config->maxWorkers`, `$config->maxPickupTimeSeconds` or
+`$config->scaleCooldownSeconds`. The scaling cooldown is global and lives in
+`queue-autoscale.scaling.cooldown_seconds`; it is enforced by `AutoscaleManager`, not by strategies.
 
-Create tests to verify behavior:
+When the config represents a **group**, `$config->queue` is the group name and
+`$config->sampleQueues()` returns the real member queues. Use `sampleQueues()` whenever you look up
+per-queue signals such as pickup-time samples.
+
+## Registering your strategy
+
+`strategy` is a plain class string. `AutoscaleConfiguration::strategyClass()` reads it with
+`config('queue-autoscale.strategy')` and the service provider resolves it from the container.
 
 ```php
-use App\Autoscale\Strategies\SimpleRateBasedStrategy;
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+// config/queue-autoscale.php
+'strategy' => \App\Autoscale\Strategies\BusinessCalendarStrategy::class,
+```
 
-it('calculates workers based on processing rate', function () {
-    $strategy = new SimpleRateBasedStrategy();
+An array value (`['class' => ..., 'options' => ...]`) breaks boot — there is no options sub-key.
+Configure a strategy through constructor injection instead:
 
-    $metrics = (object) [
-        'processingRate' => 10.0,
-        'activeWorkerCount' => 5,
-        'depth' => (object) ['pending' => 100, 'oldestJobAgeSeconds' => 5],
-    ];
-
-    $config = new QueueConfiguration(
-        connection: 'redis',
-        queue: 'default',
-        maxPickupTimeSeconds: 60,
-        minWorkers: 1,
-        maxWorkers: 20,
+```php
+// AppServiceProvider::register()
+$this->app->bind(\App\Autoscale\Strategies\BusinessCalendarStrategy::class, function ($app): object {
+    return new \App\Autoscale\Strategies\BusinessCalendarStrategy(
+        littles: $app->make(\Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator::class),
+        holidays: config('business.holidays'),
     );
-
-    $workers = $strategy->calculateTargetWorkers($metrics, $config);
-
-    expect($workers)->toBeInt()
-        ->and($workers)->toBeGreaterThanOrEqual(1)
-        ->and($workers)->toBeLessThanOrEqual(20);
 });
 ```
 
-## Strategy Examples
+## Example: a rate-and-backlog strategy
 
-### Example 1: Simple Rate-Based Strategy
-
-Calculate workers based purely on processing rate:
+This reuses the shipped calculators rather than reimplementing them.
+`LittlesLawCalculator::calculate($arrivalRate, $avgProcessingTime)` is literally
+`arrivalRate * avgProcessingTime` (workers = λW) and returns a `float`; the caller rounds.
 
 ```php
 <?php
 
+declare(strict_types=1);
+
 namespace App\Autoscale\Strategies;
 
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
-class SimpleRateBasedStrategy implements ScalingStrategyContract
+class RateAndBacklogStrategy implements ScalingStrategyContract
 {
-    private string $lastReason = '';
+    private string $lastReason = 'No calculation performed yet';
+
     private ?float $lastPrediction = null;
 
-    public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
+    public function __construct(
+        private readonly LittlesLawCalculator $littles,
+    ) {}
+
+    public function calculateTargetWorkers(QueueMetricsData $metrics, QueueConfiguration $config): int
     {
-        $processingRate = $metrics->processingRate ?? 0.0;
-        $pendingJobs = $metrics->depth->pending ?? 0;
+        $avgJobTime = $this->determineJobTime($metrics);
+        $arrivalRate = $metrics->throughputPerMinute / 60.0;
 
-        if ($pendingJobs === 0) {
-            $this->lastReason = 'No pending jobs, maintaining minimum workers';
-            $this->lastPrediction = 0.0;
-            return $config->minWorkers;
+        $steadyState = $this->littles->calculate($arrivalRate, $avgJobTime);
+
+        $drain = 0.0;
+
+        if ($metrics->pending > 0) {
+            $timeBudget = max($config->sla->targetSeconds - $metrics->oldestJobAge, 1);
+            $jobsPerWorker = max($timeBudget / $avgJobTime, 1.0);
+            $drain = $metrics->pending / $jobsPerWorker;
         }
 
-        if ($processingRate === 0.0) {
-            $this->lastReason = 'No processing rate data, starting with minimum workers';
-            $this->lastPrediction = null;
-            return $config->minWorkers;
-        }
+        $target = (int) ceil(max($steadyState, $drain));
+        $target = max($config->workers->min, min($config->workers->max, $target));
 
-        // Calculate how long to drain queue at current rate
-        $drainTimeSeconds = $pendingJobs / $processingRate;
-
-        // Calculate workers needed to meet SLA
-        $targetWorkers = (int) ceil($drainTimeSeconds / $config->maxPickupTimeSeconds);
-
-        // Apply limits
-        $targetWorkers = max($config->minWorkers, min($config->maxWorkers, $targetWorkers));
-
-        // Build reason
         $this->lastReason = sprintf(
-            'Rate-based: %.1f jobs/sec, %d pending, drain time %.1fs, target %d workers',
-            $processingRate,
-            $pendingJobs,
-            $drainTimeSeconds,
-            $targetWorkers
+            'rate=%.2f/s x time=%.1fs = %.1f steady; backlog=%d needs %.1f; target=%d',
+            $arrivalRate,
+            $avgJobTime,
+            $steadyState,
+            $metrics->pending,
+            $drain,
+            $target,
         );
 
-        // Predict pickup time
-        if ($targetWorkers > 0) {
-            $this->lastPrediction = $drainTimeSeconds / $targetWorkers;
-        }
-
-        return $targetWorkers;
-    }
-
-    public function getLastReason(): string
-    {
-        return $this->lastReason;
-    }
-
-    public function getLastPrediction(): ?float
-    {
-        return $this->lastPrediction;
-    }
-}
-```
-
-### Example 2: Time-Based Strategy
-
-Scale based on time of day:
-
-```php
-<?php
-
-namespace App\Autoscale\Strategies;
-
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
-
-class TimeBasedStrategy implements ScalingStrategyContract
-{
-    private string $lastReason = '';
-    private ?float $lastPrediction = null;
-
-    public function __construct(
-        private readonly array $schedule = [
-            // Hour => minimum workers
-            0 => 1,   // Midnight: minimal
-            6 => 2,   // Early morning: light
-            9 => 10,  // Business hours start: high
-            12 => 15, // Lunch peak: very high
-            17 => 8,  // Evening: moderate
-            22 => 2,  // Late night: light
-        ]
-    ) {}
-
-    public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
-    {
-        $currentHour = now()->hour;
-        $pendingJobs = $metrics->depth->pending ?? 0;
-
-        // Get base worker count for current hour
-        $baseWorkers = $this->getWorkersForHour($currentHour);
-
-        // Scale up if there's a backlog
-        if ($pendingJobs > 100) {
-            $backlogMultiplier = min(3, $pendingJobs / 100);
-            $targetWorkers = (int) ceil($baseWorkers * $backlogMultiplier);
-
-            $this->lastReason = sprintf(
-                'Time-based (hour %d) with backlog: %d base workers × %.1fx backlog = %d workers',
-                $currentHour,
-                $baseWorkers,
-                $backlogMultiplier,
-                $targetWorkers
-            );
-        } else {
-            $targetWorkers = $baseWorkers;
-
-            $this->lastReason = sprintf(
-                'Time-based: hour %d, %d base workers, %d pending jobs',
-                $currentHour,
-                $baseWorkers,
-                $pendingJobs
-            );
-        }
-
-        // Apply configuration limits
-        $targetWorkers = max($config->minWorkers, min($config->maxWorkers, $targetWorkers));
-
-        // Predict pickup time (simplified)
-        $processingRate = $metrics->processingRate ?? 1.0;
-        if ($targetWorkers > 0 && $processingRate > 0) {
-            $this->lastPrediction = $pendingJobs / ($processingRate * $targetWorkers);
-        }
-
-        return $targetWorkers;
-    }
-
-    private function getWorkersForHour(int $hour): int
-    {
-        // Find the schedule entry for current or previous hour
-        $scheduleHours = array_keys($this->schedule);
-        sort($scheduleHours);
-
-        foreach (array_reverse($scheduleHours) as $scheduleHour) {
-            if ($hour >= $scheduleHour) {
-                return $this->schedule[$scheduleHour];
-            }
-        }
-
-        // Default to first entry
-        return $this->schedule[$scheduleHours[0]];
-    }
-
-    public function getLastReason(): string
-    {
-        return $this->lastReason;
-    }
-
-    public function getLastPrediction(): ?float
-    {
-        return $this->lastPrediction;
-    }
-}
-```
-
-### Example 3: Cost-Optimized Strategy
-
-Minimize workers while meeting SLA:
-
-```php
-<?php
-
-namespace App\Autoscale\Strategies;
-
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
-
-class CostOptimizedStrategy implements ScalingStrategyContract
-{
-    private string $lastReason = '';
-    private ?float $lastPrediction = null;
-
-    public function __construct(
-        private readonly float $workerCostPerHour = 0.50,
-        private readonly float $slaBreachCost = 100.00
-    ) {}
-
-    public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
-    {
-        $pendingJobs = $metrics->depth->pending ?? 0;
-        $processingRate = $metrics->processingRate ?? 0.0;
-        $oldestJobAge = $metrics->depth->oldestJobAgeSeconds ?? 0.0;
-
-        if ($pendingJobs === 0) {
-            $this->lastReason = 'Cost optimization: No pending jobs, scale to zero';
-            $this->lastPrediction = 0.0;
-            return max(0, $config->minWorkers);
-        }
-
-        // Calculate minimum workers to meet SLA
-        $slaMargin = $config->maxPickupTimeSeconds - $oldestJobAge;
-
-        if ($slaMargin <= 0) {
-            // SLA breach imminent, scale aggressively
-            $targetWorkers = $config->maxWorkers;
-            $this->lastReason = sprintf(
-                'Cost optimization: SLA breach imminent (oldest job: %.1fs, SLA: %ds), scale to max',
-                $oldestJobAge,
-                $config->maxPickupTimeSeconds
-            );
-        } elseif ($processingRate > 0) {
-            // Calculate minimum workers to clear queue within SLA margin
-            $jobsPerWorker = $processingRate;
-            $requiredThroughput = $pendingJobs / $slaMargin;
-            $targetWorkers = (int) ceil($requiredThroughput / $jobsPerWorker);
-
-            // Cost-benefit analysis
-            $workerCost = $targetWorkers * $this->workerCostPerHour;
-            $slaRisk = $this->calculateSlaRisk($pendingJobs, $targetWorkers, $processingRate, $config);
-            $expectedSlaBreachCost = $slaRisk * $this->slaBreachCost;
-
-            // If SLA breach cost > worker cost, add buffer workers
-            if ($expectedSlaBreachCost > $workerCost * 0.5) {
-                $targetWorkers = (int) ceil($targetWorkers * 1.2);
-            }
-
-            $this->lastReason = sprintf(
-                'Cost optimization: %d pending, SLA margin %.1fs, worker cost $%.2f, SLA risk %.1f%%, target %d workers',
-                $pendingJobs,
-                $slaMargin,
-                $workerCost,
-                $slaRisk * 100,
-                $targetWorkers
-            );
-        } else {
-            // No processing rate data, use minimum
-            $targetWorkers = $config->minWorkers;
-            $this->lastReason = 'Cost optimization: No processing rate data, using minimum workers';
-        }
-
-        // Apply limits
-        $targetWorkers = max($config->minWorkers, min($config->maxWorkers, $targetWorkers));
-
-        // Predict pickup time
-        if ($targetWorkers > 0 && $processingRate > 0) {
-            $this->lastPrediction = $pendingJobs / ($processingRate * $targetWorkers);
-        }
-
-        return $targetWorkers;
-    }
-
-    private function calculateSlaRisk(int $pending, int $workers, float $rate, QueueConfiguration $config): float
-    {
-        if ($workers === 0 || $rate === 0) {
-            return 1.0; // 100% risk
-        }
-
-        $expectedPickupTime = $pending / ($rate * $workers);
-        $slaBuffer = $config->maxPickupTimeSeconds - $expectedPickupTime;
-
-        // Risk increases as buffer decreases
-        if ($slaBuffer <= 0) {
-            return 1.0;
-        }
-
-        // Exponential decay: more buffer = less risk
-        return max(0, 1 - ($slaBuffer / $config->maxPickupTimeSeconds));
-    }
-
-    public function getLastReason(): string
-    {
-        return $this->lastReason;
-    }
-
-    public function getLastPrediction(): ?float
-    {
-        return $this->lastPrediction;
-    }
-}
-```
-
-### Example 4: Machine Learning Strategy
-
-Use ML predictions for scaling:
-
-```php
-<?php
-
-namespace App\Autoscale\Strategies;
-
-use App\Services\MachineLearning\LoadPredictor;
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
-
-class MachineLearningStrategy implements ScalingStrategyContract
-{
-    private string $lastReason = '';
-    private ?float $lastPrediction = null;
-
-    public function __construct(
-        private readonly LoadPredictor $predictor
-    ) {}
-
-    public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
-    {
-        // Get ML prediction for next 5 minutes
-        $prediction = $this->predictor->predictLoad([
-            'current_pending' => $metrics->depth->pending ?? 0,
-            'processing_rate' => $metrics->processingRate ?? 0.0,
-            'hour_of_day' => now()->hour,
-            'day_of_week' => now()->dayOfWeek,
-            'active_workers' => $metrics->activeWorkerCount ?? 0,
-        ]);
-
-        $predictedPending = $prediction['pending_jobs_5min'];
-        $confidence = $prediction['confidence'];
-
-        // Calculate workers needed for predicted load
-        if ($predictedPending === 0) {
-            $targetWorkers = $config->minWorkers;
-            $this->lastReason = sprintf(
-                'ML prediction: no load expected (confidence: %.1f%%)',
-                $confidence * 100
-            );
-        } else {
-            $processingRate = $metrics->processingRate ?? 1.0;
-            $requiredThroughput = $predictedPending / $config->maxPickupTimeSeconds;
-            $targetWorkers = (int) ceil($requiredThroughput / $processingRate);
-
-            // Adjust for confidence
-            if ($confidence < 0.7) {
-                // Low confidence, add safety margin
-                $targetWorkers = (int) ceil($targetWorkers * 1.3);
-            }
-
-            $this->lastReason = sprintf(
-                'ML prediction: %d jobs expected, %.1f%% confidence, %d workers needed',
-                $predictedPending,
-                $confidence * 100,
-                $targetWorkers
-            );
-        }
-
-        // Apply limits
-        $targetWorkers = max($config->minWorkers, min($config->maxWorkers, $targetWorkers));
-
-        // Store prediction
-        $this->lastPrediction = $predictedPending > 0 && $targetWorkers > 0
-            ? $predictedPending / ($processingRate * $targetWorkers)
+        $this->lastPrediction = $metrics->pending > 0 && $target > 0
+            ? ($metrics->pending / $target) * $avgJobTime
             : 0.0;
 
-        return $targetWorkers;
+        return $target;
+    }
+
+    public function getLastReason(): string
+    {
+        return $this->lastReason;
+    }
+
+    public function getLastPrediction(): ?float
+    {
+        return $this->lastPrediction;
+    }
+
+    private function determineJobTime(QueueMetricsData $metrics): float
+    {
+        if ($metrics->avgDuration >= 0.01) {
+            return $metrics->avgDuration;
+        }
+
+        return AutoscaleConfiguration::fallbackJobTimeSeconds();
+    }
+}
+```
+
+## Example: a schedule-aware floor
+
+A common real requirement is "never drop below N during business hours". Do it in a strategy when
+the floor should influence the calculation; do it in a
+[policy](scaling-policies.md) when it should override a finished decision.
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Autoscale\Strategies;
+
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
+
+class BusinessHoursFloorStrategy implements ScalingStrategyContract
+{
+    private string $lastReason = 'No calculation performed yet';
+
+    private ?float $lastPrediction = null;
+
+    /**
+     * @param  array<int, int>  $floorByHour  Hour of day (0-23) => minimum workers
+     */
+    public function __construct(
+        private readonly ScalingStrategyContract $inner,
+        private readonly array $floorByHour = [],
+    ) {}
+
+    public function calculateTargetWorkers(QueueMetricsData $metrics, QueueConfiguration $config): int
+    {
+        $base = $this->inner->calculateTargetWorkers($metrics, $config);
+        $floor = $this->floorByHour[now()->hour] ?? $config->workers->min;
+
+        $target = max($base, min($floor, $config->workers->max));
+
+        $this->lastReason = $target > $base
+            ? sprintf('hour %d floor raised %d to %d (%s)', now()->hour, $base, $target, $this->inner->getLastReason())
+            : $this->inner->getLastReason();
+
+        $this->lastPrediction = $this->inner->getLastPrediction();
+
+        return $target;
     }
 
     public function getLastReason(): string
@@ -583,247 +295,190 @@ class MachineLearningStrategy implements ScalingStrategyContract
 }
 ```
 
-## Testing Strategies
+Decorating a shipped strategy like this is usually a better trade than writing one from scratch —
+you keep the forecaster, the p95 pickup signal and the spawn-latency compensation.
 
-### Unit Tests
+## The shipped strategies as reference
 
-Test calculation logic in isolation:
+Read the source before writing your own; all four live in `src/Scaling/Strategies/`.
+
+### SimpleRateStrategy
+
+Little's Law and nothing else: `target = ceil(throughputPerMinute / 60 * avgJobTime)`.
+`getLastPrediction()` returns `null` because it never looks at the backlog. The smallest complete
+implementation of the contract in the package — read this one first.
+
+### BacklogOnlyStrategy
+
+Delegates entirely to `BacklogDrainCalculator::calculateRequiredWorkers()` with
+`AutoscaleConfiguration::breachThreshold()` (`queue-autoscale.scaling.breach_threshold`, default
+`0.5`). Ignores arrival rate. `getLastPrediction()` returns
+`(backlog / targetWorkers) * avgJobTime`.
+
+### ConservativeStrategy
+
+`max(littlesLaw, backlogDrain)` with two class constants: `BREACH_THRESHOLD = 0.75` (acts at 75% of
+SLA instead of the configured threshold) and `SAFETY_BUFFER = 1.25` (adds 25% to the result). Both
+are `private const` — to change them, copy the class.
+
+### HybridStrategy (default)
+
+The full pipeline. In order: processing rate from throughput, job time from `avgDuration`, arrival
+rate from `ArrivalRateEstimator` (used only when its reported confidence clears
+`queue-autoscale.scaling.min_arrival_rate_confidence` — not present in the published config file, so
+the `0.5` default applies until you add the key), retry-noise correction when
+`failureRate > 5.0`, an effective SLA reduced by measured spawn latency, a p95 pickup-time signal
+from the `PickupTimeStore` over `sla.window_seconds`, then
+`max(steadyState, backlogDrain)`, a saturation boost when `utilizationRate >= 90.0`, clamping to
+`[workers.min, workers.max]`, and finally `TargetSmoother` hysteresis.
+
+Its collaborators are all injected, so you can swap any one of them via a container binding without
+replacing the strategy:
 
 ```php
-use App\Autoscale\Strategies\SimpleRateBasedStrategy;
-use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-
-describe('SimpleRateBasedStrategy', function () {
-    beforeEach(function () {
-        $this->strategy = new SimpleRateBasedStrategy();
-        $this->config = new QueueConfiguration(
-            connection: 'redis',
-            queue: 'default',
-            maxPickupTimeSeconds: 60,
-            minWorkers: 1,
-            maxWorkers: 20,
-        );
-    });
-
-    it('returns minimum workers when queue is empty', function () {
-        $metrics = (object) [
-            'processingRate' => 5.0,
-            'activeWorkerCount' => 5,
-            'depth' => (object) ['pending' => 0, 'oldestJobAgeSeconds' => 0],
-        ];
-
-        $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
-
-        expect($workers)->toBe(1)
-            ->and($this->strategy->getLastReason())->toContain('No pending jobs');
-    });
-
-    it('scales up for backlog', function () {
-        $metrics = (object) [
-            'processingRate' => 10.0,
-            'activeWorkerCount' => 5,
-            'depth' => (object) ['pending' => 1000, 'oldestJobAgeSeconds' => 30],
-        ];
-
-        $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
-
-        expect($workers)->toBeGreaterThan(5)
-            ->and($this->strategy->getLastReason())->toContain('Rate-based');
-    });
-
-    it('respects max worker limit', function () {
-        $metrics = (object) [
-            'processingRate' => 1.0,
-            'activeWorkerCount' => 15,
-            'depth' => (object) ['pending' => 10000, 'oldestJobAgeSeconds' => 50],
-        ];
-
-        $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
-
-        expect($workers)->toBe(20);  // Capped at maxWorkers
-    });
-
-    it('provides prediction', function () {
-        $metrics = (object) [
-            'processingRate' => 10.0,
-            'activeWorkerCount' => 5,
-            'depth' => (object) ['pending' => 100, 'oldestJobAgeSeconds' => 5],
-        ];
-
-        $this->strategy->calculateTargetWorkers($metrics, $this->config);
-
-        expect($this->strategy->getLastPrediction())->toBeFloat()
-            ->and($this->strategy->getLastPrediction())->toBeGreaterThan(0.0);
-    });
-});
+public function __construct(
+    private readonly LittlesLawCalculator $littles,
+    private readonly BacklogDrainCalculator $backlog,
+    private readonly ArrivalRateEstimator $arrivalEstimator,
+    private readonly SpawnLatencyTrackerContract $spawnTracker,
+    private readonly PickupTimeStoreContract $pickupStore,
+    private readonly PercentileCalculatorContract $percentileCalc,
+    private readonly TargetSmoother $smoother = new TargetSmoother,
+) {}
 ```
 
-### Integration Tests
+## What happens to your number
 
-Test with real scaling engine:
+`ScalingEngine::evaluate()` takes your return value and, in order:
+
+1. Caps it at this queue's share of host capacity
+   (`capacityResult->finalMaxWorkers - workers used by other queues`).
+2. Clamps to `[workers.min, workers.max]`.
+3. Applies the failure-fuse ceiling if the fuse is open.
+4. Builds the `ScalingDecision`, attaching `getLastPrediction()` as `predictedPickupTime` and
+   `sla.targetSeconds` as `slaTarget`.
+
+Clamping in your strategy is still worth doing — it keeps `getLastReason()` honest — but the engine
+is the authority. In cluster mode the leader calls `evaluateDemand()` instead, which applies only
+config bounds and the fuse, so your raw demand number is what the cluster fair-share allocator sees.
+
+## Testing
+
+Build the DTOs directly; both are plain readonly objects.
 
 ```php
-use App\Autoscale\Strategies\SimpleRateBasedStrategy;
-use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
+use App\Autoscale\Strategies\RateAndBacklogStrategy;
+use Cbox\LaravelQueueAutoscale\Configuration\ForecastConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\SlaConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LittlesLawCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\ModerateForecastPolicy;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
-it('integrates with scaling engine', function () {
-    $strategy = new SimpleRateBasedStrategy();
-    $capacity = app(\Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator::class);
-    $resolver = app(\Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver::class);
-    $engine = new ScalingEngine($strategy, $capacity, $resolver);
-
-    $metrics = (object) [
-        'processingRate' => 10.0,
-        'activeWorkerCount' => 5,
-        'depth' => (object) ['pending' => 100, 'oldestJobAgeSeconds' => 5],
-        'trend' => (object) ['direction' => 'stable'],
-    ];
-
-    $config = new QueueConfiguration(
+function autoscaleTestConfig(int $min = 1, int $max = 20): QueueConfiguration
+{
+    return new QueueConfiguration(
         connection: 'redis',
         queue: 'default',
-        maxPickupTimeSeconds: 60,
-        minWorkers: 1,
-        maxWorkers: 20,
+        sla: new SlaConfiguration(
+            targetSeconds: 30,
+            percentile: 95,
+            windowSeconds: 300,
+            minSamples: 20,
+        ),
+        forecast: new ForecastConfiguration(
+            forecasterClass: LinearRegressionForecaster::class,
+            policyClass: ModerateForecastPolicy::class,
+            horizonSeconds: 60,
+            historySeconds: 300,
+        ),
+        spawnCompensation: new SpawnCompensationConfiguration(
+            enabled: true,
+            fallbackSeconds: 2.0,
+            minSamples: 5,
+            emaAlpha: 0.2,
+        ),
+        workers: new WorkerConfiguration(
+            min: $min,
+            max: $max,
+            tries: 3,
+            timeoutSeconds: 3600,
+            sleepSeconds: 3,
+            shutdownTimeoutSeconds: 30,
+        ),
     );
+}
 
-    $decision = $engine->evaluate($metrics, $config, 5);
+it('scales up for a backlog', function (): void {
+    $strategy = new RateAndBacklogStrategy(new LittlesLawCalculator);
 
-    expect($decision->targetWorkers)->toBeInt()
-        ->and($decision->reason)->toContain('Rate-based')
-        ->and($decision->predictedPickupTime)->toBeFloat();
+    $metrics = QueueMetricsData::fromArray([
+        'connection' => 'redis',
+        'queue' => 'default',
+        'depth' => 500,
+        'pending' => 500,
+        'oldest_job_age' => 10,
+        'throughput_per_minute' => 120.0,
+        'avg_duration' => 0.5,   // seconds
+        'active_workers' => 2,
+        'driver' => 'redis',
+    ]);
+
+    $target = $strategy->calculateTargetWorkers($metrics, autoscaleTestConfig());
+
+    expect($target)->toBeGreaterThan(2)
+        ->and($target)->toBeLessThanOrEqual(20)
+        ->and($strategy->getLastPrediction())->toBeFloat();
 });
 ```
 
-## Best Practices
+`QueueMetricsData::fromArray()` defaults every missing key, so a test only has to name the fields it
+cares about. Note that its array keys are snake_case (`oldest_job_age`, `throughput_per_minute`,
+`avg_duration`) while the properties are camelCase.
 
-### 1. Always Validate Inputs
-
-```php
-public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
-{
-    // Validate metrics
-    $processingRate = max(0.0, $metrics->processingRate ?? 0.0);
-    $pendingJobs = max(0, $metrics->depth->pending ?? 0);
-
-    // Validate configuration
-    if ($config->sla->targetSeconds <= 0) {
-        throw new \InvalidArgumentException('Invalid sla.target_seconds');
-    }
-
-    // Your logic here
-}
-```
-
-### 2. Provide Detailed Reasons
+To test against the real engine, construct it with its four dependencies — the fourth,
+`FailureFuse`, defaults to a null-backed fuse that never trips:
 
 ```php
-$this->lastReason = sprintf(
-    'Strategy decision: %d pending jobs, %.1f jobs/sec rate, %d current workers → %d target workers (reason: %s)',
-    $pendingJobs,
-    $processingRate,
-    $currentWorkers,
-    $targetWorkers,
-    $specificReason
-);
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
+
+it('respects workers.max through the engine', function (): void {
+    $engine = new ScalingEngine(
+        new RateAndBacklogStrategy(new LittlesLawCalculator),
+        app(CapacityCalculator::class),
+        app(ResourceEstimateResolver::class),
+    );
+
+    $decision = $engine->evaluate(
+        QueueMetricsData::fromArray([
+            'connection' => 'redis',
+            'queue' => 'default',
+            'pending' => 10_000,
+            'oldest_job_age' => 25,
+            'throughput_per_minute' => 60.0,
+            'avg_duration' => 1.0,
+        ]),
+        autoscaleTestConfig(min: 1, max: 5),
+        currentWorkers: 1,
+        totalPoolWorkers: 1,
+    );
+
+    expect($decision->targetWorkers)->toBeLessThanOrEqual(5);
+});
 ```
 
-### 3. Handle Edge Cases
-
-```php
-// No pending jobs
-if ($pendingJobs === 0) {
-    return $config->minWorkers;
-}
-
-// No processing rate data (new queue)
-if ($processingRate === 0.0) {
-    return $config->minWorkers;
-}
-
-// Infinite or NaN values
-if (!is_finite($calculatedWorkers)) {
-    return $config->minWorkers;
-}
-```
-
-### 4. Apply Configuration Limits
-
-```php
-$targetWorkers = max(
-    $config->minWorkers,
-    min($config->maxWorkers, $calculatedWorkers)
-);
-```
-
-### 5. Make Strategies Testable
-
-```php
-// Extract calculation to testable method
-private function calculateBasedOnRate(float $rate, int $pending, int $sla): int
-{
-    return (int) ceil(($pending / $rate) / $sla);
-}
-
-// Inject dependencies for testing
-public function __construct(
-    private readonly ?TimeProvider $timeProvider = null
-) {
-    $this->timeProvider = $timeProvider ?? new SystemTimeProvider();
-}
-```
-
-## Common Patterns
-
-### Pattern: Hybrid Calculation
-
-Combine multiple approaches:
-
-```php
-$steadyStateWorkers = $this->calculateSteadyState($metrics, $config);
-$trendBasedWorkers = $this->calculateFromTrend($metrics, $config);
-$backlogWorkers = $this->calculateFromBacklog($metrics, $config);
-
-// Take the maximum (most conservative)
-$targetWorkers = max($steadyStateWorkers, $trendBasedWorkers, $backlogWorkers);
-```
-
-### Pattern: Confidence-Based Adjustment
-
-Add safety margins based on confidence:
-
-```php
-$baseWorkers = $this->calculateBase($metrics, $config);
-$confidence = $metrics->trend->confidence ?? 0.5;
-
-if ($confidence < 0.7) {
-    // Low confidence, add 30% safety margin
-    $targetWorkers = (int) ceil($baseWorkers * 1.3);
-} else {
-    $targetWorkers = $baseWorkers;
-}
-```
-
-### Pattern: Gradual Changes
-
-Prevent oscillation with gradual scaling:
-
-```php
-$targetWorkers = $this->calculateTarget($metrics, $config);
-$currentWorkers = $metrics->activeWorkerCount ?? 0;
-
-$maxChange = max(1, (int) ceil($currentWorkers * 0.2));  // Max 20% change
-
-if ($targetWorkers > $currentWorkers) {
-    $targetWorkers = min($targetWorkers, $currentWorkers + $maxChange);
-} elseif ($targetWorkers < $currentWorkers) {
-    $targetWorkers = max($targetWorkers, $currentWorkers - $maxChange);
-}
-```
+`CapacityCalculator` samples real CPU for about a second on a cold cache, so engine-level tests are
+slower than strategy-level ones. Prefer testing the calculation in isolation and keep one or two
+engine tests for the wiring.
 
 ## See Also
 
-- [Scaling Policies](scaling-policies.md) - Implementing scaling policies
-- [How It Works](../basic-usage/how-it-works.md) - Understanding the default strategy
-- [Configuration](../basic-usage/configuration.md) - Configuring strategies
-- [API Reference](../api-reference/_index.md) - Complete API documentation
+- [Policy Execution Internals](scaling-policies.md) - The extension point that runs after the engine
+- [How It Works](../basic-usage/how-it-works.md) - The default algorithm end to end
+- [Little's Law](../algorithms/littles-law.md) and [Backlog Drain](../algorithms/backlog-drain.md) - The shipped calculators
+- [Configuration](../basic-usage/configuration.md) - Every config key the contract reads

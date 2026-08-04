@@ -1,6 +1,6 @@
 ---
 title: "Laravel Forge"
-description: "Run Queue Autoscale as a Forge Daemon"
+description: "Run the Queue Autoscale manager as a Laravel Forge Daemon, without fighting Forge queue workers"
 weight: 2
 ---
 
@@ -53,7 +53,9 @@ Forge **→ Daemons** shows the process status. Inspect logs via Forge's log vie
 tail -f /home/forge/.forge/daemon-<id>.log
 ```
 
-You should see `Autoscale manager started` shortly after deploy, then periodic worker-spawn/terminate activity once jobs arrive.
+You should see the startup banner shortly after deploy — `Starting Queue Autoscale Manager` followed
+by the manager ID, mode and evaluation interval — then periodic worker-spawn/terminate activity once
+jobs arrive.
 
 ## Gotchas
 

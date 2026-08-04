@@ -1,7 +1,7 @@
 ---
 title: "Export Cluster Metrics"
 description: "Expose Queue Autoscale cluster metrics and host scaling signals to your monitoring stack"
-weight: 40
+weight: 41
 ---
 
 # Export Cluster Metrics

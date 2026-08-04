@@ -27,8 +27,10 @@ Queue Autoscale for Laravel dispatches Laravel events at key points during the a
 
 ### Events vs Policies
 
-**Events** are Laravel's native event system - decoupled, broadcast to all listeners.
-**Policies** are executed in-order as part of the scaling pipeline.
+**Events** are Laravel's native event system — decoupled, broadcast to all listeners, and unable to change anything.
+**Policies** run in order as part of the scaling pipeline, on the `ScalingDecision` the engine already produced, and can replace it.
+
+Policies never run *before* the strategy. The order is: metrics → strategy → host capacity → config bounds → failure fuse → `ScalingDecision` → `PolicyExecutor::beforeScaling()` → spawn/terminate → `PolicyExecutor::afterScaling()` → events.
 
 Use **Events** when:
 - Multiple systems need to react independently
@@ -51,7 +53,7 @@ Fired every evaluation cycle after the scaling engine computes a decision — ev
 ```php
 namespace Cbox\LaravelQueueAutoscale\Events;
 
-final class ScalingDecisionMade
+class ScalingDecisionMade
 {
     public function __construct(
         public readonly ScalingDecision $decision,
@@ -68,7 +70,7 @@ final class ScalingDecisionMade
 Fired every cycle where the predicted pickup time exceeds the SLA target — i.e. the forecaster expects a breach before we can scale up enough.
 
 ```php
-final class SlaBreachPredicted
+class SlaBreachPredicted
 {
     public function __construct(
         public readonly ScalingDecision $decision,
@@ -83,7 +85,7 @@ final class SlaBreachPredicted
 Fired **once** when the oldest pending job crosses the SLA target — a state transition, not per cycle.
 
 ```php
-final class SlaBreached
+class SlaBreached
 {
     public function __construct(
         public readonly string $connection,
@@ -106,7 +108,7 @@ final class SlaBreached
 Fired **once** when the queue drops back under its SLA target — the counterpart to `SlaBreached`.
 
 ```php
-final class SlaRecovered
+class SlaRecovered
 {
     public function __construct(
         public readonly string $connection,
@@ -129,7 +131,7 @@ final class SlaRecovered
 Fired whenever workers actually spawn or terminate. Also fired by the exclusive-queue supervisor when respawning a pinned worker.
 
 ```php
-final class WorkersScaled
+class WorkersScaled
 {
     public function __construct(
         public readonly string $connection,
@@ -151,7 +153,7 @@ For group workers, `$queue` holds the group name. For supervisor respawns on exc
 Fired when the [failure fuse](failure-fuse.md) changes state — on transitions only, never per cycle.
 
 ```php
-final class FuseTripped
+class FuseTripped
 {
     public function __construct(
         public readonly string $connection,
@@ -188,13 +190,17 @@ class LogScalingDecision
 {
     public function handle(ScalingDecisionMade $event): void
     {
+        $decision = $event->decision;
+
         logger()->info('Scaling decision made', [
-            'queue' => $event->config->queue,
-            'current_workers' => $event->currentWorkers,
-            'target_workers' => $event->decision->targetWorkers,
-            'reason' => $event->decision->reason,
-            'confidence' => $event->decision->confidence,
-            'pending_jobs' => $event->metrics->depth->pending ?? 0,
+            'connection' => $decision->connection,
+            'queue' => $decision->queue,
+            'current_workers' => $decision->currentWorkers,
+            'target_workers' => $decision->targetWorkers,
+            'action' => $decision->action(),
+            'reason' => $decision->reason,
+            'predicted_pickup_time' => $decision->predictedPickupTime,
+            'limiting_factor' => $decision->capacity?->limitingFactor,
         ]);
     }
 }
@@ -231,7 +237,7 @@ public function boot(): void
 {
     Event::listen(function (ScalingDecisionMade $event) {
         logger()->info('Scaling decision', [
-            'queue' => $event->config->queue,
+            'queue' => $event->decision->queue,
             'target' => $event->decision->targetWorkers,
         ]);
     });
@@ -323,9 +329,9 @@ $event->marginPercentage()     // SlaRecovered
 
 ## Common Use Cases
 
-> **Note:** the following listener examples are **templates**, not copy-paste-ready code. Several reference fields that this package does not ship on its events (e.g. `$event->metrics->depth->pending`, `$event->metrics->trend->direction`). Those need to be fetched separately — typically from the `QueueMetrics` facade provided by `cboxdk/laravel-queue-metrics`. Similarly, any `DB::table('autoscale_*')` references are illustrative; no such tables exist in this package. Adapt to your own persistence layer.
+> **Note:** the events carry only what is listed above. Queue depth, throughput and job durations are **not** on them — fetch those from the `QueueMetrics` facade provided by `cboxdk/laravel-queue-metrics`. Any `DB::table('autoscale_*')` reference below is your own table; this package ships no such migrations.
 >
-> For production-ready alerting with no external dependencies, use the recipes in the [Cookbook](../cookbook/_index.md) instead.
+> For production-ready alerting with no external dependencies, use the recipes in the [Cookbook](../cookbook/_index.md).
 
 ### Use Case 1: Slack Notifications
 
@@ -343,7 +349,8 @@ class SendSlackNotification
 {
     public function handle(ScalingDecisionMade $event): void
     {
-        $workerChange = $event->decision->targetWorkers - $event->currentWorkers;
+        $decision = $event->decision;
+        $workerChange = $decision->targetWorkers - $decision->currentWorkers;
 
         if (abs($workerChange) < 5) {
             return; // Only notify for significant changes
@@ -356,21 +363,21 @@ class SendSlackNotification
             'attachments' => [
                 [
                     'color' => $color,
-                    'title' => "{$direction}: {$event->config->queue}",
+                    'title' => "{$direction}: {$decision->queue}",
                     'fields' => [
                         [
                             'title' => 'Worker Change',
-                            'value' => "{$event->currentWorkers} → {$event->decision->targetWorkers}",
+                            'value' => "{$decision->currentWorkers} → {$decision->targetWorkers}",
                             'short' => true,
                         ],
                         [
-                            'title' => 'Pending Jobs',
-                            'value' => $event->metrics->depth->pending ?? 'N/A',
+                            'title' => 'Limiting Factor',
+                            'value' => $decision->capacity?->limitingFactor ?? 'n/a',
                             'short' => true,
                         ],
                         [
                             'title' => 'Reason',
-                            'value' => $event->decision->reason,
+                            'value' => $decision->reason,
                             'short' => false,
                         ],
                     ],
@@ -382,6 +389,8 @@ class SendSlackNotification
     }
 }
 ```
+
+`ScalingDecisionMade` fires on **every** evaluation cycle, so a webhook listener like this should also be gated through `AlertRateLimiter` in production.
 
 ### Use Case 2: Metrics Collection
 
@@ -422,57 +431,37 @@ class RecordWorkerMetrics
 }
 ```
 
-### Use Case 3: Cost Tracking
+### Use Case 3: Worker-Hour Accounting
 
-Track autoscaling costs:
+Record every scaling action to your own table so you can attribute worker-hours later:
 
 ```php
 <?php
 
 namespace App\Listeners;
 
-use Illuminate\Support\Facades\DB;
 use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
+use Illuminate\Support\Facades\DB;
 
-class TrackScalingCosts
+class RecordScalingActions
 {
-    private const WORKER_COST_PER_HOUR = 0.50;
-
     public function handle(WorkersScaled $event): void
     {
-        $workerChange = $event->to - $event->from;
-
-        if ($workerChange === 0) {
-            return;
-        }
-
-        // Calculate hourly cost impact
-        $costImpact = $workerChange * self::WORKER_COST_PER_HOUR;
-
-        DB::table('autoscale_costs')->insert([
-            'queue' => $event->queue,
+        DB::table('autoscale_scaling_log')->insert([
             'connection' => $event->connection,
+            'queue' => $event->queue,
             'previous_workers' => $event->from,
             'new_workers' => $event->to,
-            'worker_change' => $workerChange,
-            'hourly_cost_impact' => $costImpact,
+            'worker_change' => $event->to - $event->from,
+            'direction' => $event->action,   // 'up' | 'down'
+            'reason' => $event->reason,
             'recorded_at' => now(),
         ]);
-
-        // Alert if cost exceeds threshold
-        if ($this->getDailyCost() > 1000) {
-            $this->alertFinanceTeam();
-        }
-    }
-
-    private function getDailyCost(): float
-    {
-        return DB::table('autoscale_costs')
-            ->where('recorded_at', '>=', now()->subDay())
-            ->sum('hourly_cost_impact');
     }
 }
 ```
+
+`autoscale_scaling_log` is your own migration — this package ships none.
 
 ### Use Case 4: PagerDuty Alerts on SLA breach
 
@@ -534,28 +523,38 @@ class AuditScalingDecisions
 {
     public function handle(ScalingDecisionMade $event): void
     {
+        $decision = $event->decision;
+        $metrics = QueueMetrics::getQueueMetrics($decision->connection, $decision->queue);
+
         DB::table('scaling_audit_log')->insert([
-            'queue' => $event->config->queue,
-            'connection' => $event->config->connection,
-            'current_workers' => $event->currentWorkers,
-            'target_workers' => $event->decision->targetWorkers,
-            'worker_change' => $event->decision->targetWorkers - $event->currentWorkers,
-            'reason' => $event->decision->reason,
-            'confidence' => $event->decision->confidence,
-            'predicted_pickup_time' => $event->decision->predictedPickupTime,
-            'pending_jobs' => $event->metrics->depth->pending ?? null,
-            'processing_rate' => $event->metrics->processingRate ?? null,
-            'oldest_job_age' => $event->metrics->depth->oldestJobAgeSeconds ?? null,
-            'trend_direction' => $event->metrics->trend->direction ?? null,
-            'decision_metadata' => json_encode([
-                'config' => $event->config,
-                'metrics' => $event->metrics,
-            ]),
+            'connection' => $decision->connection,
+            'queue' => $decision->queue,
+            'current_workers' => $decision->currentWorkers,
+            'target_workers' => $decision->targetWorkers,
+            'worker_change' => $decision->targetWorkers - $decision->currentWorkers,
+            'reason' => $decision->reason,
+            'predicted_pickup_time' => $decision->predictedPickupTime,
+            'sla_target' => $decision->slaTarget,
+            'limiting_factor' => $decision->capacity?->limitingFactor,
+
+            // Queue state comes from the metrics package, not from the event.
+            'pending_jobs' => $metrics->pending,
+            'oldest_job_age' => $metrics->oldestJobAge,
+            'throughput_per_minute' => $metrics->throughputPerMinute,
+
             'created_at' => now(),
         ]);
     }
 }
 ```
+
+Add the metrics facade import alongside the event import:
+
+```php
+use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
+```
+
+Note that this runs inside the manager daemon on every cycle — a synchronous insert per queue per cycle is a real cost. Batch it, or queue the listener, if you have many queues.
 
 ### Use Case 6: External Workflow Integration
 
@@ -607,7 +606,7 @@ Listeners execute synchronously unless queued. Keep them fast:
 // ✅ Good: Fast operation
 public function handle(ScalingDecisionMade $event): void
 {
-    logger()->info('Scaling decision', ['queue' => $event->config->queue]);
+    logger()->info('Scaling decision', ['queue' => $event->decision->queue]);
 }
 
 // ❌ Bad: Slow operation
@@ -638,7 +637,7 @@ public function handle(ScalingDecisionMade $event): void
     } catch (\Exception $e) {
         logger()->error('Notification failed', [
             'error' => $e->getMessage(),
-            'queue' => $event->config->queue,
+            'queue' => $event->decision->queue,
         ]);
         // Don't throw - allow autoscaling to continue
     }
@@ -652,13 +651,13 @@ Don't process every event if you only care about some:
 ```php
 public function handle(ScalingDecisionMade $event): void
 {
-    // Only care about production queue
-    if ($event->config->queue !== 'production') {
+    // Only care about one queue
+    if ($event->decision->queue !== 'production') {
         return;
     }
 
     // Only care about significant changes
-    $change = abs($event->decision->targetWorkers - $event->currentWorkers);
+    $change = abs($event->decision->targetWorkers - $event->decision->currentWorkers);
     if ($change < 5) {
         return;
     }
@@ -701,41 +700,52 @@ Event::listen(ScalingDecisionMade::class, Listener2::class);
 ]
 ```
 
+`policies` entries must be **class strings**. `PolicyExecutor` filters the config to `is_string($policy) && class_exists($policy)`, so a policy instance or a closure placed in that array is silently dropped. The classes are resolved through `app()`, so constructor injection works.
+
 ### 6. Test Event Listeners
 
+Construct the event directly — `ScalingDecisionMade` takes a single `ScalingDecision`, and `ScalingDecision` uses named arguments:
+
 ```php
-use Illuminate\Support\Facades\Event;
 use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Illuminate\Support\Facades\Http;
 
-it('dispatches scaling decision event', function () {
-    Event::fake([ScalingDecisionMade::class]);
-
-    // Trigger autoscaling
-    $this->autoscaleManager->evaluate();
-
-    Event::assertDispatched(ScalingDecisionMade::class, function ($event) {
-        return $event->config->queue === 'default'
-            && $event->decision->targetWorkers > 0;
-    });
-});
-
-it('sends slack notification on scaling', function () {
+it('sends a slack notification on a significant scale-up', function () {
     Http::fake();
 
     $event = new ScalingDecisionMade(
-        decision: new ScalingDecision(10, 'test', 0.9, 5.0),
-        config: $this->config,
-        currentWorkers: 5,
-        metrics: (object) ['depth' => (object) ['pending' => 100]]
+        decision: new ScalingDecision(
+            connection: 'redis',
+            queue: 'default',
+            currentWorkers: 5,
+            targetWorkers: 15,
+            reason: 'backlog drain',
+            predictedPickupTime: 12.5,
+            slaTarget: 30,
+        ),
     );
 
-    $listener = new SendSlackNotification();
-    $listener->handle($event);
+    (new SendSlackNotification)->handle($event);
 
-    Http::assertSent(function ($request) {
-        return str_contains($request->url(), 'slack.com');
-    });
+    Http::assertSent(fn ($request) => str_contains($request->url(), 'slack.com'));
 });
+```
+
+To assert the manager dispatched it, fake the event and drive whatever triggers the cycle in your own test harness:
+
+```php
+use Illuminate\Support\Facades\Event;
+
+Event::fake([ScalingDecisionMade::class]);
+
+// ...run your scaling cycle...
+
+Event::assertDispatched(
+    ScalingDecisionMade::class,
+    fn (ScalingDecisionMade $event) => $event->decision->queue === 'default'
+        && $event->decision->targetWorkers > 0,
+);
 ```
 
 ## Advanced Patterns
@@ -749,12 +759,12 @@ class AggregatedMetricsCollector implements ShouldQueue
 {
     public function handle(ScalingDecisionMade $event): void
     {
-        Cache::remember("scaling_events:{$event->config->queue}", 300, function () {
+        Cache::remember("scaling_events:{$event->decision->queue}", 300, function () {
             return collect();
         })->push([
             'timestamp' => now(),
-            'workers' => $event->decision->targetWorkers,
-            'pending' => $event->metrics->depth->pending ?? 0,
+            'current_workers' => $event->decision->currentWorkers,
+            'target_workers' => $event->decision->targetWorkers,
         ]);
 
         // Flush every 100 events or 5 minutes
@@ -775,7 +785,7 @@ class ConditionallyQueuedListener implements ShouldQueue
     public function shouldQueue(ScalingDecisionMade $event): bool
     {
         // Only queue for critical queues
-        return in_array($event->config->queue, ['critical', 'production']);
+        return in_array($event->decision->queue, ['critical', 'production']);
     }
 
     public function handle(ScalingDecisionMade $event): void

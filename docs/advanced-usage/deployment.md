@@ -1,137 +1,120 @@
 ---
-title: "Deployment"
-description: "Complete guide for deploying Queue Autoscale for Laravel to production environments"
+title: "Production Deployment Reference"
+description: "Prerequisites, process supervision, environment variables and operational runbook for running the autoscale manager in production"
 weight: 32
 ---
 
-# Deployment
+# Production Deployment Reference
 
-> **Looking for platform-specific steps?** Start at [Deployment → Platforms](../deployment/_index.md). You'll find short, concrete guides for self-hosted VPS, Laravel Forge, Ploi, and Docker.
+> **Looking for platform-specific steps?** Start at [Deployment → Platforms](../deployment/_index.md).
+> You'll find short, concrete guides for self-hosted VPS, Laravel Forge, Ploi, and Docker.
 
-This page is the **general production reference** — prerequisites, installation, and deeper operational topics that apply across all platforms.
-
-Complete guide for deploying Queue Autoscale for Laravel to production.
+This page is the **general production reference** — prerequisites, installation, supervision, and
+the operational details that apply across all platforms.
 
 ## Prerequisites
 
-Before deploying, ensure you have:
+From `composer.json`:
 
-- ✅ Laravel 11.0+ application
-- ✅ PHP 8.2+ runtime
-- ✅ Queue backend configured (Redis, Database, SQS, etc.)
-- ✅ Process manager (Supervisor recommended)
-- ✅ `laravel-queue-metrics` package installed
-- ✅ `system-metrics` package installed
+- PHP **8.3, 8.4 or 8.5** (`"php": "^8.3|^8.4|^8.5"`)
+- The **pcntl** and **posix** extensions (signal handling and process ownership — both are hard
+  requirements, not suggestions)
+- Laravel 11, 12 or 13 (`illuminate/contracts: ^11.0||^12.0||^13.0`)
+- `cboxdk/laravel-queue-metrics: ^3.0` — installed automatically as a dependency
+- A queue backend the metrics package can observe (Redis or database)
+- A process supervisor for the manager daemon (Supervisor or systemd)
+
+`cboxdk/system-metrics` is **not** a direct dependency; it arrives transitively through
+`laravel-queue-metrics` and is what `CapacityCalculator` reads CPU and memory from.
+
+`cboxdk/laravel-telemetry` is optional (`suggest`). Install it only if you want the OpenTelemetry
+integration described in [Integrations & Developer Hooks](integrations.md).
+
+Verify the extensions before deploying:
+
+```bash
+php -m | grep -E '^(pcntl|posix)$'
+```
 
 ## Installation Steps
 
-### 1. Install Package
+### 1. Install the package
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
 ```
 
-### 2. Publish Configuration
+### 2. Run the guided installer
+
+```bash
+php artisan queue:autoscale:install --topology=single-redis
+```
+
+The available presets are `single-low` (single host, database metrics, no Redis), `single-redis`
+(single host with Redis) and `cluster` (multi-host with cluster coordination). Useful options:
+
+| Option | Effect |
+|---|---|
+| `--metrics-connection=` | Metrics backend connection name |
+| `--publish-migrations` | Publish the `laravel-queue-metrics` migrations |
+| `--write-env` | Write the recommended values into your env file |
+| `--env-file=` | Env file to update (default `base_path('.env')`) |
+| `--force` | Overwrite already-published config files |
+| `--no-publish` | Skip the `vendor:publish` steps |
+
+To publish config by hand instead:
 
 ```bash
 php artisan vendor:publish --tag=queue-autoscale-config
-```
-
-This creates `config/queue-autoscale.php`.
-
-### 3. Install & Configure Metrics Package
-
-The autoscaler **requires** `laravel-queue-metrics` for queue discovery and metrics collection. Without proper metrics configuration, the autoscaler cannot function.
-
-#### Install Package
-
-```bash
-composer require cboxdk/laravel-queue-metrics
-```
-
-> **Note:** This package may auto-install as a dependency. Verify with `composer show cboxdk/laravel-queue-metrics`.
-
-#### Publish Configuration
-
-```bash
 php artisan vendor:publish --tag=queue-metrics-config
 ```
 
-This creates `config/queue-metrics.php`.
+### 3. Configure the metrics backend
 
-#### Configure Storage Backend
+The autoscaler cannot function without `laravel-queue-metrics` — queue discovery and every input
+signal come from it.
 
-Choose a storage driver for metrics data:
+**Redis (recommended for production):**
 
-**Option A: Redis (Recommended for Production)**
-
-Redis provides fast, in-memory metrics storage with automatic TTL cleanup:
-
-```env
-# .env
+```ini
 QUEUE_METRICS_STORAGE=redis
-QUEUE_METRICS_CONNECTION=default  # Must match config/database.php redis connection
+QUEUE_METRICS_CONNECTION=default
 ```
 
-Ensure Redis is configured in `config/database.php`:
+`QUEUE_METRICS_CONNECTION` must name a connection in `config/database.php`.
 
-```php
-'redis' => [
-    'default' => [
-        'host' => env('REDIS_HOST', '127.0.0.1'),
-        'password' => env('REDIS_PASSWORD'),
-        'port' => env('REDIS_PORT', 6379),
-        'database' => env('REDIS_DB', 0),
-    ],
-],
-```
+**Database (persistent history):**
 
-**Option B: Database (For Persistence)**
-
-Database storage persists metrics across restarts:
-
-```env
-# .env
+```ini
 QUEUE_METRICS_STORAGE=database
 ```
 
-Publish and run migrations:
-
 ```bash
-php artisan vendor:publish --tag=laravel-queue-metrics-migrations
+php artisan vendor:publish --tag=queue-metrics-migrations
 php artisan migrate
 ```
 
-**Storage Comparison:**
+| | Redis | Database |
+|---|---|---|
+| Storage | In-memory, TTL-based | Persistent tables |
+| Retention | Limited by TTL | Full |
+| Extra infrastructure | Redis server | None beyond your DB |
 
-| Feature | Redis | Database |
-|---------|-------|----------|
-| Performance | ~1-2ms overhead per job | ~5-15ms overhead per job |
-| Persistence | In-memory (lost on restart) | Persistent across restarts |
-| TTL Cleanup | Automatic | Manual/scheduled cleanup |
-| Historical Data | Limited (TTL-based) | Full retention |
-| Best For | Production autoscaling | Historical analysis & debugging |
-
-#### Verify Installation
-
-Test that metrics collection works:
+Verify metrics are being collected:
 
 ```bash
 php artisan tinker
 ```
 
 ```php
-> \Cbox\LaravelQueueMetrics\Facades\QueueMetrics::getSystemOverview();
-# Should return object with queue metrics data
+\Cbox\LaravelQueueMetrics\Facades\QueueMetrics::getAllQueuesWithMetrics();
+\Cbox\LaravelQueueMetrics\Facades\QueueMetrics::getOverview();
 ```
 
-**📚 Resources:**
-- [Metrics Package Documentation](https://github.com/cboxdk/laravel-queue-metrics)
-- [Packagist: laravel-queue-metrics](https://packagist.org/packages/cboxdk/laravel-queue-metrics)
+`getAllQueuesWithMetrics()` is the exact call the manager makes each cycle. If it returns an empty
+array, the autoscaler has nothing to act on — fix that before going further.
 
-### 4. Configure SLA Targets
-
-Edit `config/queue-autoscale.php`:
+### 4. Configure SLA targets
 
 ```php
 use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
@@ -148,7 +131,7 @@ return [
         'critical' => CriticalProfile::class,
 
         // Or deep-merge a partial override on top of sla_defaults:
-        'exports'  => [
+        'exports' => [
             'sla' => ['target_seconds' => 45],
             'workers' => ['max' => 20],
         ],
@@ -160,46 +143,35 @@ return [
 ];
 ```
 
-### 5. Test Locally
+See [Configuration](../basic-usage/configuration.md) for every key and
+[Workload Profiles](../basic-usage/workload-profiles.md) for the shipped profiles.
+
+### 5. Test locally
 
 ```bash
-# Run autoscaler in foreground
-php artisan queue:autoscale
+php artisan queue:autoscale -vvv
+```
 
-# In another terminal, dispatch a burst of work using any job your app
-# already has. For a quick smoke test without an existing job class,
-# queued closures work fine:
+In another terminal, generate work using any job your app already has. For a quick smoke test,
+queued closures work fine:
+
+```bash
 php artisan tinker
 >>> for ($i = 0; $i < 50; $i++) { dispatch(function () { sleep(1); }); }
 ```
 
-Watch the autoscaler logs to verify it scales workers.
-
 ## Production Deployment
 
-### Option 1: Supervisor (Recommended)
+The manager is a long-running foreground process. Supervise it; do not background it manually.
 
-#### Install Supervisor
+### Option 1: Supervisor
 
-```bash
-# Ubuntu/Debian
-sudo apt-get install supervisor
-
-# CentOS/RHEL
-sudo yum install supervisor
-
-# macOS
-brew install supervisor
-```
-
-#### Create Supervisor Config
-
-Create `/etc/supervisor/conf.d/queue-autoscale.conf`:
+`/etc/supervisor/conf.d/queue-autoscale.conf`:
 
 ```ini
 [program:queue-autoscale]
 process_name=%(program_name)s
-command=php /path/to/your/app/artisan queue:autoscale
+command=php /path/to/your/app/artisan queue:autoscale --interval=5
 autostart=true
 autorestart=true
 stopasgroup=true
@@ -208,39 +180,31 @@ user=www-data
 numprocs=1
 redirect_stderr=true
 stdout_logfile=/path/to/your/app/storage/logs/autoscale-supervisor.log
-stopwaitsecs=30
+stopwaitsecs=60
 ```
 
-**Important settings:**
-- `stopasgroup=true` - Stops all spawned workers when autoscaler stops
-- `killasgroup=true` - Kills all spawned workers if force-stopped
-- `stopwaitsecs=30` - Allows 30s for graceful shutdown
-- `user=www-data` - Run as web server user (adjust for your system)
+Important settings:
 
-#### Start Autoscaler
+- `stopasgroup=true` — sends the stop signal to the whole process group, including spawned workers
+- `killasgroup=true` — same for a forced kill
+- `stopwaitsecs=60` — must exceed `workers.shutdown_timeout_seconds` (default `30`) so the manager
+  can drain its workers before Supervisor escalates to SIGKILL
+- `numprocs=1` — one manager per host; a second instance is refused by the host lock
 
 ```bash
-# Reload supervisor config
 sudo supervisorctl reread
 sudo supervisorctl update
-
-# Start autoscaler
 sudo supervisorctl start queue-autoscale
-
-# Check status
 sudo supervisorctl status queue-autoscale
-
-# View logs
-sudo supervisorctl tail -f queue-autoscale
 ```
 
-### Option 2: Systemd
+### Option 2: systemd
 
-Create `/etc/systemd/system/queue-autoscale.service`:
+`/etc/systemd/system/queue-autoscale.service`:
 
 ```ini
 [Unit]
-Description=Queue Autoscale for Laravel
+Description=Queue Autoscale Manager
 After=network.target
 
 [Service]
@@ -248,73 +212,55 @@ Type=simple
 User=www-data
 Group=www-data
 WorkingDirectory=/path/to/your/app
-ExecStart=/usr/bin/php /path/to/your/app/artisan queue:autoscale
+ExecStart=/usr/bin/php /path/to/your/app/artisan queue:autoscale --interval=5
 Restart=always
 RestartSec=10
 KillMode=mixed
 KillSignal=SIGTERM
-TimeoutStopSec=30
+TimeoutStopSec=60
 
-# Logging
-StandardOutput=append:/path/to/your/app/storage/logs/autoscale-systemd.log
-StandardError=append:/path/to/your/app/storage/logs/autoscale-systemd-error.log
+StandardOutput=append:/path/to/your/app/storage/logs/autoscale.log
+StandardError=append:/path/to/your/app/storage/logs/autoscale-error.log
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-#### Start Service
-
 ```bash
-# Reload systemd
 sudo systemctl daemon-reload
-
-# Enable auto-start on boot
-sudo systemctl enable queue-autoscale
-
-# Start service
-sudo systemctl start queue-autoscale
-
-# Check status
+sudo systemctl enable --now queue-autoscale
 sudo systemctl status queue-autoscale
-
-# View logs
 sudo journalctl -u queue-autoscale -f
 ```
 
 ### Option 3: Docker
 
-#### Dockerfile
-
-Add to your application's Dockerfile:
-
 ```dockerfile
-FROM php:8.2-cli
+FROM php:8.3-cli
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    supervisor \
+RUN apt-get update && apt-get install -y supervisor \
+    && docker-php-ext-install pcntl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy application
 COPY . /var/www/html
 WORKDIR /var/www/html
 
-# Install composer dependencies
 RUN composer install --no-dev --optimize-autoloader
 
-# Supervisor config for autoscaler
 COPY docker/supervisor-autoscale.conf /etc/supervisor/conf.d/
 
 CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]
 ```
 
-#### docker/supervisor-autoscale.conf
+The base image must be PHP 8.3 or newer — `php:8.2-cli` cannot install this package. `posix` is
+enabled by default in the official images; `pcntl` is not, hence the `docker-php-ext-install` line.
+
+`docker/supervisor-autoscale.conf`:
 
 ```ini
 [program:queue-autoscale]
 process_name=%(program_name)s
-command=php artisan queue:autoscale
+command=php artisan queue:autoscale --interval=5
 autostart=true
 autorestart=true
 stopasgroup=true
@@ -325,18 +271,14 @@ stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0
 ```
 
-#### docker-compose.yml
-
 ```yaml
-version: '3.8'
-
 services:
   autoscale:
     build: .
     container_name: queue-autoscale
     environment:
       - QUEUE_AUTOSCALE_ENABLED=true
-      - LOG_LEVEL=info
+      - QUEUE_METRICS_STORAGE=redis
     volumes:
       - ./storage:/var/www/html/storage
     restart: unless-stopped
@@ -353,116 +295,155 @@ networks:
     driver: bridge
 ```
 
-## Environment Configuration
+See [Docker / Compose](../deployment/docker.md) for the fuller container walkthrough.
 
-### Required Environment Variables
+## Commands
 
-```env
-# Queue Autoscale
+```text
+queue:autoscale {--interval=5} {--replace}
+queue:autoscale:cluster {--json}
+queue:autoscale:debug {--queue=default} {--connection=}
+queue:autoscale:install {--topology=} {--metrics-connection=} {--publish-migrations}
+                        {--write-env} {--env-file=} {--force} {--no-publish}
+queue:autoscale:restart
+queue-autoscale:migrate-config {--source=} {--destination=}
+```
+
+`--interval` is the only way to change the evaluation cadence. `queue:autoscale` starts with
+`--interval=5` and passes that value to `AutoscaleManager::configure()`.
+
+`--replace` stops the manager already holding this host's lock and takes over — useful in a deploy
+script where the old process has not exited yet.
+
+`queue:autoscale:restart` broadcasts a restart signal; supervised managers exit after the current
+evaluation tick and are restarted by Supervisor/systemd with fresh code and config. Use it in your
+deploy pipeline instead of killing the process.
+
+## Environment variables
+
+Only these `QUEUE_AUTOSCALE_*` variables are read by `config/queue-autoscale.php`. Variables named
+`AUTOSCALE_*` (such as `AUTOSCALE_EVALUATION_INTERVAL`, `AUTOSCALE_MIN_WORKERS` or
+`AUTOSCALE_DEFAULT_SLA`) are **not** read by this package — worker counts and SLA targets are set in
+the config file, and the interval is a CLI flag.
+
+```ini
+# Master switch — queue:autoscale exits immediately when false
 QUEUE_AUTOSCALE_ENABLED=true
 
-# Queue Connection (must match your queue config)
-QUEUE_CONNECTION=redis
+# Stable identity for this manager; auto-generated when unset
+QUEUE_AUTOSCALE_MANAGER_ID=
 
-# Redis (if using Redis queue)
-REDIS_HOST=127.0.0.1
-REDIS_PASSWORD=null
-REDIS_PORT=6379
+# Signal stores: auto | redis | null | a FQCN
+QUEUE_AUTOSCALE_PICKUP_TIME_STORE=auto
+QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER=auto
 
-# Logging
-LOG_CHANNEL=stack
-LOG_LEVEL=info
+# Failure fuse
+QUEUE_AUTOSCALE_FUSE_ENABLED=true
+QUEUE_AUTOSCALE_FUSE_STORE=auto
+
+# Algorithm tuning
+QUEUE_AUTOSCALE_FALLBACK_JOB_TIME=2.0
+
+# Manager
+QUEUE_AUTOSCALE_LOG_CHANNEL=stack
+QUEUE_AUTOSCALE_RESTART_SCOPE=
+QUEUE_AUTOSCALE_HONOR_QUEUE_RESTART=true
+
+# Cluster mode
+QUEUE_AUTOSCALE_CLUSTER_ENABLED=false
+QUEUE_AUTOSCALE_CLUSTER_HEARTBEAT_TTL=15
+QUEUE_AUTOSCALE_CLUSTER_LEADER_LEASE=15
+QUEUE_AUTOSCALE_CLUSTER_RECOMMENDATION_TTL=30
+QUEUE_AUTOSCALE_CLUSTER_SUMMARY_TTL=30
+QUEUE_AUTOSCALE_DECISION_HISTORY=3600
+QUEUE_AUTOSCALE_DECISION_HISTORY_MAX=10000
+
+# Alerting and telemetry
+QUEUE_AUTOSCALE_ALERT_COOLDOWN=300
+QUEUE_AUTOSCALE_TELEMETRY_ENABLED=true
+QUEUE_AUTOSCALE_TELEMETRY_CACHE_TTL=10
 ```
 
-### Optional Environment Variables
+Plus the metrics package's own variables — at minimum `QUEUE_METRICS_STORAGE` and, for Redis,
+`QUEUE_METRICS_CONNECTION`.
 
-```env
-# Override config values
-AUTOSCALE_EVALUATION_INTERVAL=5
-AUTOSCALE_DEFAULT_SLA=30
-AUTOSCALE_MIN_WORKERS=1
-AUTOSCALE_MAX_WORKERS=10
+### A note on `manager.evaluation_interval_seconds`
+
+The published config contains `manager.evaluation_interval_seconds`, but the running loop does not
+consult it: `queue:autoscale` reads its own `--interval` option (default `5`) and passes that to the
+manager. Set the interval on the command line in your Supervisor or systemd unit.
+
+## What the spawned workers actually run
+
+`WorkerSpawner` builds the command as an explicit argument array — no shell, no interpolation:
+
+```bash
+php artisan queue:work {connection} \
+    --queue={queue} \
+    --tries={workers.tries} \
+    --max-time={workers.timeout_seconds} \
+    --sleep={workers.sleep_seconds}
 ```
 
-## Scaling Configuration
+Those five flags are the complete list. In particular:
 
-### Production Recommendations
+- **`workers.timeout_seconds` maps to `--max-time`, not `--timeout`.** It bounds the worker's
+  *lifetime* (default `3600` seconds), not how long a single job may run. Per-job timeouts remain a
+  Laravel concern — set `$timeout` on the job class or `retry_after` on the connection.
+- **There is no memory flag.** The spawner never passes `--memory`. Worker memory is bounded by
+  PHP's own `memory_limit` and by the manager's `limits.max_memory_percent` ceiling, which stops new
+  workers being spawned rather than stopping existing ones.
 
-Pick the shipped profile that matches your traffic shape. See [Workload Profiles](../basic-usage/workload-profiles.md) for the full reference.
+Group workers run the same command with a comma-separated queue list
+(`--queue=high,medium,low`), which gives Laravel's strict left-to-right priority.
 
-#### High-Traffic Application
+Three environment variables are injected into every spawned worker, and only these three:
 
-```php
-use Cbox\LaravelQueueAutoscale\Configuration\Profiles\HighVolumeProfile;
+| Variable | Value |
+|---|---|
+| `LARAVEL_AUTOSCALE_WORKER` | `true` |
+| `AUTOSCALE_MANAGER_ID` | The manager's id |
+| `AUTOSCALE_WORKER_GROUP` | The group name — **group workers only** |
 
-'sla_defaults' => HighVolumeProfile::class,  // 20s SLA, 3-40 workers, moderate forecast
-'scaling' => ['cooldown_seconds' => 30],     // Quick reactions
-'manager' => ['evaluation_interval_seconds' => 5],
-```
-
-#### Medium-Traffic Application
-
-```php
-use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
-
-'sla_defaults' => BalancedProfile::class,    // 30s SLA, 1-10 workers
-'scaling' => ['cooldown_seconds' => 60],
-```
-
-#### Low-Traffic Application
-
-```php
-use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BackgroundProfile;
-
-'sla_defaults' => BackgroundProfile::class,  // 300s SLA, 0-5 workers
-'scaling' => ['cooldown_seconds' => 120],
-'manager' => ['evaluation_interval_seconds' => 10],
-```
+Use `LARAVEL_AUTOSCALE_WORKER` in your app if you need to distinguish autoscaler-spawned workers
+from manually supervised ones.
 
 ## Monitoring
 
-### Log Monitoring
-
 ```bash
-# Real-time log monitoring
-tail -f storage/logs/laravel.log | grep autoscale
+# Follow the autoscaler's log channel (queue-autoscale.manager.log_channel)
+tail -f storage/logs/laravel.log | grep -i autoscale
 
-# Filter for specific queue
-tail -f storage/logs/laravel.log | grep "autoscale.*default"
+# Cluster state, human-readable or as JSON
+php artisan queue:autoscale:cluster
+php artisan queue:autoscale:cluster --json
 
-# Watch scaling events
-tail -f storage/logs/laravel.log | grep "WorkersScaled"
+# What the autoscaler sees for one queue
+php artisan queue:autoscale:debug --queue=default --connection=redis
+
+# Live worker processes
+watch -n 1 'ps aux | grep "[q]ueue:work"'
 ```
 
-### Supervisor Monitoring
+For a health endpoint, hang it off the event stream rather than a policy — `WorkersScaled` and
+`ScalingDecisionMade` are dispatched on every cycle that reaches a decision:
 
-```bash
-# Status check
-sudo supervisorctl status queue-autoscale
+```php
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Illuminate\Support\Facades\Event;
 
-# Graceful restart on deploy (php artisan queue:restart also works)
-php artisan queue:autoscale:restart
-
-# Force restart if the manager is wedged
-sudo supervisorctl restart queue-autoscale
-
-# View recent logs
-sudo supervisorctl tail queue-autoscale
-
-# Follow logs
-sudo supervisorctl tail -f queue-autoscale
+// AppServiceProvider::boot()
+Event::listen(ScalingDecisionMade::class, function (ScalingDecisionMade $event): void {
+    cache()->put('autoscale:last_decision_at', now()->timestamp, 600);
+});
 ```
-
-### Health Checks
-
-Create a health check endpoint:
 
 ```php
 // routes/web.php
 Route::get('/health/autoscale', function () {
-    $lastDecision = cache()->get('autoscale:last_decision');
+    $lastDecisionAt = cache()->get('autoscale:last_decision_at');
 
-    if (!$lastDecision || $lastDecision < now()->subMinutes(5)) {
+    if ($lastDecisionAt === null || $lastDecisionAt < now()->subMinutes(5)->timestamp) {
         return response()->json(['status' => 'unhealthy'], 503);
     }
 
@@ -470,245 +451,111 @@ Route::get('/health/autoscale', function () {
 });
 ```
 
-Add to autoscaler:
+See [Monitoring](../basic-usage/monitoring.md) and
+[Event Handling](../basic-usage/event-handling.md) for the full event list.
 
-```php
-// In a custom policy
-public function after(ScalingDecision $decision): void
-{
-    cache()->put('autoscale:last_decision', now(), 600);
-}
-```
+## Tuning under pressure
 
-## Performance Optimization
+### CPU saturation
 
-### 1. Queue Backend
+Lower the ceiling for one queue:
 
-**Redis** (Recommended for high throughput)
-```php
-'redis' => [
-    'driver' => 'redis',
-    'connection' => 'default',
-    'queue' => 'default',
-    'retry_after' => 90,
-    'block_for' => null,
-],
-```
-
-**Database** (Good for moderate throughput)
-```php
-'database' => [
-    'driver' => 'database',
-    'table' => 'jobs',
-    'queue' => 'default',
-    'retry_after' => 90,
-],
-```
-
-### 2. System Resources
-
-Ensure adequate resources:
-
-```bash
-# Check CPU cores
-nproc
-
-# Check memory
-free -h
-
-# Monitor resource usage
-htop
-
-# Watch worker processes
-watch -n 1 'ps aux | grep "queue:work"'
-```
-
-### 3. Worker Configuration
-
-Configure worker limits in queue:work command:
-
-The autoscaler spawns workers with:
-```bash
-php artisan queue:work {connection} \
-    --queue={queue} \
-    --tries=3 \
-    --timeout=60 \
-    --memory=128 \
-    --sleep=1
-```
-
-Customize in `WorkerSpawner` if needed.
-
-## Troubleshooting Deployment
-
-### Workers Not Starting
-
-**Check Supervisor:**
-```bash
-sudo supervisorctl status
-sudo supervisorctl tail queue-autoscale stderr
-```
-
-**Check Permissions:**
-```bash
-# Ensure storage is writable
-chmod -R 775 storage
-chown -R www-data:www-data storage
-
-# Check process user can execute artisan
-sudo -u www-data php artisan queue:autoscale
-```
-
-### Workers Not Stopping
-
-**Check graceful shutdown:**
-```bash
-# Test manual stop
-sudo supervisorctl stop queue-autoscale
-
-# Should terminate all workers within 30s
-ps aux | grep "queue:work"
-```
-
-**Increase timeout if needed:**
-```ini
-# In supervisor config
-stopwaitsecs=60  # Increase to 60s
-```
-
-### Memory Issues
-
-**Limit per-worker memory:**
-```bash
-# In WorkerSpawner, add memory limit
---memory=128  # 128 MB per worker
-```
-
-**Monitor memory usage:**
-```bash
-watch -n 1 'ps aux | grep "queue:work" | awk "{sum+=\$6} END {print sum/1024\" MB\"}"'
-```
-
-### CPU Overload
-
-**Lower the worker ceiling for one queue:**
 ```php
 'queues' => [
     'heavy' => ['workers' => ['max' => 10]],
 ],
 ```
 
-**Or tighten the global CPU cap so the autoscaler backs off sooner:**
-```php
-'limits' => ['max_cpu_percent' => 75],
-```
-
-**Increase evaluation interval:**
-```php
-'manager' => ['evaluation_interval_seconds' => 10],
-```
-
-## Security Considerations
-
-### 1. User Permissions
-
-```bash
-# Run as non-root user
-user=www-data  # In supervisor config
-
-# Limit file permissions
-chmod 644 config/queue-autoscale.php
-```
-
-### 2. Resource Limits
+Or tighten the global cap so the autoscaler backs off sooner:
 
 ```php
-// Prevent resource exhaustion at the host level
 'limits' => [
-    'max_cpu_percent' => 85,
-    'max_memory_percent' => 85,
-],
-'manager' => ['evaluation_interval_seconds' => 5],
-```
-
-### 3. Queue Isolation
-
-```php
-// Separate critical from non-critical via per-queue bounds
-'queues' => [
-    'critical' => ['workers' => ['max' => 20]],
-    'low-priority' => ['workers' => ['max' => 5]],
+    'max_cpu_percent' => 75,
+    'reserve_cpu_cores' => 0.5,
 ],
 ```
 
-## Backup and Recovery
+`CapacityCalculator` samples CPU for roughly one second per refresh and caches the result for four
+seconds, so an interval below about 5 seconds spends a noticeable share of each cycle sampling.
+Raising `--interval` is the correct lever if the manager itself is expensive.
 
-### Graceful Shutdown
+### Memory pressure
 
-```bash
-# Stop accepting new evaluations
-sudo supervisorctl stop queue-autoscale
-
-# Wait for current evaluation to complete
-sleep 10
-
-# All workers should terminate gracefully
-```
-
-### Emergency Stop
+`limits.worker_memory_mb_estimate` (default `128`) is the per-worker estimate used to compute the
+memory ceiling. Measure your workers' real RSS and set it accordingly — an estimate that is too low
+lets the autoscaler over-commit the host.
 
 ```bash
-# Force stop (SIGKILL)
-sudo supervisorctl stop queue-autoscale
-sudo pkill -9 -f "queue:autoscale"
-sudo pkill -9 -f "queue:work"
+ps -o rss= -C php --sort=-rss | head
 ```
+
+### Flapping
+
+`scaling.cooldown_seconds` (default `60`) does not suppress scaling in general — it blocks
+**direction reversals**. Scaling further in the same direction is always allowed, and a scale-up
+during an SLA breach bypasses the cooldown entirely. Raise it if you see up/down oscillation;
+see [Troubleshooting](../basic-usage/troubleshooting.md).
+
+## Operational runbook
+
+### Graceful restart on deploy
+
+```bash
+php artisan queue:autoscale:restart
+```
+
+The manager finishes the current tick, terminates its workers within
+`workers.shutdown_timeout_seconds`, and exits. The supervisor restarts it.
+
+### Taking over a wedged manager
+
+```bash
+php artisan queue:autoscale --replace
+```
+
+### Emergency stop
+
+```bash
+sudo supervisorctl stop queue-autoscale
+# If anything survives the group stop:
+pkill -f "artisan queue:work"
+```
+
+With `stopasgroup=true`/`killasgroup=true` (or systemd's `KillMode=mixed`) the workers go down with
+the manager, so the second command should normally find nothing.
 
 ### Recovery
 
 ```bash
-# If you also run standalone queue workers outside the autoscaler, release them
+# Release standalone workers you run outside the autoscaler
 php artisan queue:restart
 
-# Start autoscaler
 sudo supervisorctl start queue-autoscale
-
-# Verify workers spawn
-ps aux | grep "queue:work"
+ps aux | grep "[q]ueue:work"
 ```
 
-## Deployment Checklist
+Spawned workers are ordinary `queue:work` processes, so `queue:restart` stops them like any other
+worker. In addition, `RestartSignal` watches the `illuminate:queue:restart` cache key, so
+`php artisan queue:restart` also restarts the **manager** — set
+`QUEUE_AUTOSCALE_HONOR_QUEUE_RESTART=false` if you want the manager to ignore it and only respond to
+`queue:autoscale:restart`.
 
-### Pre-Deployment
+## Deployment checklist
 
-- [ ] Package installed via Composer
-- [ ] Configuration published and customized
-- [ ] SLA targets defined for all queues
-- [ ] Local testing completed
-- [ ] Resource limits configured
-- [ ] Logging configured
-- [ ] Monitoring alerts configured
-
-### Deployment
-
-- [ ] Supervisor/systemd config deployed
-- [ ] Service enabled for auto-start
-- [ ] Service started successfully
-- [ ] Workers spawning as expected
-- [ ] Logs showing normal operation
-- [ ] Health check endpoint responding
-
-### Post-Deployment
-
-- [ ] Monitor for 24 hours
-- [ ] Check SLA compliance
-- [ ] Review scaling decisions
-- [ ] Adjust configuration if needed
-- [ ] Document any customizations
-- [ ] Train team on operation
+- [ ] PHP 8.3+ with `pcntl` and `posix` enabled
+- [ ] `laravel-queue-metrics` configured and returning data from `getAllQueuesWithMetrics()`
+- [ ] `config/queue-autoscale.php` published, profiles chosen per queue
+- [ ] `workers.max` set deliberately for every queue that matters
+- [ ] `limits.worker_memory_mb_estimate` matched to measured worker RSS
+- [ ] Supervisor/systemd unit deployed with group stop and `stopwaitsecs` > shutdown timeout
+- [ ] `--interval` set on the command line
+- [ ] Log channel routed somewhere you actually read
+- [ ] Deploy pipeline calls `queue:autoscale:restart`
+- [ ] Alerting on `Policy beforeScaling failed` and `Failed to spawn worker` log lines
 
 ## Next Steps
 
-- [Monitoring Guide](../basic-usage/monitoring.md) - Set up comprehensive monitoring
-- [Performance Tuning](../basic-usage/performance.md) - Optimize for your workload
-- [Troubleshooting](../basic-usage/troubleshooting.md) - Common issues and solutions
+- [Monitoring](../basic-usage/monitoring.md) - Events, logs and the cluster snapshot
+- [Performance Tuning](../basic-usage/performance.md) - Optimising for your workload
+- [Troubleshooting](../basic-usage/troubleshooting.md) - Common issues and fixes
+- [Security](security.md) - Reporting vulnerabilities and hardening notes

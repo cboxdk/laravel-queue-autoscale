@@ -1,79 +1,107 @@
 ---
 title: "Integrations & Developer Hooks"
-description: "Facade APIs, cluster snapshots, JSON output, and Laravel events for monitor packages and custom integrations"
+description: "Facade APIs, the cluster JSON snapshot, Laravel events and the telemetry provider for monitor packages and custom tooling"
 weight: 25
 ---
 
 # Integrations & Developer Hooks
 
-This page is for package authors and internal platform teams integrating Queue Autoscale with dashboards, monitor packages, alerting, and audit pipelines.
+This page is for package authors and platform teams wiring Queue Autoscale into dashboards, monitor
+packages, alerting and audit pipelines.
 
-## Public Integration Surfaces
+There are four integration surfaces:
 
-Queue Autoscale currently exposes three practical integration surfaces:
-
-1. The Laravel facade / service API
+1. The facade / service API
 2. The cluster JSON snapshot
 3. The Laravel event stream
+4. The optional `cboxdk/laravel-telemetry` provider
 
-Use the facade when your integration runs inside the same Laravel app. Use the JSON snapshot when another process or package wants a stable current-state document. Use events when you need an append-only operational trace.
+Use the facade when your integration runs inside the same Laravel app. Use the JSON snapshot when
+another process wants a current-state document. Use events when you need an append-only operational
+trace. Use telemetry when you already run an OpenTelemetry pipeline.
 
 ## Facade API
+
+`Cbox\LaravelQueueAutoscale\LaravelQueueAutoscale` has exactly two public methods, both exposed
+through the facade:
 
 ```php
 use Cbox\LaravelQueueAutoscale\Facades\LaravelQueueAutoscale;
 
-$cluster = LaravelQueueAutoscale::cluster();
-$metrics = LaravelQueueAutoscale::clusterMetrics();
+$cluster = LaravelQueueAutoscale::cluster();        // array<string, mixed>
+$metrics = LaravelQueueAutoscale::clusterMetrics(); // list<array{name, value, labels}>
 ```
+
+There is no per-queue accessor, no decision history reader and no worker-pool API on the facade.
+Anything else you need comes from events or from resolving the internal classes yourself.
 
 ### `cluster()`
 
-Returns the latest Redis-backed cluster summary as an array.
+Returns the cluster summary published by the current leader, read from `ClusterStore`.
 
-Important notes:
+**It returns an empty array when cluster mode is disabled** (`QUEUE_AUTOSCALE_CLUSTER_ENABLED`
+defaults to `false`), and also before any leader has published a summary. Always guard:
 
-- This is the richest integration surface today.
-- It is intentionally array-based, not a typed DTO contract.
-- New fields may be added over time; integrations should read defensively with `??` defaults.
+```php
+$cluster = LaravelQueueAutoscale::cluster();
+
+if ($cluster === []) {
+    // Cluster mode off, or no summary published yet.
+}
+```
+
+The payload is intentionally an array rather than a typed DTO, and fields are added over time. Read
+defensively with `??` defaults.
 
 ### `clusterMetrics()`
 
-Returns flattened metrics arrays suitable for exporters and simple monitor pipelines.
+Flattens the same summary into exporter-friendly rows:
 
-Important notes:
+```php
+$rows = [
+    ['name' => 'queue_autoscale_cluster_managers', 'value' => 3, 'labels' => ['cluster' => 'my-app']],
+    ['name' => 'queue_autoscale_manager_workers', 'value' => 8, 'labels' => [
+        'cluster' => 'my-app',
+        'manager_id' => 'manager-1',
+        'host' => 'web-01',
+        'leader' => 'true',
+    ]],
+];
+```
 
-- `clusterMetrics()` is narrower than `cluster()`.
-- New manager/workload fields added to the summary do **not** automatically appear as flattened metrics.
-- If you need full workload and lifecycle context, prefer `cluster()`.
+Every row is `['name' => string, 'value' => int|float, 'labels' => array<string, scalar|null>]`.
+The series produced are:
+
+| Scope | Metric names |
+|---|---|
+| Cluster | `queue_autoscale_cluster_managers`, `queue_autoscale_cluster_workers_current`, `queue_autoscale_cluster_workers_required`, `queue_autoscale_cluster_worker_capacity`, `queue_autoscale_cluster_hosts_recommended` |
+| Per manager | `queue_autoscale_manager_workers`, `queue_autoscale_manager_capacity`, `queue_autoscale_manager_cpu_percent`, `queue_autoscale_manager_memory_percent` |
+| Per workload | `queue_autoscale_workload_workers_current`, `queue_autoscale_workload_workers_target`, `queue_autoscale_workload_pending_jobs`, … |
+
+`clusterMetrics()` is deliberately narrower than `cluster()`. New summary fields do **not**
+automatically appear here — if you need full workload and lifecycle context, read `cluster()`.
 
 ## Cluster JSON Snapshot
 
-The CLI exposes the same cluster snapshot in JSON form:
+The CLI exposes the same summary:
 
 ```bash
 php artisan queue:autoscale:cluster --json
 ```
 
-This is useful for:
+Without cluster mode enabled it prints a warning and exits `0` without JSON, and it does the same
+when no summary has been published yet — so a collector should treat "no JSON on stdout" as "not
+ready", not as an error.
 
-- local debugging
-- cron-based collectors
-- sidecar agents
-- monitor packages that want to shell out rather than bind directly to the service
+Useful for local debugging, cron collectors, sidecar agents, and monitor packages that prefer to
+shell out rather than bind to the service.
 
-### Summary Fields
-
-The summary includes cluster-level fields such as:
+### Summary fields
 
 - `cluster_id`
-- `generated_at`
-- `generated_at_unix_ms`
-- `leader_id`
-- `leader_renewed_at`
-- `leader_renewed_at_unix_ms`
-- `leader_lease_ttl_seconds`
-- `leader_expires_at`
+- `generated_at`, `generated_at_unix_ms`
+- `leader_id`, `leader_renewed_at`, `leader_renewed_at_unix_ms`, `leader_lease_ttl_seconds`,
+  `leader_expires_at`
 - `manager_count`
 - `total_workers`
 - `required_workers`
@@ -82,130 +110,194 @@ The summary includes cluster-level fields such as:
 - `scale_signal`
 - `managers`
 - `workloads`
+- `scaling_decisions`
 
-### Manager Fields
+### Manager fields
 
-Each `managers[]` entry includes:
+Each `managers[]` entry:
 
-- `manager_id`
-- `host`
-- `is_leader`
-- `last_seen_at`
-- `last_seen_human`
-- `total_workers`
-- `max_workers`
-- `available_worker_capacity`
-- `capacity_limiter`
-- `cpu_percent`
-- `memory_percent`
-- `memory_total_mb`
-- `memory_used_mb`
-- `memory_free_mb`
-- `queue_count`
-- `group_count`
+- `manager_id`, `host`, `is_leader`
+- `last_seen_at` (unix milliseconds), `last_seen_human`
+- `total_workers`, `max_workers`, `available_worker_capacity`, `capacity_limiter`
+- `cpu_percent`, `cpu_cores`, `cpu_usable_cores`, `cpu_reserved_cores`
+- `memory_percent`, `memory_total_mb`, `memory_used_mb`, `memory_free_mb`
+- `queue_count`, `group_count`
 - `package_version`
-- `queue_workers`
-- `group_workers`
+- `queue_workers`, `group_workers`
 
-### Workload Fields
+The three `cpu_*_cores` fields are floats and can be fractional in cgroup-constrained environments.
 
-Each `workloads[]` entry includes:
+### Workload fields
 
-- `type`
-- `connection`
-- `name`
-- `driver`
-- `current_workers`
-- `target_workers`
-- `worker_min`
-- `worker_max`
-- `sla_target_seconds`
-- `pending`
-- `oldest_job_age`
-- `oldest_job_age_status`
-- `throughput_per_minute`
-- `active_workers`
-- `utilization_percent`
+Each `workloads[]` entry:
+
+- `type` (`queue` or `group`), `connection`, `name`, `driver`
+- `current_workers`, `demand`, `target_workers`
+- `worker_min`, `worker_max`, `sla_target_seconds`
+- `pending`, `oldest_job_age`, `oldest_job_age_status`
+- `throughput_per_minute`, `active_workers`, `utilization_percent`
 - `member_queues`
-- `action`
+- `action` — `'scale_up' | 'scale_down' | 'hold'`
+
+`demand` is the raw per-workload requirement before fair-share allocation; `target_workers` is what
+the allocator granted. A persistent gap between them means the cluster is capacity-bound.
 
 ## Laravel Events
 
-Queue Autoscale now emits both workload events and cluster/lifecycle events.
+All events live in `Cbox\LaravelQueueAutoscale\Events`.
 
-### Workload / scaling events
+### Workload / scaling
 
-- `ScalingDecisionMade`
-- `SlaBreachPredicted`
-- `SlaBreached`
-- `SlaRecovered`
-- `WorkersScaled`
+| Event | Constructor properties |
+|---|---|
+| `ScalingDecisionMade` | `decision` |
+| `SlaBreachPredicted` | `decision` |
+| `WorkersScaled` | `connection, queue, from, to, action, reason` |
+| `SlaBreached` | `connection, queue, oldestJobAge, slaTarget, pending, activeWorkers` |
+| `SlaRecovered` | `connection, queue, currentJobAge, slaTarget, pending, activeWorkers` |
 
-### Cluster / lifecycle events
+`ScalingDecisionMade` and `SlaBreachPredicted` carry the `ScalingDecision` **only** — no metrics
+object and no configuration — and they carry the decision *after* policies have modified it.
 
-- `ClusterScalingSignalUpdated`
-- `AutoscaleManagerStarted`
-- `AutoscaleManagerStopped`
-- `ClusterLeaderChanged`
-- `ClusterManagerPresenceChanged`
-- `ClusterSummaryPublished`
+### Failure fuse
 
-## Choosing Between Snapshot and Events
+| Event | Constructor properties |
+|---|---|
+| `FuseTripped` | `connection, queue, failureRate, samples, failures, thresholdPercent, heldAtWorkers` |
+| `FuseProbing` | `connection, queue, probeWorkers, cooldownSeconds` |
+| `FuseRecovered` | `connection, queue, failureRate, samples` |
 
-Use `cluster()` / `--json` when you need:
+### Cluster / lifecycle
 
-- current cluster topology
-- current leader
-- per-manager capacity and memory
-- current workload targets
-- monitor UI cards and tables
+| Event | Constructor properties |
+|---|---|
+| `AutoscaleManagerStarted` | `managerId, host, clusterEnabled, clusterId, intervalSeconds, startedAt, packageVersion` |
+| `AutoscaleManagerStopped` | `managerId, host, clusterEnabled, clusterId, startedAt, stoppedAt, reason, workerCount, packageVersion` |
+| `ClusterLeaderChanged` | `clusterId, previousLeaderId, currentLeaderId, observedByManagerId, changedAt` |
+| `ClusterManagerPresenceChanged` | `clusterId, managerIds, addedManagerIds, removedManagerIds, leaderId, observedByManagerId, observedAt` |
+| `ClusterSummaryPublished` | `clusterId, leaderId, summary, publishedAt` |
+| `ClusterScalingSignalUpdated` | see `src/Events/ClusterScalingSignalUpdated.php` |
 
-Use events when you need:
+There is no worker-level health event. `src/Workers/ProcessHealthCheck.php` exists but dispatches
+nothing — worker deaths are visible only through the log channel and the next cycle's decision.
 
-- a trace of what happened over time
-- alerting on transitions
-- audit logs
-- asynchronous fan-out into Slack, logs, notifications, analytics, or a monitor package database
-
-In practice, most monitor packages want both:
-
-- snapshot for the current state
-- events for history
-
-## Example: Registering Event Listeners
+### Registering listeners
 
 ```php
-use Cbox\LaravelQueueAutoscale\Events\AutoscaleManagerStarted;
-use Cbox\LaravelQueueAutoscale\Events\AutoscaleManagerStopped;
 use Cbox\LaravelQueueAutoscale\Events\ClusterLeaderChanged;
-use Cbox\LaravelQueueAutoscale\Events\ClusterManagerPresenceChanged;
-use Cbox\LaravelQueueAutoscale\Events\ClusterSummaryPublished;
+use Cbox\LaravelQueueAutoscale\Events\ScalingDecisionMade;
+use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
 use Illuminate\Support\Facades\Event;
 
-Event::listen(AutoscaleManagerStarted::class, fn (AutoscaleManagerStarted $event) => /* persist */);
-Event::listen(AutoscaleManagerStopped::class, fn (AutoscaleManagerStopped $event) => /* persist */);
-Event::listen(ClusterLeaderChanged::class, fn (ClusterLeaderChanged $event) => /* persist */);
-Event::listen(ClusterManagerPresenceChanged::class, fn (ClusterManagerPresenceChanged $event) => /* persist */);
-Event::listen(ClusterSummaryPublished::class, fn (ClusterSummaryPublished $event) => /* persist */);
+Event::listen(ScalingDecisionMade::class, function (ScalingDecisionMade $event): void {
+    // $event->decision->targetWorkers, ->reason, ->capacity?->limitingFactor
+});
+
+Event::listen(WorkersScaled::class, function (WorkersScaled $event): void {
+    // $event->from, $event->to, $event->action
+});
+
+Event::listen(ClusterLeaderChanged::class, function (ClusterLeaderChanged $event): void {
+    // $event->previousLeaderId, $event->currentLeaderId
+});
 ```
 
-## Design Guidance For Monitor Packages
+Events are dispatched from the manager's evaluation loop, which is a long-running CLI process.
+Listeners run synchronously inside the tick — keep them fast, or queue the work.
 
-If you are building a downstream package such as `cboxdk/laravel-queue-monitor`:
+## Telemetry (`cboxdk/laravel-telemetry`)
 
-- Treat `cluster_id + generated_at_unix_ms` as a snapshot identity.
+The integration lives in `src/Telemetry/` and is wired by the service provider only when **all** of
+these hold: `Cbox\Telemetry\TelemetryManager` exists, `queue-autoscale.telemetry.enabled` is true
+(env `QUEUE_AUTOSCALE_TELEMETRY_ENABLED`, default `true`), and `TelemetryManager` is bound in the
+container. Otherwise every part of it is a no-op, so the config can stay on by default.
+
+```php
+'telemetry' => [
+    'enabled' => env('QUEUE_AUTOSCALE_TELEMETRY_ENABLED', true),
+    'cache_ttl' => env('QUEUE_AUTOSCALE_TELEMETRY_CACHE_TTL', 10),
+    'gauges' => [
+        'cluster' => true,
+    ],
+    'events' => true,
+],
+```
+
+`cboxdk/laravel-telemetry` is a `suggest`/dev dependency, not a requirement, and it needs Laravel 12
+or newer.
+
+### Observable cluster gauges
+
+`QueueAutoscaleTelemetryProvider` registers itself under the provider name `cbox.queue-autoscale`
+and, when `telemetry.gauges.cluster` is true, exposes gauges evaluated at scrape time from the
+cluster summary:
+
+| Gauge | Source |
+|---|---|
+| `queue_autoscale.cluster.managers` | `manager_count` |
+| `queue_autoscale.cluster.workers` | `total_workers` |
+| `queue_autoscale.cluster.required_workers` | `required_workers` |
+| `queue_autoscale.cluster.capacity` | `total_worker_capacity` |
+| `queue_autoscale.cluster.utilization` | `utilization_percent` |
+| `queue_autoscale.cluster.recommended_hosts` | `scale_signal.recommended_hosts` |
+| `queue_autoscale.cluster.host.workers` | per-manager `total_workers` |
+| `queue_autoscale.cluster.host.capacity` | per-manager `max_workers` |
+
+Queue depth, job durations and worker counts are deliberately **not** re-exported here — those are
+owned by `laravel-queue-metrics` and telemetry's own queue instrumentation.
+
+### Pushed event metrics
+
+`TelemetryEventSubscriber` is registered as a container singleton and subscribed to the event
+dispatcher. It pushes gauges and counters from inside the manager daemon (push rather than
+observable, because nothing else could evaluate a scrape callback for the daemon's in-memory state),
+flushing at most once per second for per-tick decisions and immediately for rare signals.
+
+It subscribes to `ScalingDecisionMade`, `WorkersScaled`, `SlaBreached`, `SlaRecovered`,
+`AutoscaleManagerStarted`, `AutoscaleManagerStopped`, `ClusterLeaderChanged`, `FuseTripped`,
+`FuseProbing` and `FuseRecovered`, and emits series including `queue_autoscale.workers.target`,
+`queue_autoscale.sla.target`, `queue_autoscale.sla.predicted_pickup`,
+`queue_autoscale.capacity.max_workers`, `queue_autoscale.scaling.actions`,
+`queue_autoscale.sla.breaches`, `queue_autoscale.cluster.leader_changes`,
+`queue_autoscale.fuse.trips` and `queue_autoscale.fuse.state`.
+
+`queue_autoscale.fuse.state` encodes the fuse as a single series — `0` closed, `1` half-open
+(probing), `2` open (holding at `workers.min`) — so a dashboard reads one series instead of
+reconciling several booleans that can disagree mid-transition.
+
+Set `telemetry.events` to `false` to keep the cluster gauges but stop the pushed event metrics.
+
+## Choosing between snapshot and events
+
+Use `cluster()` / `--json` for current state: topology, leader, per-manager capacity and memory,
+current workload targets, dashboard cards and tables.
+
+Use events for history: transitions, alerting, audit logs, and asynchronous fan-out into Slack,
+notifications, analytics or a monitor package's database.
+
+Most monitor packages want both — snapshot for now, events for what happened.
+
+## Design guidance for monitor packages
+
+- Treat `cluster_id` + `generated_at_unix_ms` as the snapshot identity.
 - Treat lifecycle events as append-only history rows.
-- Store `manager_id`, `cluster_id`, `host`, and timestamps on every record.
-- Read summary arrays defensively; prefer null-coalescing defaults over hard assumptions.
-- Use `package_version` to detect mixed-version clusters during rollout.
+- Store `manager_id`, `cluster_id`, `host` and timestamps on every record.
+- Read summary arrays defensively; prefer `??` defaults over hard assumptions.
+- Use `package_version` on each manager entry to detect mixed-version clusters during a rollout.
+- Handle `cluster() === []` as a first-class state, not an error.
 
-## What Is Still Not A First-Class Hook
+## Not currently exposed
 
-These are still not modeled as dedicated APIs/events:
+- A typed DTO contract for the summary — it is an array, and that is deliberate.
+- Host load average.
+- Remaining cooldown time per queue.
+- Distinct heartbeat-stale / manager-expired events; presence changes are reported only through
+  `ClusterManagerPresenceChanged`.
+- Any worker process health event.
 
-- `cpu_load_1m`
-- host-scale cooldown remaining time
-- a typed summary DTO contract
-- explicit heartbeat-stale / manager-expired events separate from presence changes
+## See Also
 
-Those can be added later if the monitor package needs them, but the current surface is already enough for a practical cluster dashboard + event trace.
+- [Event Handling](../basic-usage/event-handling.md) - Listener patterns for the event stream
+- [Cluster Scaling](../basic-usage/cluster-scaling.md) - How the summary is produced
+- [Monitoring](../basic-usage/monitoring.md) - Operational monitoring
+- [Export Cluster Metrics](../cookbook/cluster-metrics-export.md) - A worked exporter recipe

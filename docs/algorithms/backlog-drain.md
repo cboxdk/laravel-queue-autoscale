@@ -1,464 +1,268 @@
 ---
 title: "Backlog Drain"
-description: "SLA-focused algorithm for preventing service level agreement breaches"
+description: "How the SLA-protection calculator sizes workers from backlog, job age and a progressive aggressiveness multiplier"
 weight: 53
 ---
 
 # Backlog Drain
 
-SLA-focused algorithm for preventing service level agreement breaches.
+`BacklogDrainCalculator` produces the **SLA-protection** half of the hybrid strategy: the number of
+workers needed to clear the existing backlog before the oldest job breaches
+`sla.target_seconds`.
 
-## Overview
+Where [Little's Law](littles-law.md) sizes for the incoming flow, this calculator sizes for the
+water already in the tank — and it gets progressively more aggressive as the deadline approaches.
 
-The backlog drain algorithm provides **SLA protection** by:
-- Monitoring oldest job age
-- Detecting imminent SLA breaches
-- Aggressively scaling to meet deadlines
-- Prioritizing SLA compliance over cost
-
-**Goal:** Ensure no job waits longer than the configured `sla.target_seconds`.
-
-## Mathematical Foundation
-
-### Time-to-Breach Calculation
-
-Calculate how much time remains before SLA breach:
-
-```
-Time to Breach = SLA Target - Oldest Job Age
-
-If Time to Breach ≤ 0: Already breaching!
-If Time to Breach ≤ Buffer: Imminent breach!
-```
-
-### Required Throughput
-
-Calculate throughput needed to clear backlog within time:
-
-```
-Required Throughput = Pending Jobs / Time Remaining
-
-Workers Needed = Required Throughput / Processing Rate
-```
-
-## Implementation
-
-### Basic Backlog Drain
+## Signature
 
 ```php
-public function calculateBacklogDrainWorkers(object $metrics, QueueConfiguration $config): int
-{
-    $pendingJobs = $metrics->depth->pending ?? 0;
-    $oldestJobAge = $metrics->depth->oldestJobAgeSeconds ?? 0;
-    $slaTarget = $config->maxPickupTimeSeconds;
-    $processingRate = $metrics->processingRate ?? 0.0;
-
-    if ($pendingJobs === 0) {
-        return $config->minWorkers;
-    }
-
-    // Calculate time remaining before SLA breach
-    $timeRemaining = $slaTarget - $oldestJobAge;
-
-    // If already breaching, scale to maximum immediately
-    if ($timeRemaining <= 0) {
-        return $config->maxWorkers;
-    }
-
-    // If processing rate unknown, scale conservatively
-    if ($processingRate === 0) {
-        return (int) ceil($config->maxWorkers * 0.8);
-    }
-
-    // Calculate workers needed to clear backlog in remaining time
-    $requiredThroughput = $pendingJobs / $timeRemaining;  // jobs/second
-    $workers = (int) ceil($requiredThroughput / $processingRate);
-
-    // Apply limits
-    return max($config->minWorkers, min($config->maxWorkers, $workers));
-}
+public function calculateRequiredWorkers(
+    int $backlog,
+    int $oldestJobAge,
+    int $slaTarget,
+    float $avgJobTime,
+    float $breachThreshold,
+    ?float $effectiveSlaSeconds = null,
+): float
 ```
 
-### With Safety Buffer
+Like Little's Law it returns a **float**; `HybridStrategy` rounds up once and clamps to
+`workers.min`/`workers.max`.
 
-Add warning threshold before actual breach:
+`HybridStrategy` does not pass the raw oldest-job age. It passes `(int) slaSignal`, where
+`slaSignal` is the sliding-window pickup-time percentile (`sla.percentile`, default p95) when the
+`PickupTimeStore` has at least `sla.min_samples` samples inside `sla.window_seconds`, and
+`metrics.oldestJobAge` otherwise.
 
-```php
-public function calculateWithBuffer(object $metrics, QueueConfiguration $config): int
-{
-    $oldestJobAge = $metrics->depth->oldestJobAgeSeconds ?? 0;
-    $slaTarget = $config->maxPickupTimeSeconds;
+## The calculation, step by step
 
-    // Define warning threshold at 80% of SLA
-    $warningThreshold = $slaTarget * 0.8;
+### 1. Nothing to drain
 
-    if ($oldestJobAge < $warningThreshold) {
-        // Normal operation - use Little's Law
-        return $this->littlesLawCalculation($metrics, $config);
-    }
-
-    // Approaching SLA limit - use backlog drain
-    $baseWorkers = $this->calculateBacklogDrainWorkers($metrics, $config);
-
-    // Add safety margin based on proximity to breach
-    $slaUsage = $oldestJobAge / $slaTarget;
-    $safetyMargin = 1.0 + (($slaUsage - 0.8) * 2);  // 1.0x at 80%, 1.4x at 90%, 1.8x at 95%
-
-    $workers = (int) ceil($baseWorkers * $safetyMargin);
-
-    return max($config->minWorkers, min($config->maxWorkers, $workers));
-}
+```text
+if backlog == 0 or avgJobTime <= 0:
+    return 0.0
 ```
 
-## Examples
+### 2. Effective SLA
 
-### Example 1: Normal Operation
-
-**Scenario:**
-- Pending: 100 jobs
-- Oldest age: 10 seconds
-- SLA target: 60 seconds
-- Processing rate: 5 jobs/sec per worker
-
-**Calculation:**
-```
-Time remaining = 60 - 10 = 50 seconds
-SLA usage = 10/60 = 16.7%
-
-Status: Normal (< 80% threshold)
-Action: Use Little's Law instead of backlog drain
+```text
+effectiveSla = effectiveSlaSeconds ?? (float) slaTarget
 ```
 
-### Example 2: Approaching SLA
+`HybridStrategy` always supplies `effectiveSlaSeconds`:
 
-**Scenario:**
-- Pending: 200 jobs
-- Oldest age: 48 seconds
-- SLA target: 60 seconds
-- Processing rate: 10 jobs/sec per worker
-
-**Calculation:**
-```
-Time remaining = 60 - 48 = 12 seconds
-SLA usage = 48/60 = 80%
-
-Required throughput = 200 / 12 = 16.67 jobs/sec
-Workers needed = 16.67 / 10 = 1.67 ≈ 2 workers
-
-Safety margin = 1.0 + ((0.8 - 0.8) × 2) = 1.0x
-Final workers = 2 × 1.0 = 2 workers
+```text
+effectiveSla = max(1.0, sla.target_seconds - spawnLatency)
 ```
 
-### Example 3: Imminent Breach
+`spawnLatency` is the EMA of measured worker spawn time from the `SpawnLatencyTracker`, and is
+`0.0` when `spawn_compensation.enabled` is false for the queue. Budgeting for spawn time means the
+calculator aims to have workers *already processing* by the deadline, not merely started.
 
-**Scenario:**
-- Pending: 500 jobs
-- Oldest age: 55 seconds
-- SLA target: 60 seconds
-- Processing rate: 8 jobs/sec per worker
+### 3. Age-unavailable fallback
 
-**Calculation:**
-```
-Time remaining = 60 - 55 = 5 seconds
-SLA usage = 55/60 = 91.7%
+Not every queue driver can report job age, and a fresh process may have no percentile samples yet.
+When the age signal is `0` but a backlog exists:
 
-Required throughput = 500 / 5 = 100 jobs/sec
-Workers needed = 100 / 8 = 12.5 ≈ 13 workers
-
-Safety margin = 1.0 + ((0.917 - 0.8) × 2) = 1.23x
-Final workers = 13 × 1.23 = 16 workers
+```text
+jobsPerWorker = max(effectiveSla / avgJobTime, 1.0)
+return backlog / jobsPerWorker
 ```
 
-### Example 4: Active Breach
+This path spreads the backlog across the full SLA window and returns immediately — **no
+aggressiveness multiplier is applied**, and no threshold check happens.
 
-**Scenario:**
-- Pending: 300 jobs
-- Oldest age: 65 seconds
-- SLA target: 60 seconds
-- Max workers: 20
+### 4. SLA progress and the threshold
 
-**Calculation:**
-```
-Time remaining = 60 - 65 = -5 seconds
+```text
+slaProgress = min(oldestJobAge / effectiveSla, 1.5)     # capped at 150%
 
-Status: BREACH!
-Action: Scale to maximum immediately
-Workers = 20 (workers.max)
+if slaProgress < breachThreshold:
+    return 0.0
 ```
 
-## SLA Urgency Levels
+`breachThreshold` comes from `scaling.breach_threshold`, whose default is **0.5** (50% of the SLA
+window), read through `AutoscaleConfiguration::breachThreshold()`. Below it, the calculator abstains
+entirely and Little's Law alone decides the target.
 
-Classify urgency and response:
+The 1.5 cap keeps a badly breached queue from producing an unbounded multiplier.
 
-```php
-public function determineSlaUrgency(float $oldestAge, int $slaTarget): string
-{
-    $usage = $oldestAge / $slaTarget;
+### 5. Base workers
 
-    if ($usage >= 1.0) {
-        return 'BREACH';       // Already violating SLA
-    } elseif ($usage >= 0.9) {
-        return 'CRITICAL';     // <10% time remaining
-    } elseif ($usage >= 0.8) {
-        return 'WARNING';      // <20% time remaining
-    } elseif ($usage >= 0.6) {
-        return 'ELEVATED';     // <40% time remaining
-    } else {
-        return 'NORMAL';       // >40% time remaining
-    }
-}
+```text
+timeUntilBreach = effectiveSla - oldestJobAge
 
-public function getScalingResponse(string $urgency, object $metrics, QueueConfiguration $config): int
-{
-    return match($urgency) {
-        'BREACH' => $config->maxWorkers,  // Maximum immediately
-        'CRITICAL' => $this->aggressiveScale($metrics, $config),  // Very aggressive
-        'WARNING' => $this->backlogDrain($metrics, $config),  // Backlog drain
-        'ELEVATED' => $this->cautious Scale($metrics, $config),  // Slightly elevated
-        'NORMAL' => $this->littlesLaw($metrics, $config),  // Standard calculation
-    };
-}
+baseWorkers = timeUntilBreach > 0
+    ? backlog / max(timeUntilBreach / avgJobTime, 1.0)     # still time left
+    : backlog / max(avgJobTime, 0.1)                       # already breached
 ```
 
-## Advanced Features
+The `max(..., 1.0)` floor means a worker is never assumed to clear less than one job in the
+remaining window. In the already-breached branch there is no deadline left to divide by, so the
+backlog is divided by job time directly.
 
-### Drain Rate Tracking
+### 6. Progressive aggressiveness multiplier
 
-Monitor how fast the backlog is being cleared:
+```text
+if slaProgress < 0.5:
+    multiplier = 0.0
+else:
+    multiplier = min(1.0 + 8.0 * (slaProgress - 0.5)^2, 5.0)
 
-```php
-public function calculateDrainRate(array $historicalDepth): float
-{
-    if (count($historicalDepth) < 2) {
-        return 0.0;
-    }
-
-    $recent = array_slice($historicalDepth, -5);  // Last 5 samples
-    $firstDepth = reset($recent);
-    $lastDepth = end($recent);
-    $timeSpan = count($recent) * $this->sampleInterval;  // seconds
-
-    $drainRate = ($firstDepth - $lastDepth) / $timeSpan;  // jobs/second
-
-    return max(0, $drainRate);  // Can't have negative drain
-}
+return baseWorkers * multiplier
 ```
 
-### Predicted Breach Time
+A continuous quadratic curve, so urgency accelerates smoothly instead of stepping — discrete tiers
+would make the target jump and reverse across an evaluation boundary.
 
-Forecast when SLA breach will occur:
+| SLA progress | Multiplier |
+|---|---|
+| 50% (threshold) | 1.00x |
+| 60% | 1.08x |
+| 70% | 1.32x |
+| 80% | 1.72x |
+| 90% | 2.28x |
+| 100% (at SLA) | 3.00x |
+| 110% | 3.88x |
+| 120% | 4.92x |
+| ~121% and beyond | 5.00x (cap) |
 
-```php
-public function predictBreachTime(object $metrics, QueueConfiguration $config): ?int
-{
-    $pendingJobs = $metrics->depth->pending ?? 0;
-    $oldestAge = $metrics->depth->oldestJobAgeSeconds ?? 0;
-    $drainRate = $this->calculateDrainRate($this->historicalDepth);
+The cap engages at `slaProgress ≈ 1.207`, well before the 1.5 progress cap.
 
-    if ($drainRate <= 0 || $pendingJobs === 0) {
-        return null;  // Can't predict
-    }
+The multiplier is the single largest factor in how this calculator behaves under pressure: at the
+SLA line it asks for three times the arithmetically sufficient worker count, and up to five times
+past it.
 
-    // Time until queue is empty at current drain rate
-    $timeToEmpty = $pendingJobs / $drainRate;
+## Worked examples
 
-    // Time until SLA breach
-    $timeToBreach = $config->maxPickupTimeSeconds - $oldestAge;
+All examples use `avgJobTime = 2.0 s`, `sla.target_seconds = 30`, `breach_threshold = 0.5`, and no
+spawn compensation (`effectiveSla = 30.0`). Results are the raw float from the calculator, before
+`HybridStrategy` takes the maximum with Little's Law, rounds up, and clamps.
 
-    // If queue will empty before breach, no breach predicted
-    if ($timeToEmpty < $timeToBreach) {
-        return null;
-    }
+### Example 1: age signal unavailable
 
-    // Breach predicted in X seconds
-    return (int) ceil($timeToBreach);
-}
+| Input | Value |
+|---|---|
+| Backlog | 120 |
+| Age signal | 0 (no p95 samples, driver reports no age) |
+
+```text
+jobsPerWorker = max(30.0 / 2.0, 1.0) = 15
+workers       = 120 / 15 = 8.0
 ```
 
-### Cascading Breach Prevention
+No threshold check, no multiplier — the fallback path returns before both.
 
-Prevent single breach from causing cascade:
+### Example 2: below the threshold
 
-```php
-public function preventCascade(object $metrics, QueueConfiguration $config): int
-{
-    $breachTime = $this->predictBreachTime($metrics, $config);
+| Input | Value |
+|---|---|
+| Backlog | 500 |
+| Age signal | 9 s |
 
-    if ($breachTime === null || $breachTime > 120) {
-        // No imminent breach, normal operation
-        return $this->littlesLaw($metrics, $config);
-    }
-
-    // Breach predicted soon - scale aggressively
-    $baseWorkers = $this->backlogDrain($metrics, $config);
-
-    // Add extra capacity to prevent cascade
-    $cascadeBuffer = 1.5;  // 50% extra capacity
-
-    return (int) ceil($baseWorkers * $cascadeBuffer);
-}
+```text
+slaProgress = 9 / 30 = 0.30  <  0.5
+workers     = 0.0
 ```
 
-## Integration with Hybrid Strategy
+Little's Law decides the target on its own.
 
-```php
-class HybridStrategy
-{
-    public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
-    {
-        $oldestAge = $metrics->depth->oldestJobAgeSeconds ?? 0;
-        $slaTarget = $config->maxPickupTimeSeconds;
-        $slaUsage = $oldestAge / $slaTarget;
+### Example 3: exactly at the threshold
 
-        // Priority 1: SLA breach protection
-        if ($slaUsage >= 0.8) {
-            return $this->backlogDrain($metrics, $config);
-        }
+| Input | Value |
+|---|---|
+| Backlog | 200 |
+| Age signal | 15 s |
 
-        // Priority 2: Trend-based proactive scaling
-        if (($metrics->trend->direction ?? 'stable') === 'up') {
-            return $this->trendBased($metrics, $config);
-        }
-
-        // Priority 3: Steady-state Little's Law
-        return $this->littlesLaw($metrics, $config);
-    }
-
-    private function backlogDrain(object $metrics, QueueConfiguration $config): int
-    {
-        $pending = $metrics->depth->pending ?? 0;
-        $oldestAge = $metrics->depth->oldestJobAgeSeconds ?? 0;
-        $slaTarget = $config->maxPickupTimeSeconds;
-        $rate = $metrics->processingRate ?? 1.0;
-
-        $timeRemaining = max(1, $slaTarget - $oldestAge);  // At least 1 second
-        $requiredThroughput = $pending / $timeRemaining;
-        $workers = (int) ceil($requiredThroughput / $rate);
-
-        // Safety margin based on proximity to breach
-        $slaUsage = $oldestAge / $slaTarget;
-        $safetyMargin = 1.0 + max(0, ($slaUsage - 0.8) * 2);
-
-        $workers = (int) ceil($workers * $safetyMargin);
-
-        return max($config->minWorkers, min($config->maxWorkers, $workers));
-    }
-}
+```text
+slaProgress     = 15 / 30 = 0.50           -> multiplier 1.00x
+timeUntilBreach = 30 - 15 = 15 s
+baseWorkers     = 200 / max(15 / 2.0, 1.0) = 200 / 7.5 = 26.67
+workers         = 26.67 x 1.00 = 26.67
 ```
 
-## Performance Characteristics
+### Example 4: 80% of the SLA window consumed
 
-### Time Complexity
-- **O(1)**: Constant time calculation
-- Very fast, suitable for high-frequency evaluation
+| Input | Value |
+|---|---|
+| Backlog | 200 |
+| Age signal | 24 s |
 
-### Space Complexity
-- **O(1)**: No historical data required
-- Can enhance with history (O(n) for n samples)
-
-### Accuracy
-- **Very High** for SLA protection
-- **May overprovision** slightly for safety
-- **Excellent** at preventing breaches
-
-## Best Practices
-
-1. **Set appropriate thresholds**: Typically 80% SLA usage for activation
-2. **Use safety margins**: Buffer for uncertainty and delays
-3. **Monitor drain rate**: Track how fast backlog is clearing
-4. **Combine with other algorithms**: Use as override, not primary
-5. **Alert on activation**: Log when backlog drain is triggered
-6. **Track breach rate**: Measure actual SLA compliance
-
-## Common Patterns
-
-### Pattern 1: Tiered Response
-
-Different responses at different urgency levels:
-
-```php
-$slaUsage = $oldestAge / $slaTarget;
-
-$workers = match(true) {
-    $slaUsage >= 1.0 => $config->maxWorkers,  // Breach: max immediately
-    $slaUsage >= 0.95 => (int) ceil($baseWorkers * 1.5),  // Critical: 50% buffer
-    $slaUsage >= 0.9 => (int) ceil($baseWorkers * 1.3),  // Warning: 30% buffer
-    $slaUsage >= 0.8 => (int) ceil($baseWorkers * 1.2),  // Elevated: 20% buffer
-    default => $this->littlesLaw($metrics, $config),  // Normal: standard calc
-};
+```text
+slaProgress     = 24 / 30 = 0.80           -> multiplier 1 + 8 x 0.3^2 = 1.72x
+timeUntilBreach = 6 s
+baseWorkers     = 200 / max(6 / 2.0, 1.0) = 200 / 3 = 66.67
+workers         = 66.67 x 1.72 = 114.67
 ```
 
-### Pattern 2: Gradual Escalation
+With `workers.max = 20` this clamps to 20 — the calculator's job is to say how much is needed, the
+engine's job is to say how much is allowed.
 
-Increase urgency over time:
+### Example 5: at the SLA line
 
-```php
-private int $consecutiveHighUsage = 0;
+| Input | Value |
+|---|---|
+| Backlog | 200 |
+| Age signal | 30 s |
 
-public function escalate(float $slaUsage): float
-{
-    if ($slaUsage >= 0.8) {
-        $this->consecutiveHighUsage++;
-    } else {
-        $this->consecutiveHighUsage = 0;
-    }
-
-    // Escalate safety margin with consecutive high usage
-    $escalationFactor = min(2.0, 1.0 + ($this->consecutiveHighUsage * 0.1));
-
-    return $escalationFactor;
-}
+```text
+slaProgress     = 30 / 30 = 1.00           -> multiplier 3.00x
+timeUntilBreach = 0                        -> already-breached branch
+baseWorkers     = 200 / max(2.0, 0.1) = 100
+workers         = 100 x 3.00 = 300
 ```
 
-### Pattern 3: Post-Breach Recovery
+### Example 6: deep breach
 
-Aggressive scaling after breach to prevent recurrence:
+| Input | Value |
+|---|---|
+| Backlog | 200 |
+| Age signal | 60 s |
 
-```php
-public function postBreachRecovery(object $metrics, QueueConfiguration $config): int
-{
-    if (!$this->wasRecentlyBreached()) {
-        return $this->normalCalculation($metrics, $config);
-    }
-
-    // Stay at elevated capacity for recovery period
-    $recoveryWorkers = (int) ceil($config->maxWorkers * 0.8);
-    $normalWorkers = $this->normalCalculation($metrics, $config);
-
-    return max($recoveryWorkers, $normalWorkers);
-}
+```text
+slaProgress     = min(60 / 30, 1.5) = 1.50 -> 1 + 8 x 1.0^2 = 9.0, capped to 5.00x
+timeUntilBreach = -30                      -> already-breached branch
+baseWorkers     = 200 / 2.0 = 100
+workers         = 100 x 5.00 = 500
 ```
 
-## Monitoring and Alerts
+### Example 7: spawn compensation tightening the window
 
-Track SLA performance:
+| Input | Value |
+|---|---|
+| Backlog | 200 |
+| Age signal | 15 s |
+| Measured spawn latency | 4 s |
 
-```php
-// Log SLA usage
-logger()->info('SLA usage', [
-    'queue' => $config->queue,
-    'oldest_age' => $oldestAge,
-    'sla_target' => $slaTarget,
-    'sla_usage_percent' => ($oldestAge / $slaTarget) * 100,
-    'urgency' => $this->determineSlaUrgency($oldestAge, $slaTarget),
-]);
-
-// Alert on high usage
-if ($oldestAge / $slaTarget >= 0.9) {
-    $this->alert->send([
-        'severity' => 'critical',
-        'message' => "SLA breach imminent for queue {$config->queue}",
-        'details' => [
-            'oldest_job_age' => $oldestAge,
-            'sla_target' => $slaTarget,
-            'time_remaining' => $slaTarget - $oldestAge,
-        ],
-    ]);
-}
+```text
+effectiveSla    = max(1.0, 30 - 4) = 26.0
+slaProgress     = 15 / 26 = 0.577          -> multiplier 1 + 8 x 0.077^2 = 1.047x
+timeUntilBreach = 26 - 15 = 11 s
+baseWorkers     = 200 / max(11 / 2.0, 1.0) = 200 / 5.5 = 36.36
+workers         = 36.36 x 1.047 = 38.08
 ```
 
-## See Also
+Compare with Example 3: the same backlog and age produce a larger target once the spawn cost is
+subtracted from the budget.
 
-- [Little's Law](littles-law.md) - Steady-state calculation
-- [Trend Prediction](trend-prediction.md) - Predictive scaling
-- [Resource Constraints](resource-constraints.md) - Resource management
+## What this calculator does not do
+
+- It never returns `workers.max`. It has no access to `workers.max`, `workers.min`, or the current
+  worker count — clamping happens in `HybridStrategy` and `ScalingEngine`.
+- There is no "scale to maximum immediately on breach" branch. The breached case is the
+  `backlog / avgJobTime` base multiplied by the (capped) aggressiveness factor.
+- There is no drain-rate tracker, no breach-time forecaster, and no post-breach recovery mode.
+- It holds no state between calls.
+
+## Properties
+
+- **O(1)** time and space.
+- Deliberately over-provisions near the deadline; the multiplier is the mechanism.
+- Bounded above by the 1.5 progress cap and the 5.0x multiplier cap, and then by config and
+  system capacity in the engine.
+
+## See also
+
+- [Little's Law](littles-law.md) — the steady-state half of the maximum
+- [Resource Constraints](resource-constraints.md) — the capacity ceiling applied afterwards
+- [Architecture](architecture.md) — the full decision pipeline

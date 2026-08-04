@@ -1,20 +1,19 @@
 ---
 title: "Performance Tuning"
-description: "Queue Autoscale for Laravel performance optimization for maximum efficiency and cost-effectiveness"
+description: "Tuning the evaluation interval, cooldown, worker bounds and resource limits for responsiveness and stability"
 weight: 14
 ---
 
 # Performance Tuning
 
-Optimize Queue Autoscale for Laravel for maximum efficiency and cost-effectiveness.
+Tune Queue Autoscale for responsiveness, stability and resource efficiency.
 
 ## Table of Contents
 - [Overview](#overview)
 - [Configuration Tuning](#configuration-tuning)
-- [Strategy Optimization](#strategy-optimization)
+- [Strategy Selection](#strategy-selection)
 - [Resource Efficiency](#resource-efficiency)
 - [Scaling Patterns](#scaling-patterns)
-- [Cost Optimization](#cost-optimization)
 - [Troubleshooting Performance](#troubleshooting-performance)
 
 ## Overview
@@ -22,63 +21,65 @@ Optimize Queue Autoscale for Laravel for maximum efficiency and cost-effectivene
 Performance tuning focuses on:
 - **Response Time**: How quickly autoscaling reacts to load changes
 - **Resource Efficiency**: Minimizing wasted capacity
-- **Cost Effectiveness**: Balancing performance and expenses
-- **SLA Compliance**: Meeting service level agreements consistently
+- **SLA Compliance**: Meeting pickup targets consistently
 
 ### Performance Metrics
 
 **Key Indicators:**
-- SLA compliance rate (target: >99%)
-- Average worker utilization (target: 70-90%)
+- SLA compliance (how often `SlaBreached` fires)
+- Average worker utilization
 - Scaling latency (time to adjust workers)
-- Cost per job processed
-- Oscillation rate (unnecessary scaling events)
+- Oscillation rate (direction reversals on `WorkersScaled`)
 
 ## Configuration Tuning
 
 ### Evaluation Interval
 
-The `evaluation_interval_seconds` controls how often scaling decisions are made.
+The evaluation interval controls how often scaling decisions are made. **It is set by the `--interval` flag on the daemon, and nowhere else:**
 
-```php
-'evaluation_interval_seconds' => 30,  // Default
+```bash
+php artisan queue:autoscale --interval=5   # 5 is the default
 ```
 
-**Faster Intervals (10-20s):**
-- ✅ Quicker response to traffic spikes
-- ✅ Better SLA compliance for burst traffic
-- ❌ Higher CPU overhead
-- ❌ More potential for oscillation
+> `queue-autoscale.manager.evaluation_interval_seconds` exists in the published config and is documented as 5 seconds, but nothing in the package reads it — `AutoscaleConfiguration::evaluationIntervalSeconds()` has no callers. Changing that key has **no effect**. Set the interval on the command line in your supervisor/systemd unit.
 
-**Slower Intervals (60-120s):**
-- ✅ Lower system overhead
-- ✅ More stable, less oscillation
-- ❌ Slower reaction to traffic changes
-- ❌ Risk of SLA breaches during spikes
+**Faster intervals (2-5s):**
+- Quicker response to traffic spikes
+- Better SLA compliance for burst traffic
+- More manager CPU overhead (each cycle samples system metrics and queue metrics)
+- More opportunities to oscillate
 
-**Recommendation:**
-```php
-// Bursty traffic: Fast response needed
-'evaluation_interval_seconds' => 15,
+**Slower intervals (15-60s):**
+- Lower manager overhead
+- More stable
+- Slower reaction to traffic changes; a tight SLA may breach before the next cycle
 
-// Steady traffic: Optimize for stability
-'evaluation_interval_seconds' => 60,
+The interval is a floor on how fast the autoscaler can react, and it is part of the [scale-from-zero latency budget](how-it-works.md#understanding-sla-timing). Keep it well below your tightest `sla.target_seconds`.
 
-// Mixed traffic: Balanced approach
-'evaluation_interval_seconds' => 30,
+```ini
+; supervisor
+command=php /path/to/artisan queue:autoscale --interval=5
 ```
 
 ### Cooldown Period
 
-`scaling.cooldown_seconds` (a top-level global setting) prevents rapid oscillation.
+`scaling.cooldown_seconds` (a top-level global setting, default 60) is **anti-flapping only**. It does not throttle scaling in general:
 
 ```php
-'scaling' => ['cooldown_seconds' => 60],  // Default
+'scaling' => ['cooldown_seconds' => 60],
 ```
 
-**Shorter Cooldown (30-45s):** fast reactions, better for variable traffic, but risk of oscillation.
+What it actually does, per connection+queue key:
 
-**Longer Cooldown (90-180s):** very stable, but slower to adapt and may overprovision during decreasing load.
+- The manager records the time and direction of the last scaling action.
+- Scaling **in the same direction** is always allowed — up, up, up on consecutive cycles is fine.
+- A **direction reversal** within the cooldown window is suppressed, logged as `Anti-flapping: cannot reverse direction during cooldown`.
+- Once the window fully elapses, the stored direction is cleared and the next action in either direction is free.
+- **An SLA breach overrides it for scale-up.** A scale-up during an active breach bypasses the cooldown entirely, so protecting the SLA always wins over anti-flapping.
+
+**Shorter cooldown (30-45s):** faster reversals, better for genuinely variable traffic, more oscillation risk.
+
+**Longer cooldown (90-180s):** very stable, but the queue holds an over- or under-provisioned count for longer after the load turns.
 
 ### Worker Limits
 
@@ -91,15 +92,7 @@ Per-queue bounds live under the `workers` key — set via profile or override:
 ],
 ```
 
-The right ceiling depends on:
-
-```php
-$maxWorkers = min(
-    $systemCpuCores * 2,              // System capacity
-    $budgetPerHour / $workerCost,     // Cost constraints
-    $maxConcurrentJobs,               // Application limits
-);
-```
+`workers.max` is a hard ceiling applied after the strategy and after the host-capacity constraint. When it is the binding constraint, the decision reports `limitingFactor: 'config'` — see [Monitoring → Limiting factor](monitoring.md#limiting-factor).
 
 ### SLA Target
 
@@ -120,53 +113,43 @@ $maxWorkers = min(
 
 See [Workload Profiles](workload-profiles.md) for the full comparison.
 
-## Strategy Optimization
+## Strategy Selection
 
-### Choosing the Right Strategy
-
-**HybridStrategy** (default):
-- ✅ Best all-around performance
-- ✅ Adapts to different traffic patterns
-- ✅ Predictive capabilities
-- Use for: Most production workloads
-
-**Custom Strategies:**
-- Consider if you have:
-  - Very specific traffic patterns
-  - Domain-specific knowledge
-  - Unique cost constraints
-  - Integration with external data
-
-### Tuning Hybrid Strategy
+`queue-autoscale.strategy` is a **plain class string**, read by `AutoscaleConfiguration::strategyClass()`:
 
 ```php
-'strategy' => [
-    'class' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy::class,
-    'options' => [
-        'trend_weight' => 0.7,        // How much to trust trend predictions (0-1)
-        'safety_margin' => 1.2,       // Safety buffer (1.0 = no buffer, 1.5 = 50% buffer)
-        'min_trend_samples' => 3,     // Samples needed for trend analysis
-    ],
+'strategy' => \Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy::class,
+```
+
+There is no options array and no per-strategy tuning keys. Writing `'strategy' => ['class' => ..., 'options' => [...]]` is not understood and will break the container binding at boot.
+
+Four strategies ship with the package:
+
+| Strategy | Behaviour |
+|---|---|
+| `HybridStrategy` (default) | `max(steady-state, backlog-drain)`, plus arrival-rate forecasting, retry-noise correction and a saturation boost |
+| `BacklogOnlyStrategy` | Backlog-drain only — ignores arrival rate and forecasting |
+| `ConservativeStrategy` | Little's Law + backlog-drain with a fixed 25% safety buffer and its own hard-coded 0.75 breach threshold |
+| `SimpleRateStrategy` | Little's Law only, no backlog term and no prediction |
+
+`ConservativeStrategy`'s buffer and threshold are class constants, not config — they do not read `scaling.breach_threshold`.
+
+Two global keys tune the shipped algorithm itself:
+
+```php
+'scaling' => [
+    // Job-time estimate used when metrics have no usable average yet.
+    'fallback_job_time_seconds' => env('QUEUE_AUTOSCALE_FALLBACK_JOB_TIME', 2.0),
+
+    // Fraction of the SLA the oldest job must have consumed before the
+    // backlog-drain calculator contributes anything at all. Default 0.5.
+    'breach_threshold' => 0.5,
 ],
 ```
 
-**Aggressive Scaling (Responsive):**
-```php
-'options' => [
-    'trend_weight' => 0.8,        // Trust predictions more
-    'safety_margin' => 1.3,       // 30% safety buffer
-    'min_trend_samples' => 2,     // React quickly
-]
-```
+`breach_threshold` is a **ratio, not a percentage**: at the default `0.5`, backlog-drain stays silent until the oldest job has consumed half of the SLA target, then ramps its aggressiveness multiplier as the job ages. Lower it (e.g. `0.35`) to start draining earlier at the cost of more scale-up churn; raise it to react later and hold a leaner pool.
 
-**Conservative Scaling (Stable):**
-```php
-'options' => [
-    'trend_weight' => 0.5,        // Less trust in predictions
-    'safety_margin' => 1.1,       // 10% safety buffer
-    'min_trend_samples' => 5,     // Wait for more data
-]
-```
+To replace the algorithm entirely, see [Custom Strategies](../advanced-usage/custom-strategies.md).
 
 ## Resource Efficiency
 
@@ -186,12 +169,9 @@ Per-worker runtime knobs live under the `workers` key of a queue config:
 ],
 ```
 
-**Tuning `timeout_seconds`** (how long a worker is kept alive before recycling). Profile your jobs and set it at p95 + ~30%:
+Note that `timeout_seconds` maps to `--max-time` (total worker lifetime before it exits and is respawned), **not** to `--timeout` (per-job limit). The spawner never passes `--timeout` or `--memory`; set those in `php.ini` or in your own worker supervision if you need them.
 
-```php
-// Look at recent job durations in your metrics store or database.
-// Set timeout_seconds at p95 + 30%.
-```
+**Tuning `timeout_seconds`** (how long a worker is kept alive before recycling). Look at recent job durations in your metrics store and set it comfortably above the longest job you expect a worker to be mid-way through when it recycles.
 
 **Tuning `sleep_seconds`** (how long a worker sleeps when the queue is empty). Higher-frequency queues benefit from 1–2s; background queues save CPU with 5–10s.
 
@@ -201,27 +181,39 @@ The global `limits` section protects the host from runaway spawning:
 
 ```php
 'limits' => [
-    'max_cpu_percent' => 85,            // Skip spawning at or above this
+    'max_cpu_percent' => 85,            // Host CPU the autoscaler is allowed to drive toward
     'max_memory_percent' => 85,         // Same for memory
-    'worker_memory_mb_estimate' => 128, // Used to derive a per-worker ceiling
-    'worker_cpu_core_estimate' => 0.2,  // Baseline CPU cores per worker (fallback)
+    'worker_memory_mb_estimate' => 128, // Assumed memory per worker (fallback)
+    'worker_cpu_core_estimate' => 0.2,  // Assumed CPU cores per worker (fallback)
     'reserve_cpu_cores' => 0.2,         // Cores kept for OS/other services
 ],
 ```
 
-**How the worker ceiling is derived** (see [Resource Constraints](../algorithms/resource-constraints.md) for the full math):
+**How the worker ceiling is derived** (see [Resource Constraints](../algorithms/resource-constraints.md) for the full math). Note that both formulas are expressed as *headroom on top of the workers already running* — the `$currentWorkers +` term is not optional:
 
 ```php
-$maxByMemory = floor(
-    $systemMemoryMb * ($limits['max_memory_percent'] / 100) / $limits['worker_memory_mb_estimate']
+$availableCpuPercent = max($limits['max_cpu_percent'] - $currentCpuPercent, 0);
+$usableCores = max($totalCores - $limits['reserve_cpu_cores'], 0);
+$availableCoreEquivalents = $usableCores * ($availableCpuPercent / 100);
+
+$maxByCpu = $currentWorkers + floor(
+    $availableCoreEquivalents / max($cpuCoresPerWorker, 0.01)
 );
 
-$maxByCpu = floor(($cpuCores - $limits['reserve_cpu_cores']) / $limits['worker_cpu_core_estimate']);
+$availableMemoryPercent = max($limits['max_memory_percent'] - $currentMemoryPercent, 0);
 
-$hostCeiling = min($maxByMemory, $maxByCpu);
+$maxByMemory = $currentWorkers + floor(
+    $totalMemoryMb * ($availableMemoryPercent / 100) / max($memoryMbPerWorker, 1.0)
+);
+
+$hostCeiling = max(min($maxByCpu, $maxByMemory), 0);
 ```
 
-The autoscaler's per-queue `workers.max` is further capped by this host ceiling.
+`$cpuCoresPerWorker` and `$memoryMbPerWorker` default to `limits.worker_cpu_core_estimate` and `limits.worker_memory_mb_estimate`, and are replaced by measured per-queue values once enough samples exist (or by a per-queue `resources` override).
+
+The host ceiling is then divided among queues: each queue's share is `hostCeiling - (workers running for other queues)`, and the per-queue `workers.max` is applied on top of that.
+
+System metrics are cached for 4 seconds inside the capacity calculator, because sampling CPU blocks for a second. If the system-metrics read fails entirely, the calculator falls back to a conservative fixed ceiling and reports `limitingFactor: 'system_metrics_unavailable'`.
 
 ### Queue prioritisation
 
@@ -254,138 +246,81 @@ use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BackgroundProfile;
 
 ## Scaling Patterns
 
+There is no runtime API for overriding a queue's bounds — the facade exposes exactly two methods, `cluster()` and `clusterMetrics()`, both read-only. Everything below is expressed in config or in a policy.
+
 ### Pattern 1: Predictable Daily Traffic
 
-For traffic with daily patterns (business hours):
+The config file is plain PHP, so a business-hours swap can be expressed directly. It is evaluated when the manager boots, so pair it with a scheduled restart at each boundary:
+
+```php
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BackgroundProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
+
+$isBusinessHours = now()->isWeekday() && now()->hour >= 9 && now()->hour < 17;
+
+'queues' => [
+    'exports' => $isBusinessHours ? CriticalProfile::class : BackgroundProfile::class,
+],
+```
 
 ```php
 use Illuminate\Support\Facades\Schedule;
 
-// Scale up before business hours
-Schedule::call(function () {
-    app(AutoscaleManager::class)->overrideMinWorkers('default', 10);
-})->weekdays()->at('08:30');
-
-// Scale down after business hours
-Schedule::call(function () {
-    app(AutoscaleManager::class)->overrideMinWorkers('default', 2);
-})->weekdays()->at('18:00');
+Schedule::command('queue:autoscale:restart')->weekdays()->at('08:55');
+Schedule::command('queue:autoscale:restart')->weekdays()->at('17:00');
 ```
 
-Or use time-based strategy:
+For something that reacts without a restart, write a policy instead — it runs on every decision:
 
 ```php
-'strategy' => \App\Strategies\TimeBasedStrategy::class,
-```
+namespace App\Policies;
 
-### Pattern 2: Event-Driven Spikes
+use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
-For predictable events (sales, releases):
-
-```php
-// Before major event
-Event::listen(MajorEventStarting::class, function () {
-    app(AutoscaleManager::class)->scaleToCapacity('orders', percentage: 80);
-});
-
-// After event
-Event::listen(MajorEventEnded::class, function () {
-    app(AutoscaleManager::class)->resetToNormal('orders');
-});
-```
-
-### Pattern 3: Gradual Ramp-Up
-
-For smooth scaling during increases:
-
-```php
-'options' => [
-    'max_scale_up_percent' => 50,    // Max 50% increase per evaluation
-    'max_scale_down_percent' => 25,  // Max 25% decrease per evaluation
-]
-```
-
-Implementation in custom strategy:
-
-```php
-$targetWorkers = $this->calculateTarget($metrics, $config);
-$currentWorkers = $metrics->activeWorkerCount;
-
-// Limit increase
-if ($targetWorkers > $currentWorkers) {
-    $maxIncrease = (int) ceil($currentWorkers * 0.5);  // 50%
-    $targetWorkers = min($targetWorkers, $currentWorkers + $maxIncrease);
-}
-
-// Limit decrease
-if ($targetWorkers < $currentWorkers) {
-    $maxDecrease = (int) ceil($currentWorkers * 0.25);  // 25%
-    $targetWorkers = max($targetWorkers, $currentWorkers - $maxDecrease);
-}
-```
-
-## Cost Optimization
-
-### Calculate Cost Per Job
-
-```php
-$workerCostPerHour = 0.50;
-$averageJobDuration = 10;  // seconds
-$jobsPerWorkerPerHour = 3600 / $averageJobDuration;  // 360 jobs
-
-$costPerJob = $workerCostPerHour / $jobsPerWorkerPerHour;  // $0.00139
-```
-
-### Optimize Worker Utilization
-
-**Target: 70-90% utilization**
-
-```php
-// Calculate current utilization
-$processingTime = $averageJobDuration * $jobsProcessedPerHour;
-$availableTime = $workers * 3600;
-$utilization = $processingTime / $availableTime;
-
-if ($utilization < 0.7) {
-    // Underutilized: Reduce workers
-} elseif ($utilization > 0.9) {
-    // Overutilized: Add workers
-}
-```
-
-### Cost-Aware Strategy
-
-Implement budget constraints:
-
-```php
-class CostAwareStrategy implements ScalingStrategyContract
+class BusinessHoursFloorPolicy implements ScalingPolicy
 {
-    public function calculateTargetWorkers(object $metrics, QueueConfiguration $config): int
+    public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
     {
-        // Calculate ideal workers
-        $idealWorkers = $this->calculateIdeal($metrics, $config);
+        $isBusinessHours = now()->isWeekday() && now()->hour >= 9 && now()->hour < 17;
 
-        // Apply budget constraint
-        $hourlyBudget = 100.00;
-        $workerCost = 0.50;
-        $maxAffordableWorkers = (int) floor($hourlyBudget / $workerCost);
+        if (! $isBusinessHours || $decision->targetWorkers >= 10) {
+            return null;
+        }
 
-        return min($idealWorkers, $maxAffordableWorkers);
+        return new ScalingDecision(
+            connection: $decision->connection,
+            queue: $decision->queue,
+            currentWorkers: $decision->currentWorkers,
+            targetWorkers: 10,
+            reason: 'BusinessHoursFloorPolicy: enforcing a floor of 10 workers 09:00-17:00',
+            predictedPickupTime: $decision->predictedPickupTime,
+            slaTarget: $decision->slaTarget,
+            capacity: $decision->capacity,
+            spawnCompensation: $decision->spawnCompensation,
+        );
     }
+
+    public function afterScaling(ScalingDecision $decision): void {}
 }
 ```
 
-### Spot Instance Strategy
+A policy floor is applied **after** `workers.max`, so keep it at or below the queue's ceiling.
 
-For cloud deployments, use spot instances for cost savings:
+### Pattern 2: Gradual Ramp-Down
 
-```php
-'worker_spawn_strategy' => 'spot',  // Use spot instances
-'worker_fallback_strategy' => 'on_demand',  // Fallback to on-demand
+Scale-down damping is a policy concern, and the package ships one: `ConservativeScaleDownPolicy` limits each cycle's removal to `max(1, ceil(currentWorkers * 0.25))` — 25% of the current count, at least one worker. It is enabled by default.
 
-'max_spot_workers' => 15,       // Most workers on spot
-'min_on_demand_workers' => 3,   // Guarantee with on-demand
-```
+The shipped `HybridStrategy` also applies its own hysteresis via `TargetSmoother`: when the recent throughput history is statistically stable (coefficient of variation below 5%), scale-down is limited to one worker per cycle before the decision even reaches the policies. Volatile throughput bypasses the smoother entirely.
+
+For a different shape, write your own policy — see [Scaling Policies](scaling-policies.md).
+
+### Pattern 3: Absorbing Bursts Without Spawning
+
+Spawn latency is unavoidable when a queue has to grow from cold. Two ways to avoid paying it:
+
+- Raise `workers.min` so a warm floor is always present.
+- Put correlated queues in a [worker group](queue-topology.md#worker-groups) so idle workers on one member immediately pick up a burst on another.
 
 ## Troubleshooting Performance
 
@@ -398,10 +333,11 @@ For cloud deployments, use spot instances for cost savings:
 **Diagnosis:** run the manager in `-vv` mode and watch the time between evaluation cycles and the `current → target` transitions. If several cycles pass with `current < target` and no spawn, the cooldown or a policy is blocking.
 
 **Solutions:**
-1. Reduce `manager.evaluation_interval_seconds` (default 5s)
-2. Reduce `scaling.cooldown_seconds` (default 60s)
-3. Swap to a profile with a more aggressive forecast policy (`CriticalProfile` or `BurstyProfile`)
-4. Raise `workers.min` so cold-start latency is not a factor
+1. Reduce the daemon's `--interval` (default 5s). This is the only place the interval is set — the config key has no effect.
+2. Reduce `scaling.cooldown_seconds` (default 60s) if the block is a direction reversal
+3. Lower `scaling.breach_threshold` (default 0.5) so backlog-drain engages earlier in the SLA window
+4. Swap to a profile with a more aggressive forecast policy (`CriticalProfile` or `BurstyProfile`)
+5. Raise `workers.min` so cold-start latency is not a factor
 
 ### Issue: Worker Oscillation
 
@@ -418,18 +354,17 @@ Alternatively listen on the `WorkersScaled` event and count direction reversals 
 2. Use a profile with a higher `sla.min_samples` (larger p95 window smooths noise)
 3. Consider a custom policy that rejects small scale-down steps — see [ConservativeScaleDownPolicy](scaling-policies.md)
 
-### Issue: High Costs
+### Issue: Persistently High Worker Count
 
 **Symptoms:**
 - Worker count consistently at or near `workers.max`
-- High cloud bills
 
-**Diagnosis:** listen on the `ScalingDecisionMade` event and record how often the manager reports `limitingFactor === 'config'` — that means the configured max is the bottleneck, not capacity or demand. A single log listener with a counter suffices.
+**Diagnosis:** listen on the `ScalingDecisionMade` event and record how often `$event->decision->capacity->limitingFactor` is `'config'` — that means the configured max is the bottleneck, not host capacity or demand. A single log listener with a counter suffices.
 
 **Solutions:**
 1. Optimise job performance — faster jobs need fewer workers
 2. Relax the SLA: swap to `BalancedProfile` or `BackgroundProfile`, or raise `sla.target_seconds`
-3. Lower `workers.max` if the high count is driving cost faster than it's helping SLA
+3. Lower `workers.max` if the extra workers are not measurably helping the SLA
 4. Use queue prioritisation (critical vs. best-effort queues on separate profiles)
 5. Batch similar small jobs together
 
@@ -448,36 +383,15 @@ Alternatively listen on the `WorkersScaled` event and count direction reversals 
 4. Check for stuck workers via `ps aux | grep queue:work` — a hung worker consumes a slot without draining
 5. Lower `limits.max_cpu_percent` if the host is starving workers
 
-## Performance Benchmarks
+## Tuning Method
 
-### Expected Performance
+Change one knob at a time and measure against the signals in [Monitoring](monitoring.md):
 
-| Traffic Pattern | SLA Compliance | Avg Utilization | Scaling Latency |
-|----------------|----------------|-----------------|-----------------|
-| Steady          | >99%           | 75-85%          | N/A (stable)    |
-| Gradual increase| >98%           | 70-80%          | 30-60s          |
-| Sudden spike    | >95%           | 60-90%          | 15-45s          |
-| Burst traffic   | >90%           | 50-95%          | 10-30s          |
-
-### Tuning for Your Workload
-
-Measure and optimize iteratively:
-
-```php
-// 1. Baseline measurement (1 week)
-$this->measureBaseline();
-
-// 2. Identify bottlenecks
-$this->analyzeMetrics();
-
-// 3. Apply optimizations
-$this->tuneConfiguration();
-
-// 4. Measure improvement
-$this->comparePerformance();
-
-// 5. Repeat
-```
+1. Baseline for a full traffic cycle (typically a week) with the shipped defaults.
+2. Identify the binding constraint from `capacity->limitingFactor` on `ScalingDecisionMade`.
+3. Change the one setting that addresses it (interval, cooldown, `breach_threshold`, `workers.min`/`max`, or the profile).
+4. Re-measure `SlaBreached` frequency and `WorkersScaled` direction reversals.
+5. Repeat.
 
 ## See Also
 
