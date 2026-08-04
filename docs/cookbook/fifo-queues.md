@@ -110,6 +110,14 @@ a single group is the wrong choice at volume.
 
 ## Verifying
 
+```bash
+php artisan queue:autoscale:doctor
+```
+
+Flags any `.fifo` queue configured for more than one worker, with the reminder that the parallelism
+is only real if the backlog spans that many message groups. See
+[Check Your Configuration](../basic-usage/configuration-check.md).
+
 The package's own FIFO behaviour is covered by integration specs that run against
 [ElasticMQ](https://github.com/softwaremill/elasticmq). See [Requirements](../requirements.md) for
 how to start it.

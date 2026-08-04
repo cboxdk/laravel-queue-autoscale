@@ -8,6 +8,7 @@ use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
 use Cbox\LaravelQueueAutoscale\Commands\ClusterAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Commands\DebugQueueCommand;
+use Cbox\LaravelQueueAutoscale\Commands\DoctorCommand;
 use Cbox\LaravelQueueAutoscale\Commands\InstallCommand;
 use Cbox\LaravelQueueAutoscale\Commands\LaravelQueueAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Commands\MigrateConfigCommand;
@@ -215,6 +216,7 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
                 RestartAutoscaleCommand::class,
                 ClusterAutoscaleCommand::class,
                 DebugQueueCommand::class,
+                DoctorCommand::class,
                 MigrateConfigCommand::class,
             ]);
         }

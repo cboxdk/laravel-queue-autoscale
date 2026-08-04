@@ -159,6 +159,18 @@ is that the tenant ID alone is too coarse a message group, and you want `tenant-
 
 ## Verifying
 
+Check the configuration governs what you think it does:
+
+```bash
+php artisan queue:autoscale:doctor
+```
+
+It lists every queue each pattern actually caught, flags a pattern that matches nothing, and says so
+when a cap is per-host because cluster mode is off. See
+[Check Your Configuration](../basic-usage/configuration-check.md).
+
+Then check a single queue's live state:
+
 ```bash
 php artisan queue:autoscale:debug --queue=scrape-tenant-42
 ```
