@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Fuse;
 
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
 use Cbox\LaravelQueueAutoscale\Events\FuseProbing;
 use Cbox\LaravelQueueAutoscale\Events\FuseRecovered;
 use Cbox\LaravelQueueAutoscale\Events\FuseTripped;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Circuit breaker over a queue's job failure rate.
@@ -48,7 +50,29 @@ final readonly class FailureFuse
             return FuseVerdict::closed();
         }
 
-        $window = $this->observeWindow($config);
+        try {
+            $window = $this->observeWindow($config);
+        } catch (\Throwable $e) {
+            // Fail open. The fuse is a safety addition to the scaling path,
+            // and its own unavailability must never be more damaging than not
+            // having it: an unreachable cache would otherwise propagate out of
+            // evaluate(), through ScalingEngine, and abort the manager's whole
+            // evaluation cycle — freezing autoscaling for every queue on the
+            // host, including queues that disabled the fuse and queues on a
+            // different connection entirely.
+            Log::channel(AutoscaleConfiguration::logChannel())->warning(
+                'Failure fuse could not read its store; scaling proceeds unguarded',
+                [
+                    'connection' => $config->connection,
+                    'queue' => $config->queue,
+                    'exception' => $e::class,
+                    'message' => $e->getMessage(),
+                ]
+            );
+
+            return FuseVerdict::closed();
+        }
+
         $total = $window['total'];
         $failures = $window['failures'];
         $failureRate = $total > 0 ? ($failures / $total) * 100.0 : 0.0;

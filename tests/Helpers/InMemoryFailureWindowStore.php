@@ -11,29 +11,39 @@ use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
  * state (including a backdated changed_at to expire the cooldown without
  * sleeping), and assert on what the fuse wrote back.
  */
-final class InMemoryFailureWindowStore implements FailureWindowStoreContract
+class InMemoryFailureWindowStore implements FailureWindowStoreContract
 {
-    public int $total = 0;
+    /**
+     * Counters and state are keyed by (connection, queue), exactly as the real
+     * store is. An earlier version of this double ignored both arguments and
+     * kept a single global counter — which meant the whole fuse suite passed
+     * whether or not FailureFuse read the right key, and is how the fuse being
+     * permanently inert for queue groups stayed invisible.
+     *
+     * @var array<string, array{total: int, failures: int}>
+     */
+    private array $windows = [];
 
-    public int $failures = 0;
-
-    /** @var array{state: string, changed_at: float}|null */
-    public ?array $state = null;
+    /** @var array<string, array{state: string, changed_at: float}> */
+    private array $states = [];
 
     public int $resetCount = 0;
 
     /** @var list<array{connection: string, queue: string, failed: bool, window_seconds: int}> */
     public array $recorded = [];
 
-    public function seedWindow(int $total, int $failures): void
+    /**
+     * Seeds the default (redis, default) window used by most specs. Pass a
+     * connection and queue to seed a specific one.
+     */
+    public function seedWindow(int $total, int $failures, string $connection = 'redis', string $queue = 'default'): void
     {
-        $this->total = $total;
-        $this->failures = $failures;
+        $this->windows[$this->key($connection, $queue)] = ['total' => $total, 'failures' => $failures];
     }
 
-    public function seedState(string $state, float $changedAt): void
+    public function seedState(string $state, float $changedAt, string $connection = 'redis', string $queue = 'default'): void
     {
-        $this->state = ['state' => $state, 'changed_at' => $changedAt];
+        $this->states[$this->key($connection, $queue)] = ['state' => $state, 'changed_at' => $changedAt];
     }
 
     public function recordOutcome(string $connection, string $queue, bool $failed, int $windowSeconds): void
@@ -45,32 +55,40 @@ final class InMemoryFailureWindowStore implements FailureWindowStoreContract
             'window_seconds' => $windowSeconds,
         ];
 
-        $this->total++;
+        $key = $this->key($connection, $queue);
+        $window = $this->windows[$key] ?? ['total' => 0, 'failures' => 0];
+        $window['total']++;
 
         if ($failed) {
-            $this->failures++;
+            $window['failures']++;
         }
+
+        $this->windows[$key] = $window;
     }
 
     public function currentWindow(string $connection, string $queue, int $windowSeconds): array
     {
-        return ['total' => $this->total, 'failures' => $this->failures];
+        return $this->windows[$this->key($connection, $queue)] ?? ['total' => 0, 'failures' => 0];
     }
 
     public function resetWindow(string $connection, string $queue, int $windowSeconds): void
     {
         $this->resetCount++;
-        $this->total = 0;
-        $this->failures = 0;
+        unset($this->windows[$this->key($connection, $queue)]);
     }
 
     public function readState(string $connection, string $queue): ?array
     {
-        return $this->state;
+        return $this->states[$this->key($connection, $queue)] ?? null;
     }
 
     public function writeState(string $connection, string $queue, string $state, float $changedAt): void
     {
-        $this->state = ['state' => $state, 'changed_at' => $changedAt];
+        $this->states[$this->key($connection, $queue)] = ['state' => $state, 'changed_at' => $changedAt];
+    }
+
+    private function key(string $connection, string $queue): string
+    {
+        return "{$connection}\0{$queue}";
     }
 }

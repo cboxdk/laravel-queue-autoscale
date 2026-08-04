@@ -51,7 +51,7 @@ test('trips once the threshold and min_samples are both crossed', function (): v
     expect($verdict->state)->toBe(FuseState::Open);
     expect($verdict->failureRate)->toBe(75.0);
     expect($verdict->workerCeiling(1))->toBe(1);
-    expect($this->store->state['state'])->toBe('open');
+    expect($this->store->readState('redis', 'default')['state'])->toBe('open');
 
     Event::assertDispatched(FuseTripped::class, function (FuseTripped $event): bool {
         return $event->queue === 'default'
@@ -78,7 +78,7 @@ test('resets the window when it trips so the same failures cannot re-trip it', f
     $this->fuse->evaluate($this->config);
 
     expect($this->store->resetCount)->toBe(1);
-    expect($this->store->total)->toBe(0);
+    expect($this->store->currentWindow('redis', 'default', 60)['total'])->toBe(0);
 });
 
 test('stays open until the cooldown has elapsed', function (): void {
@@ -96,7 +96,7 @@ test('moves to half-open once the cooldown has elapsed', function (): void {
     $verdict = $this->fuse->evaluate($this->config);
 
     expect($verdict->state)->toBe(FuseState::HalfOpen);
-    expect($this->store->state['state'])->toBe('half_open');
+    expect($this->store->readState('redis', 'default')['state'])->toBe('half_open');
     Event::assertDispatched(FuseProbing::class);
 });
 
@@ -153,7 +153,7 @@ test('never constrains scaling when disabled for the queue', function (): void {
 
     expect($verdict->state)->toBe(FuseState::Closed);
     expect($verdict->workerCeiling(1))->toBeNull();
-    expect($this->store->state)->toBeNull();
+    expect($this->store->readState('redis', 'default'))->toBeNull();
     Event::assertNotDispatched(FuseTripped::class);
 });
 
@@ -162,6 +162,59 @@ test('treats an unknown persisted state as closed', function (): void {
     $this->store->seedWindow(total: 10, failures: 0);
 
     expect($this->fuse->evaluate($this->config)->state)->toBe(FuseState::Closed);
+});
+
+describe('key isolation', function (): void {
+    test('does not read another queue on the same connection', function (): void {
+        $this->store->seedWindow(total: 100, failures: 100, queue: 'other');
+
+        expect($this->fuse->evaluate($this->config)->state)->toBe(FuseState::Closed);
+    });
+
+    test('does not read the same queue on another connection', function (): void {
+        $this->store->seedWindow(total: 100, failures: 100, connection: 'sqs');
+
+        expect($this->fuse->evaluate($this->config)->state)->toBe(FuseState::Closed);
+    });
+
+    test('does not inherit another queue state', function (): void {
+        $this->store->seedState('open', microtime(true), queue: 'other');
+        $this->store->seedWindow(total: 10, failures: 0);
+
+        expect($this->fuse->evaluate($this->config)->state)->toBe(FuseState::Closed);
+    });
+
+    test('resets only the window it is responsible for', function (): void {
+        $this->store->seedWindow(total: 40, failures: 30);
+        $this->store->seedWindow(total: 40, failures: 30, queue: 'bystander');
+
+        $this->fuse->evaluate($this->config);
+
+        expect($this->store->currentWindow('redis', 'default', 60)['total'])->toBe(0)
+            ->and($this->store->currentWindow('redis', 'bystander', 60)['total'])->toBe(40);
+    });
+});
+
+describe('store faults', function (): void {
+    test('fails open rather than aborting the manager evaluation cycle', function (): void {
+        // The fuse is an addition to the scaling path; its own unavailability
+        // must not be more damaging than not having it. An unhandled throw
+        // here propagates through ScalingEngine and aborts the whole cycle,
+        // freezing autoscaling for every queue on the host — including queues
+        // that disabled the fuse and queues on other connections.
+        $fuse = new FailureFuse(new class extends InMemoryFailureWindowStore
+        {
+            public function currentWindow(string $connection, string $queue, int $windowSeconds): array
+            {
+                throw new RuntimeException('READONLY You cannot write against a read only replica');
+            }
+        });
+
+        $verdict = $fuse->evaluate($this->config);
+
+        expect($verdict->state)->toBe(FuseState::Closed)
+            ->and($verdict->workerCeiling(1))->toBeNull();
+    });
 });
 
 describe('threshold boundaries', function (): void {
@@ -228,8 +281,8 @@ describe('cooldown boundaries', function (): void {
 
         // A stale changed_at would send the very next cycle straight back to
         // half-open, collapsing the cooldown to nothing.
-        expect($this->store->state['state'])->toBe('open')
-            ->and($this->store->state['changed_at'])->toBeGreaterThanOrEqual($before);
+        expect($this->store->readState('redis', 'default')['state'])->toBe('open')
+            ->and($this->store->readState('redis', 'default')['changed_at'])->toBeGreaterThanOrEqual($before);
 
         expect($this->fuse->evaluate($this->config)->state)->toBe(FuseState::Open);
     });
@@ -300,7 +353,7 @@ describe('window resets', function (): void {
         // Failures recorded while held down are evidence about the outage,
         // not about the probe, and would re-trip it before it ran a job.
         expect($this->store->resetCount)->toBe(1)
-            ->and($this->store->total)->toBe(0);
+            ->and($this->store->currentWindow('redis', 'default', 60)['total'])->toBe(0);
     });
 
     test('resets when closing', function (): void {
