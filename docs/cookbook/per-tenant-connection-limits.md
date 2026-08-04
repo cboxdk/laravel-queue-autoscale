@@ -34,7 +34,7 @@ so no attempt is spent waiting. Give each tenant its own queue and cap the worke
 ```php
 // config/queue-autoscale.php
 'queues' => [
-    'tenant.*' => [
+    'scrape-tenant-*' => [
         'profile' => ConnectionLimitedProfile::class,
         'workers' => ['max' => 5],
     ],
@@ -44,23 +44,37 @@ so no attempt is spent waiting. Give each tenant its own queue and cap the worke
 Dispatch to the tenant's queue and nothing else changes:
 
 ```php
-ScrapeStudent::dispatch($student)->onQueue("tenant.{$tenant->id}");
+ScrapeStudent::dispatch($student)->onQueue("scrape-tenant-{$tenant->id}");
 ```
 
-### Pick a separator your driver accepts
+### Naming the queues
+
+Two constraints, and the second matters more than it looks.
 
 **SQS rejects a queue name containing a dot** — `Can only include alphanumeric characters, hyphens, or
 underscores`, with the `.fifo` suffix as the sole exception. Redis and database queues accept dots
-happily. On SQS the scheme has to be `tenant-42`, and the glob has to match what you chose:
+happily. On SQS the scheme has to be `tenant-42` or `tenant_42`. The failure is a remote API error at
+dispatch time, not something this package can warn about, so settle it before the first tenant
+exists.
 
-```php
-'tenant-*' => ['profile' => ConnectionLimitedProfile::class, 'workers' => ['max' => 5]],
-```
+**A glob claims everything after its prefix.** `tenant-*` reads as "the tenant queues", but it matches
+`tenant-admin-notifications` just as happily as `tenant-42`. For a connection-limited rule that means
+capping a queue that has no downstream limit at all — throttling your own operational work to five
+workers because it shares a prefix with something that needed throttling.
 
-The failure is a remote API error at dispatch time, not something this package can warn about, so it
-is worth settling before the first tenant is created.
+The separator is not the fix — swapping a dot for a dash changes nothing about what the pattern
+claims. **Name the queue for the work it does**, as `scrape-tenant-*` does above, so the glob covers a
+workload instead of a prefix. `tenant-admin-notifications` is then in a different namespace entirely
+and cannot be reached however the tenant identifiers are shaped. That property holds as the system
+grows; a carefully narrow pattern only holds until someone adds a queue you did not anticipate.
 
-Three properties make this hold at scale.
+If the names are already fixed and the identifiers are numeric, a character class is the next best
+thing — `tenant-[0-9]*` matches `tenant-42` and leaves `tenant-admin-notifications` alone. And
+[`excluded`](../basic-usage/configuration.md) is the hard backstop either way: it is checked before
+any workload is built, so a queue listed there is untouched however broad the pattern covering its
+neighbours is.
+
+## Three properties that make this hold at scale
 
 **The cap is a fleet cap, not a per-host one.** In cluster mode the leader solves one target for the
 workload, applies `workers.max` to it, and only then distributes the result across hosts. Five stays
@@ -100,8 +114,8 @@ the rule covering everyone else:
 
 ```php
 'queues' => [
-    'tenant.*' => ['profile' => ConnectionLimitedProfile::class, 'workers' => ['max' => 5]],
-    'tenant.acme' => ['profile' => ConnectionLimitedProfile::class, 'workers' => ['max' => 20]],
+    'scrape-tenant-*' => ['profile' => ConnectionLimitedProfile::class, 'workers' => ['max' => 5]],
+    'scrape-tenant-acme' => ['profile' => ConnectionLimitedProfile::class, 'workers' => ['max' => 20]],
 ],
 ```
 
@@ -109,8 +123,8 @@ Overlapping globs resolve in declaration order, first match winning, so regional
 the general one:
 
 ```php
-'tenant.eu-*' => ['profile' => ConnectionLimitedProfile::class, 'workers' => ['max' => 2]],
-'tenant.*'    => ['profile' => ConnectionLimitedProfile::class, 'workers' => ['max' => 5]],
+'scrape-tenant-eu-*' => ['profile' => ConnectionLimitedProfile::class, 'workers' => ['max' => 2]],
+'scrape-tenant-*'    => ['profile' => ConnectionLimitedProfile::class, 'workers' => ['max' => 5]],
 ```
 
 ## When there are more tenants than the hosts can carry
@@ -146,7 +160,7 @@ is that the tenant ID alone is too coarse a message group, and you want `tenant-
 ## Verifying
 
 ```bash
-php artisan queue:autoscale:debug --queue=tenant.42
+php artisan queue:autoscale:debug --queue=scrape-tenant-42
 ```
 
 The output shows the target, the worker count, the limiting factor and the fuse state. `limiting

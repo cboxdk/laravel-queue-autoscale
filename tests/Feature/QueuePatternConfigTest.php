@@ -145,3 +145,53 @@ test('the connection-limited profile caps parallelism and idles at zero', functi
         ->and($profile['workers']['scalable'])->toBeTrue()
         ->and($profile['fuse']['enabled'])->toBeTrue();
 });
+
+test('a broad glob swallows sibling queues that share its prefix', function (): void {
+    // Documented as a hazard rather than fixed, because it is fnmatch working
+    // correctly. 'tenant-*' is a claim over everything beginning 'tenant-',
+    // and an operational queue named for the same tenant is caught by it —
+    // which for a connection-limited rule means capping a queue that has no
+    // downstream limit at all.
+    config()->set('queue-autoscale.queues', [
+        'tenant-*' => ['workers' => ['max' => 5]],
+    ]);
+
+    expect(QueueConfiguration::fromConfig('sqs', 'tenant-42')->workers->max)->toBe(5)
+        ->and(QueueConfiguration::fromConfig('sqs', 'tenant-admin-notifications')->workers->max)->toBe(5);
+});
+
+test('a character class narrows a glob to the names it was meant for', function (): void {
+    // The fix when tenant identifiers are numeric: match the shape of the id
+    // instead of everything after the separator.
+    config()->set('queue-autoscale.queues', [
+        'tenant-[0-9]*' => ['workers' => ['max' => 5]],
+    ]);
+
+    expect(QueueConfiguration::fromConfig('sqs', 'tenant-42')->workers->max)->toBe(5)
+        ->and(QueueConfiguration::fromConfig('sqs', 'tenant-admin-notifications')->workers->max)->not->toBe(5);
+});
+
+test('a workload prefix keeps unrelated queues out of the namespace entirely', function (): void {
+    // The better answer than a narrower pattern: name the queue for the work
+    // it does, so a glob over that workload cannot reach anything else no
+    // matter what the tenant identifier looks like.
+    config()->set('queue-autoscale.queues', [
+        'scrape-tenant-*' => ['workers' => ['max' => 5]],
+    ]);
+
+    expect(QueueConfiguration::fromConfig('sqs', 'scrape-tenant-acme')->workers->max)->toBe(5)
+        ->and(QueueConfiguration::fromConfig('sqs', 'tenant-admin-notifications')->workers->max)->not->toBe(5);
+});
+
+test('exclusion overrides a glob that matches', function (): void {
+    // The hard backstop. Exclusion is checked before any workload is built, so
+    // a queue another supervisor owns stays untouched however broad the
+    // pattern covering its neighbours is.
+    config()->set('queue-autoscale.queues', [
+        'tenant-*' => ['workers' => ['max' => 5]],
+    ]);
+    config()->set('queue-autoscale.excluded', ['tenant-admin-*']);
+
+    expect(AutoscaleConfiguration::isExcluded('tenant-admin-notifications'))->toBeTrue()
+        ->and(AutoscaleConfiguration::isExcluded('tenant-42'))->toBeFalse();
+});
