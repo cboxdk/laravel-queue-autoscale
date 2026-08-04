@@ -43,6 +43,16 @@ These are installed automatically via Composer:
 
 Redis is **not required** for single-host autoscaling. The package works with any Laravel-supported queue driver (`database`, `sqs`, `redis`, etc.).
 
+`redis`, `database` and `sqs` are covered by tests. The SQS specs run against
+[ElasticMQ](https://github.com/softwaremill/elasticmq), which speaks the SQS wire protocol, and cover
+depth reading through the metrics facade end to end:
+
+```bash
+docker run -d --name autoscale-elasticmq -p 9324:9324 softwaremill/elasticmq-native:1.6.11
+```
+
+They skip when it is not running, so the default suite needs nothing installed.
+
 Redis **is required** when:
 
 - **Cluster mode** is enabled (multi-host coordination, leader election, heartbeats)

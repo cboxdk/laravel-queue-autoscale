@@ -1,7 +1,7 @@
 {
     "bomFormat": "CycloneDX",
     "specVersion": "1.5",
-    "serialNumber": "urn:uuid:bed59b35-a18a-5c20-89dd-15ff38426009",
+    "serialNumber": "urn:uuid:09a7abb6-8689-587f-b558-aabb573bec0f",
     "version": 1,
     "metadata": {
         "tools": [
@@ -27,6 +27,68 @@
         }
     },
     "components": [
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/aws/aws-crt-php@v1.2.7",
+            "name": "aws/aws-crt-php",
+            "version": "v1.2.7",
+            "description": "AWS Common Runtime for PHP",
+            "licenses": [
+                {
+                    "license": {
+                        "id": "Apache-2.0"
+                    }
+                }
+            ],
+            "purl": "pkg:composer/aws/aws-crt-php@v1.2.7",
+            "externalReferences": [
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/awslabs/aws-crt-php.git"
+                },
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/awslabs/aws-crt-php/zipball/d71d9906c7bb63a28295447ba12e74723bd3730e"
+                }
+            ],
+            "properties": [
+                {
+                    "name": "cdx:composer:package:isDevRequirement",
+                    "value": "true"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/aws/aws-sdk-php@3.390.4",
+            "name": "aws/aws-sdk-php",
+            "version": "3.390.4",
+            "description": "AWS SDK for PHP - Use Amazon Web Services in your PHP project",
+            "licenses": [
+                {
+                    "license": {
+                        "id": "Apache-2.0"
+                    }
+                }
+            ],
+            "purl": "pkg:composer/aws/aws-sdk-php@3.390.4",
+            "externalReferences": [
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/aws/aws-sdk-php.git"
+                },
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/aws/aws-sdk-php/zipball/51115bd27065e978c2a4cf297f8280d8c39e83da"
+                }
+            ],
+            "properties": [
+                {
+                    "name": "cdx:composer:package:isDevRequirement",
+                    "value": "true"
+                }
+            ]
+        },
         {
             "type": "library",
             "bom-ref": "pkg:composer/brianium/paratest@v7.20.0",
@@ -1357,6 +1419,37 @@
                 {
                     "name": "cdx:composer:package:isDevRequirement",
                     "value": "false"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/mtdowling/jmespath.php@2.9.2",
+            "name": "mtdowling/jmespath.php",
+            "version": "2.9.2",
+            "description": "Declaratively specify how to extract elements from a JSON document",
+            "licenses": [
+                {
+                    "license": {
+                        "id": "MIT"
+                    }
+                }
+            ],
+            "purl": "pkg:composer/mtdowling/jmespath.php@2.9.2",
+            "externalReferences": [
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/jmespath/jmespath.php.git"
+                },
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/jmespath/jmespath.php/zipball/2157c5e50e813ec6a96c1eed3be7f64a20fb32a8"
+                }
+            ],
+            "properties": [
+                {
+                    "name": "cdx:composer:package:isDevRequirement",
+                    "value": "true"
                 }
             ]
         },
@@ -3605,6 +3698,37 @@
                 {
                     "name": "cdx:composer:package:isDevRequirement",
                     "value": "false"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/symfony/filesystem@v8.1.2",
+            "name": "symfony/filesystem",
+            "version": "v8.1.2",
+            "description": "Provides basic utilities for the filesystem",
+            "licenses": [
+                {
+                    "license": {
+                        "id": "MIT"
+                    }
+                }
+            ],
+            "purl": "pkg:composer/symfony/filesystem@v8.1.2",
+            "externalReferences": [
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/symfony/filesystem.git"
+                },
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/symfony/filesystem/zipball/17856b7a222664a26a5ea1cb06ee0721c2438217"
+                }
+            ],
+            "properties": [
+                {
+                    "name": "cdx:composer:package:isDevRequirement",
+                    "value": "true"
                 }
             ]
         },

@@ -8,11 +8,16 @@ use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\ModerateForecastPolicy;
+use Cbox\LaravelQueueAutoscale\Tests\IntegrationTestCase;
 use Cbox\LaravelQueueAutoscale\Tests\TestCase;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 use Cbox\Telemetry\TelemetryManager;
 
-uses(TestCase::class)->in(__DIR__);
+// Scoped rather than ->in(__DIR__) so tests/Integration can claim its own
+// base case: those specs talk to real infrastructure and need queue-metrics'
+// provider registered, which the faked suites deliberately do without.
+uses(TestCase::class)->in('Unit', 'Feature', 'Simulation');
+uses(IntegrationTestCase::class)->in('Integration');
 
 /**
  * The telemetry integration lives behind an optional dev dependency

@@ -31,6 +31,7 @@
         "symfony/process": "^7.0||^8.0"
     },
     "require-dev": {
+        "aws/aws-sdk-php": "^3.390",
         "cboxdk/laravel-telemetry": "^0.3.3",
         "larastan/larastan": "^3.0",
         "laravel/pint": "^1.14",
