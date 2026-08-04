@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Manager;
 
+use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterRecommendation;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
@@ -117,6 +118,7 @@ final class AutoscaleManager
         private readonly ClusterStore $clusterStore,
         private readonly CapacityCalculator $capacity,
         private readonly ResourceEstimateResolver $resolver,
+        private readonly AlertRateLimiter $alerts = new AlertRateLimiter,
     ) {
         $this->pool = new WorkerPool;
         $this->outputBuffer = new WorkerOutputBuffer;
@@ -125,6 +127,38 @@ final class AutoscaleManager
     public function configure(int $interval): void
     {
         $this->interval = $interval;
+    }
+
+    /**
+     * Keep a fuse-held queue visible in the log for as long as it is held.
+     *
+     * Scaling actions are logged when they happen, but a held queue only
+     * scales once — down to workers.min on the trip — and then holds. Without
+     * this, the log falls silent for the rest of the outage, which is exactly
+     * when an operator goes looking for it. Rate-limited the same way SLA
+     * breach risk is, so a long outage produces a periodic line rather than
+     * one per evaluation cycle.
+     */
+    private function logFuseHold(ScalingDecision $decision): void
+    {
+        if ($decision->capacity?->limitingFactor !== 'fuse') {
+            return;
+        }
+
+        if (! $this->alerts->allow("fuse_hold:{$decision->connection}:{$decision->queue}")) {
+            return;
+        }
+
+        Log::channel(AutoscaleConfiguration::logChannel())->warning(
+            'Autoscaling held back by failure fuse',
+            [
+                'connection' => $decision->connection,
+                'queue' => $decision->queue,
+                'current_workers' => $decision->currentWorkers,
+                'target_workers' => $decision->targetWorkers,
+                'reason' => $decision->reason,
+            ]
+        );
     }
 
     public function setOutput(OutputInterface $output): void
@@ -1609,6 +1643,7 @@ final class AutoscaleManager
         // 6. Display decision
         $this->verbose("  📊 Decision: {$currentWorkers} → {$decision->targetWorkers} workers", 'info');
         $this->verbose("     Reason: {$decision->reason}", 'info');
+        $this->logFuseHold($decision);
 
         if ($decision->predictedPickupTime !== null) {
             $this->verbose("     Predicted pickup time: {$decision->predictedPickupTime}s (SLA: {$decision->slaTarget}s)", 'info');
@@ -1767,6 +1802,7 @@ final class AutoscaleManager
 
         $this->verbose("  📊 Group decision: {$currentWorkers} → {$decision->targetWorkers} workers", 'info');
         $this->verbose("     Reason: {$decision->reason}", 'info');
+        $this->logFuseHold($decision);
 
         $slaStatus = $isBreaching ? 'breached' : ($aggregated->oldestJobAge > $group->sla->targetSeconds * 0.8 ? 'warning' : 'ok');
         $this->currentQueueStats[$key] = new QueueStats(
