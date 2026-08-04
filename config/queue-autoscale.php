@@ -118,6 +118,22 @@ return [
         'store' => env('QUEUE_AUTOSCALE_PICKUP_TIME_STORE', 'auto'),
         'percentile_calculator' => SortBasedPercentileCalculator::class,
         'max_samples_per_queue' => 1000,
+
+        /*
+         * Recording a pickup costs a write on the hot path of every job. Since
+         * only `max_samples_per_queue` entries survive, a high-throughput queue
+         * spends that write producing samples the store trims away moments
+         * later — and the survivors describe the last instant of the window
+         * rather than the window as a whole.
+         *
+         * Above `max_per_second` each worker process forwards a uniformly
+         * random subset instead, which costs less and covers the window better.
+         * Set `enabled` to false to record every pickup.
+         */
+        'sampling' => [
+            'enabled' => env('QUEUE_AUTOSCALE_PICKUP_SAMPLING', true),
+            'max_per_second' => env('QUEUE_AUTOSCALE_PICKUP_SAMPLES_PER_SECOND', 100),
+        ],
     ],
 
     /*

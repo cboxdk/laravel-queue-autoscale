@@ -7,6 +7,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\ForecastPolicyContract;
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Pickup\NullPickupTimeStore;
+use Cbox\LaravelQueueAutoscale\Pickup\PickupSampler;
 use Cbox\LaravelQueueAutoscale\Pickup\RedisPickupTimeStore;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\ModerateForecastPolicy;
@@ -101,4 +102,30 @@ test('binds ForecasterContract to LinearRegressionForecaster', function (): void
 test('binds ForecastPolicyContract to ModerateForecastPolicy', function (): void {
     $policy = app(ForecastPolicyContract::class);
     expect($policy)->toBeInstanceOf(ModerateForecastPolicy::class);
+});
+
+test('the pickup sampler is a singleton', function (): void {
+    // Its rate estimate lives in process memory. Resolved fresh per event it
+    // would observe a rate of zero forever, sampling would never engage, and
+    // the optimisation would silently do nothing.
+    expect(app(PickupSampler::class))->toBe(app(PickupSampler::class));
+});
+
+test('sampler configuration reaches the binding', function (): void {
+    config()->set('queue-autoscale.pickup_time.sampling.enabled', true);
+    config()->set('queue-autoscale.pickup_time.sampling.max_per_second', 7);
+
+    $sampler = app(PickupSampler::class);
+
+    for ($i = 0; $i < 100; $i++) {
+        $sampler->shouldRecord();
+    }
+
+    expect((new ReflectionProperty(PickupSampler::class, 'maxPerSecond'))->getValue($sampler))->toBe(7);
+});
+
+test('sampling is disabled by configuration', function (): void {
+    config()->set('queue-autoscale.pickup_time.sampling.enabled', false);
+
+    expect(app(PickupSampler::class)->currentSampleRate())->toBe(1.0);
 });

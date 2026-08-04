@@ -11,6 +11,7 @@ class PickupTimeRecorder
 {
     public function __construct(
         private readonly PickupTimeStoreContract $store,
+        private readonly PickupSampler $sampler,
     ) {}
 
     public function handle(JobProcessing $event): void
@@ -19,6 +20,10 @@ class PickupTimeRecorder
         $pushedAt = $payload['pushedAt'] ?? null;
 
         if (! is_numeric($pushedAt)) {
+            return;
+        }
+
+        if (! $this->sampler->shouldRecord()) {
             return;
         }
 

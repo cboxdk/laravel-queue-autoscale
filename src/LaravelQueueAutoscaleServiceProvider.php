@@ -28,6 +28,7 @@ use Cbox\LaravelQueueAutoscale\Fuse\NullFailureWindowStore;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Manager\SignalHandler;
 use Cbox\LaravelQueueAutoscale\Pickup\NullPickupTimeStore;
+use Cbox\LaravelQueueAutoscale\Pickup\PickupSampler;
 use Cbox\LaravelQueueAutoscale\Pickup\PickupTimeRecorder;
 use Cbox\LaravelQueueAutoscale\Pickup\RedisPickupTimeStore;
 use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
@@ -115,6 +116,19 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
             }
 
             return new $rawClass;
+        });
+
+        // Singleton because the sampler's rate estimate lives in process memory;
+        // resolved per event it would report a rate of zero forever and sample
+        // nothing.
+        $this->app->singleton(PickupSampler::class, function () {
+            $rawEnabled = config('queue-autoscale.pickup_time.sampling.enabled', true);
+            $rawRate = config('queue-autoscale.pickup_time.sampling.max_per_second', 100);
+
+            return new PickupSampler(
+                enabled: (bool) $rawEnabled,
+                maxPerSecond: is_numeric($rawRate) ? (int) $rawRate : 100,
+            );
         });
 
         $this->app->singleton(FailureWindowStoreContract::class, function () {
