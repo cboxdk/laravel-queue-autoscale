@@ -36,7 +36,7 @@ works it out — you, or the autoscaler.
 | What you configure | What the system does with it | What you had to know |
 |---|---|---|
 | A fixed count | Nothing. It runs what you set. | How many workers your load needs. |
-| A ceiling, split by queue depth | Divides your ceiling between queues in proportion to how deep each one is. | How many workers your load needs — the ceiling *is* that guess. |
+| A ceiling, split between queues | Divides your ceiling between queues — by how deep each one is, or by how long each looks like it will take to clear. | How many workers your load needs — the ceiling *is* that guess. |
 | A jobs-per-worker target | Divides queue depth by your target. | How many jobs one worker clears in an acceptable time. |
 | **A pickup-time target** | Measures how long jobs actually take and how fast they arrive, then solves for the count. | **How long a job may wait before it matters to you.** |
 
@@ -66,6 +66,11 @@ break in specific ways:
 
 That last case is why this package has a [failure fuse](basic-usage/failure-fuse.md): when jobs are
 failing rather than queueing, more workers are the wrong answer, and something has to say so.
+
+Some models improve on raw depth by dividing their pool according to how long each queue looks like
+it will take to clear, which does answer the first objection — a queue of slow jobs earns more
+workers than a queue of fast ones. It is a better split. It is still a split: the size of the pool
+being divided is the number you supplied.
 
 Pickup time has none of those failure modes, because it is not a proxy. It is the number you were
 trying to control in the first place, measured directly.
