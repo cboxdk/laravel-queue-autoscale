@@ -18,7 +18,13 @@ Before installing Queue Autoscale for Laravel, ensure your environment meets the
 
 ## PHP Extensions
 
-No additional PHP extensions are required beyond what Laravel itself needs. If you enable cluster mode, the `phpredis` extension or `predis/predis` package is required for Redis connectivity.
+| Extension | Required | Why |
+|---|---|---|
+| `ext-pcntl` | Yes | The manager installs signal handlers so it can shut down gracefully instead of orphaning its workers. |
+| `ext-posix` | Yes | Worker termination and the manager process lock deliver signals by PID. |
+| `phpredis` *or* `predis/predis` | Cluster mode only | Redis connectivity for leader election and cross-host coordination. |
+
+Both required extensions are enforced by Composer. They are present in most PHP CLI builds but are commonly **absent from the official `php:*-fpm` and Alpine Docker images** — build them in, or the manager will fail to start.
 
 ## Package Dependencies
 
