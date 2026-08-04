@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Scaling\Strategies\BacklogOnlyStrategy;
-use Tests\Helpers\MetricsHelper;
+use Cbox\LaravelQueueAutoscale\Testing\QueueMetricsFactory;
 
 beforeEach(function () {
     $this->strategy = app(BacklogOnlyStrategy::class);
@@ -11,7 +11,7 @@ beforeEach(function () {
 });
 
 test('scales based on backlog only', function () {
-    $metrics = MetricsHelper::createMetrics([
+    $metrics = QueueMetricsFactory::make([
         'pending' => 100,
         'throughputPerMinute' => 60.0, // Ignored by this strategy
         'avgDuration' => 1.0,
@@ -26,7 +26,7 @@ test('scales based on backlog only', function () {
 });
 
 test('returns zero workers for empty backlog', function () {
-    $metrics = MetricsHelper::createMetrics();
+    $metrics = QueueMetricsFactory::make();
 
     $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
 
@@ -34,7 +34,7 @@ test('returns zero workers for empty backlog', function () {
 });
 
 test('uses fallback job time instead of deriving it from active workers', function () {
-    $metrics = MetricsHelper::createMetrics([
+    $metrics = QueueMetricsFactory::make([
         'pending' => 30,
         'throughputPerMinute' => 60.0,
         'avgDuration' => 0.0,
@@ -49,7 +49,7 @@ test('uses fallback job time instead of deriving it from active workers', functi
 });
 
 test('scales aggressively for old backlog', function () {
-    $metrics = MetricsHelper::createMetrics([
+    $metrics = QueueMetricsFactory::make([
         'pending' => 50,
         'throughputPerMinute' => 30.0,
         'avgDuration' => 2.0,
@@ -64,7 +64,7 @@ test('scales aggressively for old backlog', function () {
 });
 
 test('provides descriptive reason', function () {
-    $metrics = MetricsHelper::createMetrics([
+    $metrics = QueueMetricsFactory::make([
         'pending' => 100,
         'throughputPerMinute' => 60.0,
         'avgDuration' => 1.0,
@@ -82,7 +82,7 @@ test('provides descriptive reason', function () {
 });
 
 test('provides pickup time prediction', function () {
-    $metrics = MetricsHelper::createMetrics([
+    $metrics = QueueMetricsFactory::make([
         'pending' => 100,
         'throughputPerMinute' => 60.0,
         'avgDuration' => 1.0,
@@ -99,7 +99,7 @@ test('provides pickup time prediction', function () {
 });
 
 test('handles large backlogs efficiently', function () {
-    $metrics = MetricsHelper::createMetrics([
+    $metrics = QueueMetricsFactory::make([
         'pending' => 10000, // Large backlog
         'throughputPerMinute' => 300.0,
         'avgDuration' => 0.5,
@@ -114,7 +114,7 @@ test('handles large backlogs efficiently', function () {
 });
 
 test('reason shows no backlog when queue empty', function () {
-    $metrics = MetricsHelper::createMetrics();
+    $metrics = QueueMetricsFactory::make();
 
     $this->strategy->calculateTargetWorkers($metrics, $this->config);
     $reason = $this->strategy->getLastReason();

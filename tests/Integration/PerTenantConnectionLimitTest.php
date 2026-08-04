@@ -7,10 +7,10 @@ use Cbox\LaravelQueueAutoscale\Configuration\Profiles\ConnectionLimitedProfile;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
+use Cbox\LaravelQueueAutoscale\Testing\QueueMetricsFactory;
 use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Redis;
-use Tests\Helpers\MetricsHelper;
 
 /**
  * A tenant's downstream limit is a promise, so it needs proving against real
@@ -179,7 +179,7 @@ test('a tenant that is behind saturates its allowance and stops there', function
     // enqueued: a thousand jobs, the oldest well past the SLA target, and job
     // durations that make draining them impossible inside the budget.
     foreach (tenantQueues('.', 'pressure') as $queue) {
-        $metrics = MetricsHelper::createMetrics([
+        $metrics = QueueMetricsFactory::make([
             'connection' => 'redis',
             'queue' => $queue,
             'depth' => 1000,

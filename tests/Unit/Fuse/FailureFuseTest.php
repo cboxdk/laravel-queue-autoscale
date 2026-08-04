@@ -7,7 +7,7 @@ use Cbox\LaravelQueueAutoscale\Events\FuseRecovered;
 use Cbox\LaravelQueueAutoscale\Events\FuseTripped;
 use Cbox\LaravelQueueAutoscale\Fuse\FailureFuse;
 use Cbox\LaravelQueueAutoscale\Fuse\FuseState;
-use Cbox\LaravelQueueAutoscale\Tests\Helpers\InMemoryFailureWindowStore;
+use Cbox\LaravelQueueAutoscale\Testing\InMemoryFailureWindowStore;
 use Illuminate\Support\Facades\Event;
 
 beforeEach(function (): void {
