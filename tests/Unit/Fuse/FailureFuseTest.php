@@ -235,6 +235,61 @@ describe('cooldown boundaries', function (): void {
     });
 });
 
+describe('probe deadline', function (): void {
+    test('closes on a healthy but under-sampled probe once the deadline passes', function (): void {
+        // Without a deadline the probe starves itself: it runs at the ceiling
+        // of one worker, the window holds at most 2x window_seconds, and a
+        // queue whose jobs are slower than (2x window / min_samples) can never
+        // reach min_samples — pinned at one worker forever, even fully healthy.
+        $this->store->seedState('half_open', microtime(true) - 121.0);
+        $this->store->seedWindow(total: 6, failures: 0);
+
+        expect($this->fuse->evaluate($this->config)->state)->toBe(FuseState::Closed);
+        Event::assertDispatched(FuseRecovered::class);
+    });
+
+    test('re-trips on an under-sampled probe that is still failing', function (): void {
+        $this->store->seedState('half_open', microtime(true) - 121.0);
+        $this->store->seedWindow(total: 6, failures: 5);
+
+        expect($this->fuse->evaluate($this->config)->state)->toBe(FuseState::Open);
+        Event::assertDispatched(FuseTripped::class);
+    });
+
+    test('keeps probing while still inside the deadline', function (): void {
+        $this->store->seedState('half_open', microtime(true) - 30.0);
+        $this->store->seedWindow(total: 6, failures: 0);
+
+        expect($this->fuse->evaluate($this->config)->state)->toBe(FuseState::HalfOpen);
+    });
+
+    test('the deadline covers a full window turnover, not just the cooldown', function (): void {
+        // cooldown 60s, window 120s -> deadline is 240s, not 60s, so a probe
+        // is never judged before its evidence could have accumulated.
+        $config = makeQueueConfig([
+            'fuse' => ['cooldownSeconds' => 60, 'windowSeconds' => 120, 'minSamples' => 20],
+        ]);
+        $this->store->seedState('half_open', microtime(true) - 200.0);
+        $this->store->seedWindow(total: 3, failures: 0);
+
+        expect($this->fuse->evaluate($config)->state)->toBe(FuseState::HalfOpen);
+
+        $this->store->seedState('half_open', microtime(true) - 241.0);
+        $this->store->seedWindow(total: 3, failures: 0);
+
+        expect($this->fuse->evaluate($config)->state)->toBe(FuseState::Closed);
+    });
+
+    test('a zero-sample probe at the deadline closes rather than staying stuck', function (): void {
+        // No traffic at all during the probe: nothing indicates the dependency
+        // is still broken, so releasing scaling is the safe reading.
+        $this->store->seedState('half_open', microtime(true) - 121.0);
+        $this->store->seedWindow(total: 0, failures: 0);
+
+        expect($this->fuse->evaluate($this->config)->state)->toBe(FuseState::Closed);
+    });
+});
+
 describe('window resets', function (): void {
     test('resets when entering the probe', function (): void {
         $this->store->seedState('open', microtime(true) - 61.0);

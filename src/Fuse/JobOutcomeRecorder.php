@@ -77,6 +77,11 @@ final class JobOutcomeRecorder
 
     private function windowSecondsFor(string $connection, string $queue): int
     {
-        return $this->windowSeconds[$queue] ??= QueueConfiguration::fromConfig($connection, $queue)->fuse->windowSeconds;
+        // Keyed on both, because the window is resolved from both. Keying on
+        // the queue alone gave every connection the first-seen connection's
+        // bucket size, so counters were written into differently-sized buckets
+        // than the manager reads and the fuse saw zeros forever.
+        return $this->windowSeconds["{$connection}\0{$queue}"]
+            ??= QueueConfiguration::fromConfig($connection, $queue)->fuse->windowSeconds;
     }
 }

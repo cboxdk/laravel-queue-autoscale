@@ -48,7 +48,7 @@ final readonly class FailureFuse
             return FuseVerdict::closed();
         }
 
-        $window = $this->store->currentWindow($config->connection, $config->queue, $fuse->windowSeconds);
+        $window = $this->observeWindow($config);
         $total = $window['total'];
         $failures = $window['failures'];
         $failureRate = $total > 0 ? ($failures / $total) * 100.0 : 0.0;
@@ -68,9 +68,18 @@ final readonly class FailureFuse
                 : new FuseVerdict(FuseState::Open, $total, $failures, $failureRate),
 
             FuseState::HalfOpen => match (true) {
-                $total < $fuse->minSamples => new FuseVerdict(FuseState::HalfOpen, $total, $failures, $failureRate),
-                $unhealthy => $this->trip($config, $total, $failures, $failureRate, $now),
-                default => $this->recover($config, $total, $failures, $failureRate, $now),
+                // Enough evidence to judge the probe on its merits.
+                $total >= $fuse->minSamples => $unhealthy
+                    ? $this->trip($config, $total, $failures, $failureRate, $now)
+                    : $this->recover($config, $total, $failures, $failureRate, $now),
+
+                // Not enough yet, but the probe has had long enough that more
+                // waiting will not help — decide on what we have.
+                $this->probeExhausted($config, $changedAt, $now) => $failureRate >= $fuse->failureThresholdPercent
+                    ? $this->trip($config, $total, $failures, $failureRate, $now)
+                    : $this->recover($config, $total, $failures, $failureRate, $now),
+
+                default => new FuseVerdict(FuseState::HalfOpen, $total, $failures, $failureRate),
             },
         };
     }
@@ -125,10 +134,64 @@ final readonly class FailureFuse
         return new FuseVerdict(FuseState::Closed, $total, $failures, $failureRate);
     }
 
+    /**
+     * Outcome counts for everything this configuration is responsible for.
+     *
+     * Workers record outcomes under the REAL queue name they pulled the job
+     * from. A group is scaled as a single unit under the group's name, so
+     * reading the group name alone would find an empty window forever and the
+     * fuse could never trip for any grouped queue.
+     *
+     * @return array{total: int, failures: int}
+     */
+    private function observeWindow(QueueConfiguration $config): array
+    {
+        $total = 0;
+        $failures = 0;
+
+        foreach ($config->sampleQueues() as $queue) {
+            $window = $this->store->currentWindow($config->connection, $queue, $config->fuse->windowSeconds);
+            $total += $window['total'];
+            $failures += $window['failures'];
+        }
+
+        return ['total' => $total, 'failures' => $failures];
+    }
+
+    /**
+     * State is keyed on the scaling identity (the group name for a group),
+     * because the fuse trips for the unit that scales. The window is cleared
+     * per member queue, because that is where the counters live.
+     */
     private function transition(QueueConfiguration $config, FuseState $state, float $now): void
     {
         $this->store->writeState($config->connection, $config->queue, $state->value, $now);
-        $this->store->resetWindow($config->connection, $config->queue, $config->fuse->windowSeconds);
+
+        foreach ($config->sampleQueues() as $queue) {
+            $this->store->resetWindow($config->connection, $queue, $config->fuse->windowSeconds);
+        }
+    }
+
+    /**
+     * Has the probe had long enough that waiting for more samples is futile?
+     *
+     * Without this the half-open state has no deadline, and a queue can be
+     * pinned at the probe ceiling forever: the probe runs at most
+     * max(1, workers.min) workers, the window holds at most 2 x window_seconds
+     * of outcomes, and if that worker cannot finish min_samples jobs in that
+     * span the count never arrives. The throttle that makes the probe safe is
+     * exactly what starves it — a queue whose jobs take longer than
+     * (2 x window_seconds / min_samples) would never recover, which is
+     * precisely the slow downstream-calling workload the fuse targets.
+     *
+     * The deadline covers both the cooldown and a full window turnover, so a
+     * probe is never cut short before its evidence could have accumulated.
+     */
+    private function probeExhausted(QueueConfiguration $config, float $changedAt, float $now): bool
+    {
+        $deadline = max($config->fuse->cooldownSeconds, $config->fuse->windowSeconds * 2);
+
+        return ($now - $changedAt) >= $deadline;
     }
 
     private function now(): float
