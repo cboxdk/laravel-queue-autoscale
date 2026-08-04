@@ -70,10 +70,42 @@ failing rather than queueing, more workers are the wrong answer, and something h
 Pickup time has none of those failure modes, because it is not a proxy. It is the number you were
 trying to control in the first place, measured directly.
 
-**The trade you are making:** deriving workers from latency requires measurement that depth-based
-models do not — how long jobs take, when they were enqueued, when they were picked up. That is why
-this package depends on `cboxdk/laravel-queue-metrics`, and why it needs a few minutes of traffic
-before its estimates settle. A depth-based scaler works from nothing. This one works from evidence.
+### What happens before there is evidence
+
+Deriving workers from latency needs measurement that depth alone does not: how long jobs take, when
+they were enqueued, when they were picked up. A queue that has just been created has none of that.
+
+It does not fall over, and it does not guess. Every input degrades to a cruder one, and the decision
+reason names which it used:
+
+| Input | With evidence | Without it |
+|---|---|---|
+| SLA signal | p95 over observed pickup times | Age of the oldest waiting job |
+| Job duration | Measured average, sanity-bounded | A configured fallback |
+| Arrival rate | Backlog deltas, blended with a forecast | Observed processing rate, then derived from backlog and age |
+| Memory and CPU per worker | Measured from running workers | Your per-queue figure, then a global default |
+| Host capacity | Measured CPU and memory headroom | A deliberately small ceiling |
+
+Read the right-hand column together and it describes a depth-and-age scaler — which is to say, a cold
+start behaves roughly like the models in the table above, and improves from there as evidence arrives.
+You are not worse off on minute one for having chosen this; you are better off by minute ten. The
+`EstimateSource` on every decision tells you which column you are in, so "is it warmed up yet?" is a
+question you can answer rather than assume.
+
+### It stays a good neighbour
+
+A scaling model that only knows queue depth has no idea what machine it is running on. `ceil(20 / 5)`
+is four workers whether the box can carry forty or two.
+
+Every target here is bounded by measured CPU and memory headroom on the host *before* any minimum is
+applied, and each queue can only claim capacity the other queues are not already using. If the host
+cannot be read at all, the ceiling drops to a small conservative number and the decision says
+`system_metrics_unavailable` rather than assuming the machine is empty. An optional
+`limits.max_total_workers` puts a hard cap across every queue and group, for the case where queue
+names are discovered rather than configured.
+
+The failure mode of a queue-depth scaler under a backlog it cannot drain is to keep adding workers.
+The failure mode here is to stop at what the machine has and say why.
 
 ## Key features
 
