@@ -73,9 +73,9 @@ perturb the manager.
 The facade exposes the same numbers as a flat list, ready to render in whatever format your scraper
 expects. See [Export Cluster Metrics](cluster-metrics-export.md) for a complete endpoint.
 
-Note that the facade names the recommendation `queue_autoscale_cluster_hosts_recommended`, while the
-telemetry gauge renders as `queue_autoscale_cluster_recommended_hosts`. They carry the same value.
-Pick one surface and query it consistently rather than assuming a name from the other.
+Both surfaces use the same metric names, so a query written against one works against the other. A
+test pins that agreement, because a name that drifted on one side would silently return nothing on
+the other and look identical to a metric reading zero.
 
 ```php
 use Cbox\LaravelQueueAutoscale\Facades\LaravelQueueAutoscale;
@@ -126,7 +126,7 @@ calmer.
 Two shapes work, and they suit different appetites.
 
 **Target tracking** wants a ratio it can hold at a set point, so publish
-`queue_autoscale_cluster_utilization` to CloudWatch and track it at around 70%. This is the
+`queue_autoscale_cluster_utilization_percent` to CloudWatch and track it at around 70%. This is the
 lower-effort option and behaves well, but it reacts to utilization rather than to the recommendation
 itself, so it will not anticipate a burst the way the worker calculation does.
 

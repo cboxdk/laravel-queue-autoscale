@@ -44,7 +44,7 @@ it('exposes cluster metrics from the published cluster summary', function () {
     $metrics = $service->clusterMetrics();
 
     expect($metrics)->toBeArray()
-        ->and(collect($metrics)->contains(fn (array $metric): bool => $metric['name'] === 'queue_autoscale_cluster_workers_required' && $metric['value'] === 6))->toBeTrue()
-        ->and(collect($metrics)->contains(fn (array $metric): bool => $metric['name'] === 'queue_autoscale_manager_cpu_percent' && $metric['value'] === 41.5))->toBeTrue()
+        ->and(collect($metrics)->contains(fn (array $metric): bool => $metric['name'] === 'queue_autoscale_cluster_required_workers' && $metric['value'] === 6))->toBeTrue()
+        ->and(collect($metrics)->contains(fn (array $metric): bool => $metric['name'] === 'queue_autoscale_cluster_host_cpu_percent' && $metric['value'] === 41.5))->toBeTrue()
         ->and(collect($metrics)->contains(fn (array $metric): bool => $metric['name'] === 'queue_autoscale_workload_pending_jobs' && $metric['value'] === 120))->toBeTrue();
 });

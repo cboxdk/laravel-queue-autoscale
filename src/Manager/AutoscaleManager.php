@@ -7,10 +7,10 @@ namespace Cbox\LaravelQueueAutoscale\Manager;
 use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterRecommendation;
-use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ClusterStoreContract;
 use Cbox\LaravelQueueAutoscale\Events\AutoscaleManagerStarted;
 use Cbox\LaravelQueueAutoscale\Events\AutoscaleManagerStopped;
 use Cbox\LaravelQueueAutoscale\Events\ClusterLeaderChanged;
@@ -117,7 +117,7 @@ class AutoscaleManager
         private readonly PolicyExecutor $policies,
         private readonly SignalHandler $signals,
         private readonly RestartSignal $restartSignal,
-        private readonly ClusterStore $clusterStore,
+        private readonly ClusterStoreContract $clusterStore,
         private readonly CapacityCalculator $capacity,
         private readonly ResourceEstimateResolver $resolver,
         private readonly AlertRateLimiter $alerts = new AlertRateLimiter,

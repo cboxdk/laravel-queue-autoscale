@@ -317,11 +317,11 @@ Evaluated at scrape time from the Redis-backed cluster summary, so they report n
 | `queue_autoscale.cluster.managers` | Active autoscale managers in the cluster |
 | `queue_autoscale.cluster.workers` | Autoscaler-spawned workers across the cluster |
 | `queue_autoscale.cluster.required_workers` | Cluster-wide worker demand |
-| `queue_autoscale.cluster.capacity` | Cluster-wide worker capacity |
+| `queue_autoscale.cluster.worker_capacity` | Cluster-wide worker capacity |
 | `queue_autoscale.cluster.utilization` | Cluster worker capacity utilization, percent |
 | `queue_autoscale.cluster.recommended_hosts` | Host count recommended by the leader |
-| `queue_autoscale.cluster.host.workers` | Workers per host, labelled `host` |
-| `queue_autoscale.cluster.host.capacity` | Worker capacity per host, labelled `host` |
+| `queue_autoscale.cluster.host_workers` | Workers per host, labelled `host` |
+| `queue_autoscale.cluster.host_capacity` | Worker capacity per host, labelled `host` |
 
 The snapshot behind these is cached for `telemetry.cache_ttl` seconds so concurrent scrapes do not all hit the cluster store.
 

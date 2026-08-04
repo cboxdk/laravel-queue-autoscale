@@ -14,6 +14,7 @@ use Cbox\LaravelQueueAutoscale\Commands\LaravelQueueAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Commands\MigrateConfigCommand;
 use Cbox\LaravelQueueAutoscale\Commands\RestartAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ClusterStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\FailureClassifierContract;
 use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ForecasterContract;
@@ -191,6 +192,7 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
         // Register manager
         $this->app->singleton(LaravelQueueAutoscale::class);
         $this->app->singleton(ClusterStore::class);
+        $this->app->bind(ClusterStoreContract::class, ClusterStore::class);
         $this->app->singleton(ManagerProcessLock::class);
         $this->app->singleton(RestartSignal::class);
         $this->app->singleton(SignalHandler::class);

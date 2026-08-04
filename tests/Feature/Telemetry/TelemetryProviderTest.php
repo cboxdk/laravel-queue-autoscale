@@ -41,7 +41,7 @@ it('publishes cluster summary gauges', function () {
     expect($this->fake->gaugeValue('queue_autoscale.cluster.managers', []))->toBe(2.0)
         ->and($this->fake->gaugeValue('queue_autoscale.cluster.workers', []))->toBe(14.0)
         ->and($this->fake->gaugeValue('queue_autoscale.cluster.required_workers', []))->toBe(18.0)
-        ->and($this->fake->gaugeValue('queue_autoscale.cluster.capacity', []))->toBe(40.0)
+        ->and($this->fake->gaugeValue('queue_autoscale.cluster.worker_capacity', []))->toBe(40.0)
         ->and($this->fake->gaugeValue('queue_autoscale.cluster.utilization', []))->toBe(35.0)
         ->and($this->fake->gaugeValue('queue_autoscale.cluster.recommended_hosts', []))->toBe(3.0);
 });
@@ -50,9 +50,9 @@ it('publishes per-host gauges labeled by host', function () {
     bindClusterSnapshot(exampleClusterSummary());
     $this->fake->provider(new QueueAutoscaleTelemetryProvider(app()));
 
-    expect($this->fake->gaugeValue('queue_autoscale.cluster.host.workers', ['host' => 'web-01']))->toBe(8.0)
-        ->and($this->fake->gaugeValue('queue_autoscale.cluster.host.workers', ['host' => 'web-02']))->toBe(6.0)
-        ->and($this->fake->gaugeValue('queue_autoscale.cluster.host.capacity', ['host' => 'web-01']))->toBe(20.0);
+    expect($this->fake->gaugeValue('queue_autoscale.cluster.host_workers', ['host' => 'web-01']))->toBe(8.0)
+        ->and($this->fake->gaugeValue('queue_autoscale.cluster.host_workers', ['host' => 'web-02']))->toBe(6.0)
+        ->and($this->fake->gaugeValue('queue_autoscale.cluster.host_capacity', ['host' => 'web-01']))->toBe(20.0);
 });
 
 it('publishes no samples for an empty cluster snapshot', function () {
@@ -81,7 +81,7 @@ it('coerces non-numeric summary fields to zero instead of throwing', function ()
 
     expect($this->fake->gaugeValue('queue_autoscale.cluster.managers', []))->toBe(0.0);
 
-    $hostFamily = collect($this->fake->collect())->first(fn ($f) => $f->name() === 'queue_autoscale.cluster.host.workers');
+    $hostFamily = collect($this->fake->collect())->first(fn ($f) => $f->name() === 'queue_autoscale.cluster.host_workers');
 
     expect($hostFamily)->not->toBeNull()
         ->and($hostFamily->samples)->toBeEmpty();

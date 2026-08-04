@@ -5,11 +5,12 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Cluster;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ClusterStoreContract;
 use Illuminate\Redis\Connections\Connection;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Support\Facades\Redis;
 
-class ClusterStore
+class ClusterStore implements ClusterStoreContract
 {
     public function heartbeat(ClusterManagerState $state): void
     {

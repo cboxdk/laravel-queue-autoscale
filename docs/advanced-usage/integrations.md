@@ -60,7 +60,7 @@ Flattens the same summary into exporter-friendly rows:
 ```php
 $rows = [
     ['name' => 'queue_autoscale_cluster_managers', 'value' => 3, 'labels' => ['cluster' => 'my-app']],
-    ['name' => 'queue_autoscale_manager_workers', 'value' => 8, 'labels' => [
+    ['name' => 'queue_autoscale_cluster_host_workers', 'value' => 8, 'labels' => [
         'cluster' => 'my-app',
         'manager_id' => 'manager-1',
         'host' => 'web-01',
@@ -74,8 +74,8 @@ The series produced are:
 
 | Scope | Metric names |
 |---|---|
-| Cluster | `queue_autoscale_cluster_managers`, `queue_autoscale_cluster_workers_current`, `queue_autoscale_cluster_workers_required`, `queue_autoscale_cluster_worker_capacity`, `queue_autoscale_cluster_hosts_recommended` |
-| Per manager | `queue_autoscale_manager_workers`, `queue_autoscale_manager_capacity`, `queue_autoscale_manager_cpu_percent`, `queue_autoscale_manager_memory_percent` |
+| Cluster | `queue_autoscale_cluster_managers`, `queue_autoscale_cluster_workers`, `queue_autoscale_cluster_required_workers`, `queue_autoscale_cluster_worker_capacity`, `queue_autoscale_cluster_recommended_hosts` |
+| Per manager | `queue_autoscale_cluster_host_workers`, `queue_autoscale_cluster_host_capacity`, `queue_autoscale_cluster_host_cpu_percent`, `queue_autoscale_cluster_host_memory_percent` |
 | Per workload | `queue_autoscale_workload_workers_current`, `queue_autoscale_workload_workers_target`, `queue_autoscale_workload_pending_jobs`, … |
 
 `clusterMetrics()` is deliberately narrower than `cluster()`. New summary fields do **not**
@@ -237,11 +237,11 @@ cluster summary:
 | `queue_autoscale.cluster.managers` | `manager_count` |
 | `queue_autoscale.cluster.workers` | `total_workers` |
 | `queue_autoscale.cluster.required_workers` | `required_workers` |
-| `queue_autoscale.cluster.capacity` | `total_worker_capacity` |
+| `queue_autoscale.cluster.worker_capacity` | `total_worker_capacity` |
 | `queue_autoscale.cluster.utilization` | `utilization_percent` |
 | `queue_autoscale.cluster.recommended_hosts` | `scale_signal.recommended_hosts` |
-| `queue_autoscale.cluster.host.workers` | per-manager `total_workers` |
-| `queue_autoscale.cluster.host.capacity` | per-manager `max_workers` |
+| `queue_autoscale.cluster.host_workers` | per-manager `total_workers` |
+| `queue_autoscale.cluster.host_capacity` | per-manager `max_workers` |
 
 Queue depth, job durations and worker counts are deliberately **not** re-exported here — those are
 owned by `laravel-queue-metrics` and telemetry's own queue instrumentation.

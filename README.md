@@ -554,11 +554,11 @@ else carries on unchanged — the integration is optional, not a dependency.
 | `queue_autoscale.cluster.managers` | gauge (observable) | `{managers}` | — |
 | `queue_autoscale.cluster.workers` | gauge (observable) | `{workers}` | — |
 | `queue_autoscale.cluster.required_workers` | gauge (observable) | `{workers}` | — |
-| `queue_autoscale.cluster.capacity` | gauge (observable) | `{workers}` | — |
+| `queue_autoscale.cluster.worker_capacity` | gauge (observable) | `{workers}` | — |
 | `queue_autoscale.cluster.utilization` | gauge (observable) | `%` | — |
 | `queue_autoscale.cluster.recommended_hosts` | gauge (observable) | `{hosts}` | — |
-| `queue_autoscale.cluster.host.workers` | gauge (observable) | `{workers}` | `host` |
-| `queue_autoscale.cluster.host.capacity` | gauge (observable) | `{workers}` | `host` |
+| `queue_autoscale.cluster.host_workers` | gauge (observable) | `{workers}` | `host` |
+| `queue_autoscale.cluster.host_capacity` | gauge (observable) | `{workers}` | `host` |
 
 Scaling actions, SLA breaches and recoveries, fuse transitions, manager start/stop and cluster leader
 changes are also emitted as structured OTLP events (`queue_autoscale.scaling.action`,
