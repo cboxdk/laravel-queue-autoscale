@@ -53,6 +53,15 @@ final readonly class ExclusiveProfile implements ProfileContract
                 'min_samples' => 5,
                 'ema_alpha' => 0.2,
             ],
+            'fuse' => [
+                // A pinned queue runs exactly one worker by definition, so there
+                // is no scale-up for the fuse to hold back.
+                'enabled' => false,
+                'failure_threshold_percent' => 50.0,
+                'min_samples' => 20,
+                'window_seconds' => 60,
+                'cooldown_seconds' => 60,
+            ],
         ];
     }
 }

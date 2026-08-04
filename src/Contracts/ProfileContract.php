@@ -12,6 +12,7 @@ interface ProfileContract
      *     forecast: array{forecaster: class-string, policy: class-string, horizon_seconds: int, history_seconds: int},
      *     workers: array{min: int, max: int, tries: int, timeout_seconds: int, sleep_seconds: int, shutdown_timeout_seconds: int, scalable?: bool},
      *     spawn_compensation: array{enabled: bool, fallback_seconds: float, min_samples: int, ema_alpha: float},
+     *     fuse: array{enabled: bool, failure_threshold_percent: float, min_samples: int, window_seconds: int, cooldown_seconds: int},
      * }
      */
     public function resolve(): array;

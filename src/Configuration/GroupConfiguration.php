@@ -36,6 +36,13 @@ final readonly class GroupConfiguration
         public ForecastConfiguration $forecast,
         public SpawnCompensationConfiguration $spawnCompensation,
         public WorkerConfiguration $workers,
+        public FuseConfiguration $fuse = new FuseConfiguration(
+            enabled: true,
+            failureThresholdPercent: 50.0,
+            minSamples: 20,
+            windowSeconds: 60,
+            cooldownSeconds: 60,
+        ),
     ) {
         if ($this->queues === []) {
             throw new InvalidConfigurationException(
@@ -92,6 +99,7 @@ final readonly class GroupConfiguration
             forecast: $this->forecast,
             spawnCompensation: $this->spawnCompensation,
             workers: $this->workers,
+            fuse: $this->fuse,
             memberQueues: array_values($this->queues),
         );
     }
@@ -137,6 +145,7 @@ final readonly class GroupConfiguration
          *     forecast: array{forecaster: class-string<ForecasterContract>, policy: class-string<ForecastPolicyContract>, horizon_seconds: int, history_seconds: int},
          *     spawn_compensation: array{enabled: bool, fallback_seconds: float, min_samples: int, ema_alpha: float},
          *     workers: array{min: int, max: int, tries: int, timeout_seconds: int, sleep_seconds: int, shutdown_timeout_seconds: int, scalable?: bool},
+         *     fuse?: array{enabled: bool, failure_threshold_percent: float, min_samples: int, window_seconds: int, cooldown_seconds: int},
          * } $merged
          */
         return new self(
@@ -171,6 +180,7 @@ final readonly class GroupConfiguration
                 shutdownTimeoutSeconds: (int) $merged['workers']['shutdown_timeout_seconds'],
                 scalable: (bool) ($merged['workers']['scalable'] ?? true),
             ),
+            fuse: FuseConfiguration::fromArray($merged['fuse'] ?? []),
         );
     }
 

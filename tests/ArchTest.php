@@ -14,6 +14,7 @@ arch('configuration value objects are final readonly')
         'Cbox\LaravelQueueAutoscale\Configuration\ForecastConfiguration',
         'Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration',
         'Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration',
+        'Cbox\LaravelQueueAutoscale\Configuration\FuseConfiguration',
         'Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration',
         'Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration',
     ])

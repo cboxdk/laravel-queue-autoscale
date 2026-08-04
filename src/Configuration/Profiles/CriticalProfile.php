@@ -39,6 +39,13 @@ final readonly class CriticalProfile implements ProfileContract
                 'min_samples' => 3,
                 'ema_alpha' => 0.3,
             ],
+            'fuse' => [
+                'enabled' => true,
+                'failure_threshold_percent' => 40.0,
+                'min_samples' => 10,
+                'window_seconds' => 30,
+                'cooldown_seconds' => 30,
+            ],
         ];
     }
 }

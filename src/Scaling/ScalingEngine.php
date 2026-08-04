@@ -6,16 +6,25 @@ namespace Cbox\LaravelQueueAutoscale\Scaling;
 
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
+use Cbox\LaravelQueueAutoscale\Fuse\FailureFuse;
+use Cbox\LaravelQueueAutoscale\Fuse\NullFailureWindowStore;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 
 final readonly class ScalingEngine
 {
+    /**
+     * The fuse lives here rather than inside a strategy so every strategy —
+     * including custom ones — is protected from scaling into a downstream
+     * outage. It defaults to a null-backed fuse so an engine constructed
+     * by hand behaves exactly as it did before the fuse existed.
+     */
     public function __construct(
         private ScalingStrategyContract $strategy,
         private CapacityCalculator $capacity,
         private ResourceEstimateResolver $resolver,
+        private FailureFuse $fuse = new FailureFuse(new NullFailureWindowStore),
     ) {}
 
     /**
@@ -65,17 +74,30 @@ final readonly class ScalingEngine
         $targetWorkers = max($targetWorkers, $config->workers->min);
         $targetWorkers = min($targetWorkers, $config->workers->max);
 
-        // 5. Determine final limiting factor after all constraints
-        $finalLimitingFactor = $this->determineFinalLimitingFactor(
-            $capacityResult,
-            $strategyRecommendation,
-            $beforeConfigBounds,
-            $targetWorkers,
-            $config->workers->min,
-            $config->workers->max
-        );
+        // 5. Apply the failure fuse. A downstream outage is indistinguishable
+        // from load to every calculation above — jobs fail, get released, the
+        // backlog grows — so without this the autoscaler would answer an
+        // outage by adding workers to it.
+        $fuseVerdict = $this->fuse->evaluate($config);
+        $fuseCeiling = $fuseVerdict->workerCeiling($config->workers->min);
 
-        // 6. Create final capacity result with config constraint applied
+        if ($fuseCeiling !== null) {
+            $targetWorkers = min($targetWorkers, max(0, min($fuseCeiling, $config->workers->max)));
+        }
+
+        // 6. Determine final limiting factor after all constraints
+        $finalLimitingFactor = $fuseVerdict->isTripped()
+            ? 'fuse'
+            : $this->determineFinalLimitingFactor(
+                $capacityResult,
+                $strategyRecommendation,
+                $beforeConfigBounds,
+                $targetWorkers,
+                $config->workers->min,
+                $config->workers->max
+            );
+
+        // 7. Create final capacity result with config constraint applied
         $finalCapacityResult = new CapacityCalculationResult(
             maxWorkersByCpu: $capacityResult->maxWorkersByCpu,
             maxWorkersByMemory: $capacityResult->maxWorkersByMemory,
@@ -90,7 +112,7 @@ final readonly class ScalingEngine
             queue: $config->queue,
             currentWorkers: $currentWorkers,
             targetWorkers: $targetWorkers,
-            reason: $this->strategy->getLastReason(),
+            reason: $this->composeReason($fuseVerdict->reason()),
             predictedPickupTime: $this->strategy->getLastPrediction(),
             slaTarget: $config->sla->targetSeconds,
             capacity: $finalCapacityResult,
@@ -115,7 +137,36 @@ final readonly class ScalingEngine
         $targetWorkers = max($targetWorkers, $config->workers->min);
         $targetWorkers = min($targetWorkers, $config->workers->max);
 
+        // The fuse constrains cluster-wide demand too: without it the leader
+        // would keep recommending capacity that every host is refusing to
+        // spawn, and the cluster would look permanently under-provisioned.
+        // State transitions are idempotent, so it does not matter whether the
+        // leader or a local evaluate() cycle observes the change first.
+        $fuseCeiling = $this->fuse->evaluate($config)->workerCeiling($config->workers->min);
+
+        if ($fuseCeiling !== null) {
+            $targetWorkers = min($targetWorkers, max(0, min($fuseCeiling, $config->workers->max)));
+        }
+
         return $targetWorkers;
+    }
+
+    /**
+     * Prefix the strategy's explanation with the fuse note when it is tripped,
+     * so operators reading a held queue see the cause before the arithmetic
+     * that no longer applies.
+     */
+    private function composeReason(string $fuseReason): string
+    {
+        $strategyReason = $this->strategy->getLastReason();
+
+        if ($fuseReason === '') {
+            return $strategyReason;
+        }
+
+        return $strategyReason === ''
+            ? $fuseReason
+            : $fuseReason.'; '.$strategyReason;
     }
 
     /**

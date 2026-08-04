@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Configuration;
 
+use Cbox\LaravelQueueAutoscale\Fuse\ConfigurableFailureClassifier;
 use Illuminate\Support\Str;
 
 final readonly class AutoscaleConfiguration
@@ -98,6 +99,27 @@ final readonly class AutoscaleConfiguration
         $configured = config('queue-autoscale.spawn_latency.tracker', 'auto');
 
         return is_string($configured) ? trim($configured) : 'auto';
+    }
+
+    public static function fuseEnabled(): bool
+    {
+        return (bool) config('queue-autoscale.fuse.enabled', true);
+    }
+
+    public static function fuseStore(): string
+    {
+        $configured = config('queue-autoscale.fuse.store', 'auto');
+
+        return is_string($configured) ? trim($configured) : 'auto';
+    }
+
+    public static function fuseClassifier(): string
+    {
+        $configured = config('queue-autoscale.fuse.classifier', ConfigurableFailureClassifier::class);
+
+        return is_string($configured) && trim($configured) !== ''
+            ? trim($configured)
+            : ConfigurableFailureClassifier::class;
     }
 
     public static function clusterEnabled(): bool

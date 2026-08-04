@@ -13,12 +13,18 @@ use Cbox\LaravelQueueAutoscale\Commands\LaravelQueueAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Commands\MigrateConfigCommand;
 use Cbox\LaravelQueueAutoscale\Commands\RestartAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\FailureClassifierContract;
+use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ForecasterContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ForecastPolicyContract;
 use Cbox\LaravelQueueAutoscale\Contracts\PercentileCalculatorContract;
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
+use Cbox\LaravelQueueAutoscale\Fuse\CacheFailureWindowStore;
+use Cbox\LaravelQueueAutoscale\Fuse\FailureFuse;
+use Cbox\LaravelQueueAutoscale\Fuse\JobOutcomeRecorder;
+use Cbox\LaravelQueueAutoscale\Fuse\NullFailureWindowStore;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Manager\SignalHandler;
 use Cbox\LaravelQueueAutoscale\Pickup\NullPickupTimeStore;
@@ -47,6 +53,8 @@ use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
 use Cbox\Telemetry\TelemetryManager;
 use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Queue\Events\JobExceptionOccurred;
+use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
@@ -107,6 +115,34 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
 
             return new $rawClass;
         });
+
+        $this->app->singleton(FailureWindowStoreContract::class, function () {
+            $storeClass = $this->resolveFailureWindowStoreClass();
+
+            if (! class_exists($storeClass) || ! is_subclass_of($storeClass, FailureWindowStoreContract::class)) {
+                throw new \RuntimeException("queue-autoscale.fuse.store must be a class that implements FailureWindowStoreContract, got: {$storeClass}");
+            }
+
+            return new $storeClass;
+        });
+
+        // Resolved through the container rather than instantiated directly so
+        // a custom classifier can take constructor dependencies.
+        $this->app->singleton(FailureClassifierContract::class, function ($app) {
+            $classifierClass = AutoscaleConfiguration::fuseClassifier();
+
+            if (! class_exists($classifierClass) || ! is_subclass_of($classifierClass, FailureClassifierContract::class)) {
+                throw new \RuntimeException("queue-autoscale.fuse.classifier must be a class that implements FailureClassifierContract, got: {$classifierClass}");
+            }
+
+            return $app->make($classifierClass);
+        });
+
+        $this->app->singleton(FailureFuse::class);
+
+        // Singleton so the per-queue window lookup it memoises survives across
+        // jobs — listener classes are otherwise re-resolved on every dispatch.
+        $this->app->singleton(JobOutcomeRecorder::class);
 
         $this->app->singleton(PercentileCalculatorContract::class, function () {
             $rawClass = config('queue-autoscale.pickup_time.percentile_calculator', SortBasedPercentileCalculator::class);
@@ -180,6 +216,16 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
             SpawnLatencyRecorder::class,
         );
 
+        $dispatcher->listen(
+            JobProcessed::class,
+            [JobOutcomeRecorder::class, 'handleProcessed'],
+        );
+
+        $dispatcher->listen(
+            JobExceptionOccurred::class,
+            [JobOutcomeRecorder::class, 'handleException'],
+        );
+
         $this->registerTelemetryIntegration();
     }
 
@@ -193,6 +239,28 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
                 : NullPickupTimeStore::class,
             'redis' => RedisPickupTimeStore::class,
             'null' => NullPickupTimeStore::class,
+            default => $configured,
+        };
+    }
+
+    /**
+     * Unlike the pickup-time and spawn-latency stores, this does NOT fall back
+     * to a null store in single-host mode. Job outcomes are counted inside the
+     * worker processes and read by the manager process, so the fuse needs
+     * shared storage on a single host too — which is why it goes through the
+     * cache rather than requiring Redis directly.
+     */
+    private function resolveFailureWindowStoreClass(): string
+    {
+        if (! AutoscaleConfiguration::fuseEnabled()) {
+            return NullFailureWindowStore::class;
+        }
+
+        $configured = AutoscaleConfiguration::fuseStore();
+
+        return match ($configured) {
+            '', 'auto', 'cache' => CacheFailureWindowStore::class,
+            'null' => NullFailureWindowStore::class,
             default => $configured,
         };
     }

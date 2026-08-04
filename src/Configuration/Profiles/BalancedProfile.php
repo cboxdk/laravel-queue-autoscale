@@ -39,6 +39,13 @@ final readonly class BalancedProfile implements ProfileContract
                 'min_samples' => 5,
                 'ema_alpha' => 0.2,
             ],
+            'fuse' => [
+                'enabled' => true,
+                'failure_threshold_percent' => 50.0,
+                'min_samples' => 20,
+                'window_seconds' => 60,
+                'cooldown_seconds' => 60,
+            ],
         ];
     }
 }

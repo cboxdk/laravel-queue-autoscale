@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
+use Cbox\LaravelQueueAutoscale\Fuse\ConfigurableFailureClassifier;
 use Cbox\LaravelQueueAutoscale\Pickup\RedisPickupTimeStore;
 use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
 use Cbox\LaravelQueueAutoscale\Policies\BreachNotificationPolicy;
@@ -135,6 +136,60 @@ return [
     */
     'spawn_latency' => [
         'tracker' => env('QUEUE_AUTOSCALE_SPAWN_LATENCY_TRACKER', 'auto'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Failure fuse (circuit breaker)
+    |--------------------------------------------------------------------------
+    |
+    | A downstream outage looks exactly like load to an autoscaler: jobs fail,
+    | get released, the backlog grows and the oldest job ages — so the naive
+    | response is to add workers, which only hammers the failing dependency
+    | harder and burns each job's retry budget faster.
+    |
+    | The fuse watches the recent failure rate per queue. Above the threshold
+    | it trips, holds the queue at workers.min, and after a cooldown lets a
+    | single worker probe for recovery before scaling is released again.
+    |
+    | Thresholds are per-queue and live in the profile ('fuse' block); the two
+    | settings here are infrastructure.
+    |
+    | 'enabled' is a master switch — turning it off disables the fuse for every
+    | queue regardless of profile.
+    |
+    | 'store' selects where outcome counters live. Job outcomes are counted in
+    | the worker processes and read by the manager, so this must be a shared
+    | backend even on a single host:
+    | - 'auto'/'cache' => Laravel's cache (any driver: redis, database, file)
+    | - 'null'         => disable outcome tracking (fuse never trips)
+    | - FQCN           => custom FailureWindowStoreContract implementation
+    |
+    | 'ignored_exceptions' lists exception classes that say nothing about
+    | capacity — a job that threw a validation error on its own payload never
+    | reached the dependency, so holding the queue back over it would be
+    | wrong. Matching is by instanceof, so a base class covers its subclasses.
+    | Ignored exceptions are dropped entirely: they count neither as failures
+    | nor as successes.
+    |
+    | Note that rate limits and auth errors are deliberately NOT ignored by
+    | default. A job-level circuit breaker skips them because it wants the
+    | retry to happen later; the autoscaler's question is whether adding
+    | workers would help, and against a rate limit the answer is no.
+    |
+    | 'classifier' replaces that list-based logic wholesale when you need
+    | per-queue or per-message decisions.
+    |
+    */
+    'fuse' => [
+        'enabled' => env('QUEUE_AUTOSCALE_FUSE_ENABLED', true),
+        'store' => env('QUEUE_AUTOSCALE_FUSE_STORE', 'auto'),
+
+        'ignored_exceptions' => [
+            // \App\Exceptions\InvalidPayloadException::class,
+        ],
+
+        'classifier' => ConfigurableFailureClassifier::class,
     ],
 
     /*
