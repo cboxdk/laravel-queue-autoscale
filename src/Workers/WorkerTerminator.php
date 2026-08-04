@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Workers;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Illuminate\Support\Facades\Log;
 
 readonly class WorkerTerminator
@@ -31,10 +32,15 @@ readonly class WorkerTerminator
      */
     public function terminateAll(iterable $workers, ?callable $onTerminate = null): int
     {
+        // One deadline covers the whole pool, so it has to be the longest
+        // window any worker in it asked for — a shared deadline set to the
+        // shortest would cut the slowest queue's jobs off mid-flight.
         $timeout = AutoscaleConfiguration::shutdownTimeoutSeconds();
         $pending = [];
 
         foreach ($workers as $worker) {
+            $timeout = max($timeout, $this->shutdownTimeoutFor($worker));
+
             if ($onTerminate !== null) {
                 $onTerminate($worker);
             }
@@ -83,6 +89,35 @@ readonly class WorkerTerminator
         return count($pending);
     }
 
+    /**
+     * The drain window for THIS worker's queue.
+     *
+     * Per-queue workers.shutdown_timeout_seconds was parsed into
+     * WorkerConfiguration and then never read — every path used the global
+     * value, so a queue whose jobs genuinely need longer to finish could not
+     * be given more time. A worker knows which queue it serves, so it can
+     * resolve its own window.
+     *
+     * Group workers poll a comma-separated queue list, which is not a
+     * configurable queue name; those fall back to the global value.
+     */
+    private function shutdownTimeoutFor(WorkerProcess $worker): int
+    {
+        if ($worker->group !== null || str_contains($worker->queue, ',')) {
+            return AutoscaleConfiguration::shutdownTimeoutSeconds();
+        }
+
+        try {
+            return QueueConfiguration::fromConfig($worker->connection, $worker->queue)
+                ->workers
+                ->shutdownTimeoutSeconds;
+        } catch (\Throwable) {
+            // A queue whose configuration no longer resolves must still be
+            // terminable; the global value is the safe fallback.
+            return AutoscaleConfiguration::shutdownTimeoutSeconds();
+        }
+    }
+
     public function requestTermination(WorkerProcess $worker): bool
     {
         if ($worker->isTerminating()) {
@@ -104,7 +139,7 @@ readonly class WorkerTerminator
             return false;
         }
 
-        $worker->markTerminationRequested(now(), AutoscaleConfiguration::shutdownTimeoutSeconds());
+        $worker->markTerminationRequested(now(), $this->shutdownTimeoutFor($worker));
 
         Log::channel(AutoscaleConfiguration::logChannel())->info(
             'Worker termination requested',
@@ -154,7 +189,7 @@ readonly class WorkerTerminator
             return true;
         }
 
-        $timeout = AutoscaleConfiguration::shutdownTimeoutSeconds();
+        $timeout = $this->shutdownTimeoutFor($worker);
 
         // 1. Send SIGTERM for graceful shutdown
         if (! posix_kill($pid, SIGTERM)) {

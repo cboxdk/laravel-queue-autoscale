@@ -180,6 +180,35 @@ class AutoscaleManager
         return $headroom;
     }
 
+    /**
+     * Announce departure so the cluster does not keep counting this host.
+     *
+     * A deliberate stop was previously indistinguishable from a crash: the
+     * heartbeat key lived out its TTL and the registry entry survived until
+     * another manager pruned it, so the leader distributed work to a host that
+     * was already gone — and if this manager WAS the leader, the cluster had
+     * no leader until the lease expired.
+     *
+     * Best-effort by design: shutdown must complete even if Redis is the
+     * reason we are shutting down.
+     */
+    private function leaveCluster(): void
+    {
+        if (! AutoscaleConfiguration::clusterEnabled()) {
+            return;
+        }
+
+        try {
+            $this->clusterStore->deregister(AutoscaleConfiguration::managerId());
+            $this->verbose('   ✓ Left the cluster', 'info');
+        } catch (\Throwable $e) {
+            Log::channel(AutoscaleConfiguration::logChannel())->warning(
+                'Could not deregister from the cluster during shutdown',
+                ['exception' => $e::class, 'message' => $e->getMessage()]
+            );
+        }
+    }
+
     private function logFuseHold(ScalingDecision $decision): void
     {
         if ($decision->capacity?->limitingFactor !== LimitingFactor::Fuse) {
@@ -2486,6 +2515,8 @@ class AutoscaleManager
         $this->terminator->terminateAll($this->pool->all(), function (WorkerProcess $worker): void {
             $this->verbose("   ✓ Terminating worker: PID {$worker->pid()}", 'info');
         });
+
+        $this->leaveCluster();
 
         $this->renderer?->shutdown();
 
