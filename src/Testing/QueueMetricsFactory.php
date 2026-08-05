@@ -34,7 +34,11 @@ class QueueMetricsFactory
             'oldestJobAge' => 0,
             'ageStatus' => 'healthy',
             'throughputPerMinute' => 0.0,
-            'avgDuration' => 100.0,
+            // Seconds by the time a strategy sees it — the manager converts
+            // from the metrics package's milliseconds. A default of 100 here
+            // would model hundred-second jobs and dominate every target the
+            // helpers compute.
+            'avgDuration' => 0.1,
             'failureRate' => 0.0,
             'utilizationRate' => 0.0,
             'activeWorkers' => 0,

@@ -2100,7 +2100,10 @@ class AutoscaleManager
 
     private function scaleUpGroup(GroupConfiguration $group, ScalingDecision $decision): void
     {
-        $toAdd = $this->clampToHostCeiling($decision->workersToAdd());
+        $draining = $this->pool->liveCountGroup($group->connection, $group->name)
+            - $this->pool->countGroup($group->connection, $group->name);
+
+        $toAdd = $this->clampToHostCeiling(max($decision->workersToAdd() - $draining, 0));
 
         if ($toAdd === 0) {
             return;
@@ -2202,7 +2205,11 @@ class AutoscaleManager
         $queue = $config->queue;
         $key = "{$connection}:{$queue}";
         $target = $clusterTarget ?? $config->workers->pinnedCount();
-        $current = $this->pool->count($connection, $queue);
+        // liveCount, not count: a pinned queue exists because two workers on
+        // it at once would be wrong, and a worker draining toward exit is
+        // still on it. Counting only non-terminating workers here would spawn
+        // a replacement alongside the one still finishing its job.
+        $current = $this->pool->liveCount($connection, $queue);
 
         $this->verbose("  🔒 Exclusive/pinned queue: enforcing {$target} worker(s), current={$current}", 'debug');
 
@@ -2214,7 +2221,14 @@ class AutoscaleManager
         }
 
         if ($current < $target) {
-            $toAdd = $target - $current;
+            // Clamped like every other spawn path. Queues are discovered, so
+            // without this the host ceiling is simply not enforced here.
+            $toAdd = $this->clampToHostCeiling($target - $current);
+
+            if ($toAdd === 0) {
+                return;
+            }
+
             $this->verbose("  ⬆️  Supervisor respawn: spawning {$toAdd} worker(s)", 'info');
 
             $this->scalingLog[] = sprintf(
@@ -2333,7 +2347,14 @@ class AutoscaleManager
 
     private function scaleUp(ScalingDecision $decision): void
     {
-        $toAdd = $this->clampToHostCeiling($decision->workersToAdd());
+        // A worker draining toward exit is invisible to count(), which is
+        // right for scale-down and wrong here: it is still a live process
+        // still polling the queue, so spawning against the smaller number
+        // puts a second worker on a queue that already has one.
+        $draining = $this->pool->liveCount($decision->connection, $decision->queue)
+            - $this->pool->count($decision->connection, $decision->queue);
+
+        $toAdd = $this->clampToHostCeiling(max($decision->workersToAdd() - $draining, 0));
 
         if ($toAdd === 0) {
             return;
