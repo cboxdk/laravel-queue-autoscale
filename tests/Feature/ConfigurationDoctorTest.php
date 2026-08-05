@@ -213,3 +213,36 @@ test('a fifo queue pinned to one worker is not flagged', function (): void {
 
     expect(findingTitled(diagnose(['orders.fifo']), 'FIFO queue allowing'))->toBeNull();
 });
+
+test('a leftover v3 workers block is reported', function (): void {
+    // The upgrade mistake that produces no error: the file still parses, the
+    // autoscaler still runs, and the settings simply stopped applying.
+    config()->set('queue-autoscale.workers', ['tries' => 3, 'sleep_seconds' => 3]);
+
+    $finding = findingTitled(diagnose(['reports']), 'top-level queue-autoscale.workers block');
+
+    expect($finding)->not->toBeNull()
+        ->and($finding->severity)->toBe(Severity::Warning)
+        ->and($finding->remedy)->toContain('manager.shutdown_grace_seconds');
+});
+
+test('a v3 timeout_seconds carried over without max_time_seconds is reported', function (): void {
+    // The key survived the upgrade but changed meaning: it was the worker
+    // process lifetime, it is now the per-job limit.
+    config()->set('queue-autoscale.queues', [
+        'reports' => ['workers' => ['timeout_seconds' => 3600]],
+    ]);
+
+    $finding = findingTitled(diagnose(['reports']), 'without workers.max_time_seconds');
+
+    expect($finding)->not->toBeNull()
+        ->and($finding->detail)->toContain('reports');
+});
+
+test('both timeout keys set together is not reported', function (): void {
+    config()->set('queue-autoscale.queues', [
+        'reports' => ['workers' => ['max_time_seconds' => 3600, 'timeout_seconds' => 900]],
+    ]);
+
+    expect(findingTitled(diagnose(['reports']), 'without workers.max_time_seconds'))->toBeNull();
+});

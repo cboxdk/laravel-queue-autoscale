@@ -42,6 +42,7 @@ class ConfigurationDoctor
                 $this->capsWithoutClusterMode(),
                 $this->discoveryWithoutACeiling($discoveredQueues),
                 $this->fifoQueuesAllowingParallelism($discoveredQueues),
+                $this->configurationLeftOverFromV3(),
             ] as $group
         ) {
             foreach ($group as $finding) {
@@ -282,6 +283,65 @@ class ConfigurationDoctor
                 "Correct if this queue's jobs span at least {$max} message groups. If they all share one "
                 .'group, the extra workers poll and never receive a job — shard the group id to get the '
                 .'parallelism back.',
+            );
+        }
+
+        return $findings;
+    }
+
+    /**
+     * Configuration written for v3 that v4 silently ignores.
+     *
+     * Both of these are the shape of upgrade mistake that produces no error
+     * and no log — the config file still parses, the autoscaler still runs,
+     * and the settings the operator wrote have simply stopped applying. The
+     * upgrade guide covers them, but a guide is only read by whoever performs
+     * the upgrade, and this is read by whoever is debugging six months later.
+     *
+     * @return list<Finding>
+     */
+    private function configurationLeftOverFromV3(): array
+    {
+        $findings = [];
+
+        if (is_array(config('queue-autoscale.workers'))) {
+            $findings[] = Finding::warning(
+                'A top-level queue-autoscale.workers block is still present',
+                'v3 read worker settings from here. v4 reads them only from the queue profile, so this '
+                .'block now configures nothing.',
+                'Move anything you relied on into sla_defaults or the relevant profile, then delete the '
+                .'block. Note that those values will start taking effect once moved, which may itself '
+                .'be a change worth watching. Its shutdown_timeout_seconds now lives at '
+                .'manager.shutdown_grace_seconds.',
+            );
+        }
+
+        $suspect = [];
+
+        foreach ($this->configuredRules() as $rule => $entry) {
+            if (! is_array($entry)) {
+                continue;
+            }
+
+            $workers = $entry['workers'] ?? null;
+
+            // In v3 `timeout_seconds` became --max-time, the process lifetime.
+            // In v4 it is the per-job limit and `max_time_seconds` is the
+            // lifetime — so an entry carrying only the old key is almost
+            // certainly still expressing the old meaning.
+            if (is_array($workers) && isset($workers['timeout_seconds']) && ! isset($workers['max_time_seconds'])) {
+                $suspect[] = $rule;
+            }
+        }
+
+        if ($suspect !== []) {
+            $findings[] = Finding::warning(
+                'workers.timeout_seconds is set without workers.max_time_seconds',
+                'Affected: '.implode(', ', $suspect),
+                'In v3 this key was the worker process lifetime (--max-time). In v4 it is how long a '
+                .'single job may run (--timeout), and the lifetime is max_time_seconds. A value carried '
+                .'over from v3 is now being applied to something else — usually meaning jobs are killed '
+                .'far later than intended, or workers recycle far sooner.',
             );
         }
 

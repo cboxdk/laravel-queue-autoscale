@@ -130,4 +130,5 @@ These are additive. Listed so you know they exist:
 - [ ] Top-level `'workers'` block deleted from the config
 - [ ] `workers.shutdown_timeout_seconds` moved to `manager.shutdown_grace_seconds` if you set it globally
 - [ ] Dashboards and alerts updated for the renamed metrics
-- [ ] `php artisan queue:autoscale:doctor` run and its output read
+- [ ] `php artisan queue:autoscale:doctor` run and its output read — it flags both of the
+      configuration changes above if you miss them

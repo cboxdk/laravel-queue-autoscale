@@ -44,6 +44,10 @@ another.
 than listed, so nothing in config bounds how many there will be. `limits.max_total_workers` is what
 stops a tenant-per-queue application raising thousands of queues to their minimums.
 
+**Configuration left over from v3.** A top-level `queue-autoscale.workers` block, or a
+`workers.timeout_seconds` set without `max_time_seconds`. Both parse fine and both silently mean
+something other than they used to — see [Upgrading to v4](../advanced-usage/upgrade-guide-v4.md).
+
 **FIFO queues allowing parallelism.** A FIFO queue delivers one message per message group at a time,
 so five workers only do five things at once if the backlog spans five groups. Correct configuration
 often; silently wasteful when it is not. See [Scaling FIFO Queues](../cookbook/fifo-queues.md).
