@@ -1,7 +1,7 @@
 {
     "bomFormat": "CycloneDX",
     "specVersion": "1.5",
-    "serialNumber": "urn:uuid:db3656aa-2f97-5130-be19-3b1ef505bad1",
+    "serialNumber": "urn:uuid:1a6dacb8-7bbe-5158-acba-a46527320e7f",
     "version": 1,
     "metadata": {
         "tools": [
@@ -215,9 +215,9 @@
         },
         {
             "type": "library",
-            "bom-ref": "pkg:composer/cboxdk/laravel-telemetry@v0.3.3",
+            "bom-ref": "pkg:composer/cboxdk/laravel-telemetry@v1.1.0",
             "name": "cboxdk/laravel-telemetry",
-            "version": "v0.3.3",
+            "version": "v1.1.0",
             "description": "Collector-free telemetry for Laravel: Prometheus metrics, OTLP traces and events. No C extension, no protobuf, no sidecar \u2014 metrics that actually work under FPM.",
             "licenses": [
                 {
@@ -226,7 +226,7 @@
                     }
                 }
             ],
-            "purl": "pkg:composer/cboxdk/laravel-telemetry@v0.3.3",
+            "purl": "pkg:composer/cboxdk/laravel-telemetry@v1.1.0",
             "externalReferences": [
                 {
                     "type": "vcs",
@@ -234,7 +234,7 @@
                 },
                 {
                     "type": "distribution",
-                    "url": "https://api.github.com/repos/cboxdk/laravel-telemetry/zipball/ba12613d27b16a538c2e5b8e1394ea54bcb0b904"
+                    "url": "https://api.github.com/repos/cboxdk/laravel-telemetry/zipball/79c6dfb33bc5a7730317bcc01ef2ade7dc6c456b"
                 }
             ],
             "properties": [
