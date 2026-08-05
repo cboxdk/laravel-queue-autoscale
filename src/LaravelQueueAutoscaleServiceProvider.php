@@ -107,7 +107,13 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
         $this->app->singleton(PickupTimeStoreContract::class, function () {
             $rawClass = $this->resolvePickupTimeStoreClass();
             $rawSamples = config('queue-autoscale.pickup_time.max_samples_per_queue', 1000);
-            $maxSamples = is_numeric($rawSamples) ? (int) $rawSamples : 1000;
+
+            // Floored at 1. The store trims with LTRIM key 0 (max - 1), so a
+            // configured 0 becomes `LTRIM key 0 -1` — which keeps the entire
+            // list. An operator setting 0 means "keep nothing"; without the
+            // floor they get "keep everything, forever", on the hot path of
+            // every job. To disable sampling entirely, bind the null store.
+            $maxSamples = max(1, is_numeric($rawSamples) ? (int) $rawSamples : 1000);
 
             if (! class_exists($rawClass) || ! is_subclass_of($rawClass, PickupTimeStoreContract::class)) {
                 throw new \RuntimeException("queue-autoscale.pickup_time.store must be a class that implements PickupTimeStoreContract, got: {$rawClass}");

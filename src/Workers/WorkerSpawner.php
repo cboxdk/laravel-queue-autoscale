@@ -9,6 +9,7 @@ use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
+use Cbox\LaravelQueueAutoscale\Support\WorkloadName;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Process\Process;
@@ -44,6 +45,17 @@ readonly class WorkerSpawner
         // cannot resolve one is a bug, not a supported path, so fall back to
         // the shipped default profile rather than to a second config surface.
         $workerConfig ??= QueueConfiguration::fromConfig($connection, $queue)->workers;
+
+        // Defence in depth. The manager filters discovered names, but a caller
+        // reaching the spawner directly must not be able to turn a queue name
+        // into a command-line option or a second queue.
+        if (! WorkloadName::isSafe($connection) || ! WorkloadName::isSafe($queue)) {
+            $offender = WorkloadName::isSafe($queue) ? $connection : $queue;
+
+            throw new \InvalidArgumentException(
+                "Refusing to spawn a worker for '{$connection}:{$queue}': ".WorkloadName::reason($offender)
+            );
+        }
 
         for ($i = 0; $i < $count; $i++) {
             $process = new Process([

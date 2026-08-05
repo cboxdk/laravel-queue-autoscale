@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Cbox\LaravelQueueAutoscale\Pickup\RedisPickupTimeStore;
 use Illuminate\Redis\Connections\Connection;
 use Illuminate\Support\Facades\Redis;
@@ -203,4 +204,20 @@ test('different queues have isolated storage', function (): void {
         ->and(evalArguments($roundTrips[1])['key'])->toBe('autoscale:pickup:redis:b');
     expect($store->recentSamples('redis', 'a', 60))->toHaveCount(1);
     expect($store->recentSamples('redis', 'b', 60))->toHaveCount(1);
+});
+
+test('a sample cap of zero cannot become an unbounded list', function (): void {
+    // LTRIM key 0 -1 keeps everything. An operator setting 0 means "keep
+    // nothing"; the binding floors it so they cannot accidentally mean
+    // "keep every pickup forever" on the hot path of every job.
+    config()->set('queue-autoscale.pickup_time.max_samples_per_queue', 0);
+    config()->set('queue-autoscale.pickup_time.store', RedisPickupTimeStore::class);
+
+    $roundTrips = [];
+    captureRedisCommands($roundTrips);
+
+    app()->forgetInstance(PickupTimeStoreContract::class);
+    app(PickupTimeStoreContract::class)->record('redis', 'default', (float) time(), 1.0);
+
+    expect(evalArguments($roundTrips[0])['trimTo'])->toBeGreaterThanOrEqual(0);
 });

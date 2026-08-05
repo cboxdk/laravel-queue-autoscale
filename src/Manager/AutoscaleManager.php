@@ -35,6 +35,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
+use Cbox\LaravelQueueAutoscale\Support\WorkloadName;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerOutputBuffer;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerPool;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerProcess;
@@ -308,9 +309,15 @@ class AutoscaleManager
 
         $this->renderer?->initialize();
 
-        $this->runLoop();
-
-        $this->shutdown();
+        // The loop must not be able to exit without draining the pool. Anything
+        // that escapes runLoop() would otherwise leave every queue:work child
+        // running until --max-time — an hour by default — while the supervisor
+        // restarts the manager and it spawns a full fresh set on top of them.
+        try {
+            $this->runLoop();
+        } finally {
+            $this->shutdown();
+        }
 
         return 0;
     }
@@ -318,23 +325,25 @@ class AutoscaleManager
     private function runLoop(): void
     {
         while (! $this->signals->shouldStop()) {
-            if ($this->restartSignal->requestedAfter($this->startedAt)) {
-                $this->verbose('Restart signal detected; shutting down manager for supervised restart.', 'info');
-                $this->stopReason = 'restart_signal';
-
-                Log::channel(AutoscaleConfiguration::logChannel())->info(
-                    'Restart signal detected; shutting down manager for supervised restart'
-                );
-
-                $this->signals->requestStop();
-
-                continue;
-            }
-
             $startTime = microtime(true);
             $this->signals->dispatch();
 
             try {
+                // Inside the try because it reads the cache, and a cache blip
+                // is not a reason to tear the manager down.
+                if ($this->restartSignal->requestedAfter($this->startedAt)) {
+                    $this->verbose('Restart signal detected; shutting down manager for supervised restart.', 'info');
+                    $this->stopReason = 'restart_signal';
+
+                    Log::channel(AutoscaleConfiguration::logChannel())->info(
+                        'Restart signal detected; shutting down manager for supervised restart'
+                    );
+
+                    $this->signals->requestStop();
+
+                    continue;
+                }
+
                 $this->processWorkerOutput();
                 $this->enforceTerminationDeadlines();
                 $this->cleanupDeadWorkers();
@@ -1365,6 +1374,12 @@ class AutoscaleManager
             $metrics = QueueMetricsData::fromArray($mappedData);
             $metricsByKey["{$metrics->connection}:{$metrics->queue}"] = $metrics;
 
+            // Discovered names reach a worker's command line, so a name that
+            // would change what the worker does never gets that far.
+            if (! $this->workloadNameIsSafe($metrics->connection, $metrics->queue)) {
+                continue;
+            }
+
             // Skip queues the operator has explicitly excluded from autoscaling.
             if (AutoscaleConfiguration::isExcluded($metrics->queue)) {
                 $this->announceExclusion($metrics->connection, $metrics->queue);
@@ -1412,6 +1427,41 @@ class AutoscaleManager
      * @var array<string, true>
      */
     private array $announcedExclusions = [];
+
+    /** @var array<string, true> */
+    private array $rejectedWorkloadNames = [];
+
+    /**
+     * Whether a discovered workload can safely be handed to a worker process.
+     *
+     * Rejection is announced once per name rather than every cycle: a queue
+     * that cannot be scaled is worth one loud line, not a log flood.
+     */
+    private function workloadNameIsSafe(string $connection, string $queue): bool
+    {
+        if (WorkloadName::isSafe($connection) && WorkloadName::isSafe($queue)) {
+            return true;
+        }
+
+        $key = "{$connection}\0{$queue}";
+
+        if (! isset($this->rejectedWorkloadNames[$key])) {
+            $this->rejectedWorkloadNames[$key] = true;
+
+            $offender = WorkloadName::isSafe($queue) ? $connection : $queue;
+
+            Log::channel(AutoscaleConfiguration::logChannel())->warning(
+                'Refusing to manage a queue whose name cannot be passed to a worker safely',
+                [
+                    'connection' => $connection,
+                    'queue' => $queue,
+                    'reason' => WorkloadName::reason($offender),
+                ]
+            );
+        }
+
+        return false;
+    }
 
     private function announceExclusion(string $connection, string $queue): void
     {
