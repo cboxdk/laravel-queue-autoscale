@@ -23,10 +23,8 @@ use Cbox\LaravelQueueAutoscale\Contracts\PercentileCalculatorContract;
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
-use Cbox\LaravelQueueAutoscale\Fuse\CacheFailureWindowStore;
 use Cbox\LaravelQueueAutoscale\Fuse\FailureFuse;
 use Cbox\LaravelQueueAutoscale\Fuse\JobOutcomeRecorder;
-use Cbox\LaravelQueueAutoscale\Fuse\NullFailureWindowStore;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Manager\SignalHandler;
 use Cbox\LaravelQueueAutoscale\Pickup\NullPickupTimeStore;
@@ -277,17 +275,7 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
      */
     private function resolveFailureWindowStoreClass(): string
     {
-        if (! AutoscaleConfiguration::fuseEnabled()) {
-            return NullFailureWindowStore::class;
-        }
-
-        $configured = AutoscaleConfiguration::fuseStore();
-
-        return match ($configured) {
-            '', 'auto', 'cache' => CacheFailureWindowStore::class,
-            'null' => NullFailureWindowStore::class,
-            default => $configured,
-        };
+        return AutoscaleConfiguration::fuseStoreClass();
     }
 
     private function resolveSpawnLatencyTrackerClass(): string

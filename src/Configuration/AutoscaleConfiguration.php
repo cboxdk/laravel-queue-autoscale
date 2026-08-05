@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Configuration;
 
+use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
+use Cbox\LaravelQueueAutoscale\Fuse\CacheFailureWindowStore;
 use Cbox\LaravelQueueAutoscale\Fuse\ConfigurableFailureClassifier;
+use Cbox\LaravelQueueAutoscale\Fuse\NullFailureWindowStore;
 use Illuminate\Support\Str;
 
 readonly class AutoscaleConfiguration
@@ -124,6 +127,29 @@ readonly class AutoscaleConfiguration
         $configured = config('queue-autoscale.fuse.store', 'auto');
 
         return is_string($configured) ? trim($configured) : 'auto';
+    }
+
+    /**
+     * The failure-window store class the configuration selects.
+     *
+     * `fuse.store` accepts shorthands as well as class names, and the fuse
+     * being disabled overrides both. Resolving that in one place keeps the
+     * service provider and anything reporting on the fuse from disagreeing
+     * about which store is actually in use.
+     *
+     * @return class-string<FailureWindowStoreContract>|string
+     */
+    public static function fuseStoreClass(): string
+    {
+        if (! self::fuseEnabled()) {
+            return NullFailureWindowStore::class;
+        }
+
+        return match (self::fuseStore()) {
+            '', 'auto', 'cache' => CacheFailureWindowStore::class,
+            'null' => NullFailureWindowStore::class,
+            default => self::fuseStore(),
+        };
     }
 
     public static function fuseClassifier(): string

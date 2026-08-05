@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Commands;
 
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
 use Cbox\LaravelQueueAutoscale\Fuse\FuseState;
@@ -100,13 +101,17 @@ class DebugQueueCommand extends Command
             return;
         }
 
-        $store = $this->laravel->make(FailureWindowStoreContract::class);
-
-        if ($store instanceof NullFailureWindowStore) {
+        // Asked of the configuration rather than of the resolved object. The
+        // store is configurable, so this guard is real, but analysis narrows
+        // the container lookup to whatever is bound by default and then reports
+        // any check against another implementation as unreachable.
+        if (AutoscaleConfiguration::fuseStoreClass() === NullFailureWindowStore::class) {
             $this->warn('Outcome tracking is disabled (fuse.store), so the fuse can never trip.');
 
             return;
         }
+
+        $store = $this->laravel->make(FailureWindowStoreContract::class);
 
         try {
             $window = $store->currentWindow($connection, $queue, $fuse->windowSeconds);
