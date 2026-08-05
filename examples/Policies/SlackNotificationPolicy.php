@@ -32,12 +32,14 @@ class SlackNotificationPolicy implements ScalingPolicy
         $this->webhookUrl = $webhookUrl ?? config('services.slack.webhook_url');
     }
 
-    public function before(ScalingDecision $decision): void
+    public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
     {
         // No action before scaling
+
+        return null;
     }
 
-    public function after(ScalingDecision $decision): void
+    public function afterScaling(ScalingDecision $decision): void
     {
         if (! $this->webhookUrl) {
             return;

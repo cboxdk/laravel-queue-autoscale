@@ -8,11 +8,16 @@ use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\ModerateForecastPolicy;
+use Cbox\LaravelQueueAutoscale\Tests\IntegrationTestCase;
 use Cbox\LaravelQueueAutoscale\Tests\TestCase;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 use Cbox\Telemetry\TelemetryManager;
 
-uses(TestCase::class)->in(__DIR__);
+// Scoped rather than ->in(__DIR__) so tests/Integration can claim its own
+// base case: those specs talk to real infrastructure and need queue-metrics'
+// provider registered, which the faked suites deliberately do without.
+uses(TestCase::class)->in('Unit', 'Feature', 'Simulation');
+uses(IntegrationTestCase::class)->in('Integration');
 
 /**
  * The telemetry integration lives behind an optional dev dependency
@@ -82,7 +87,8 @@ function makeQueueConfig(array $overrides = []): QueueConfiguration
             min: $minWorkers,
             max: $maxWorkers,
             tries: 3,
-            timeoutSeconds: 3600,
+            maxTimeSeconds: 3600,
+            timeoutSeconds: 300,
             sleepSeconds: 3,
             shutdownTimeoutSeconds: 30,
         ),
@@ -119,4 +125,27 @@ function createMetrics(array $overrides = []): QueueMetricsData
         'health' => [],
         'calculated_at' => now()->toIso8601String(),
     ], $overrides));
+}
+
+/**
+ * ElasticMQ speaks the SQS wire protocol and backs the SQS integration specs.
+ * Shared here rather than in one spec file so every suite that needs it can
+ * ask, including when a single file is run on its own.
+ *
+ *     docker run -d --name autoscale-elasticmq -p 9324:9324 \
+ *         softwaremill/elasticmq-native:1.6.11
+ */
+function elasticMqEndpoint(): string
+{
+    $endpoint = env('SQS_TEST_ENDPOINT', 'http://localhost:9324');
+
+    return rtrim(is_string($endpoint) ? $endpoint : 'http://localhost:9324', '/');
+}
+
+function elasticMqReachable(): bool
+{
+    $context = stream_context_create(['http' => ['timeout' => 1, 'ignore_errors' => true]]);
+    $body = @file_get_contents(elasticMqEndpoint().'/?Action=ListQueues', false, $context);
+
+    return is_string($body) && str_contains($body, 'ListQueuesResponse');
 }

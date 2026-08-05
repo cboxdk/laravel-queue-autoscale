@@ -30,14 +30,19 @@ capacity on the host.
 - **Cluster-aware** — managers auto-join via Redis, elect a leader, and distribute worker targets
   across hosts
 - **Worker groups** — one worker set polling several queues in strict priority order
+- **Queues matched by pattern** — `scrape-tenant-*` governs every tenant queue, so runtime-generated
+  names need no configuration entry of their own
+- **Configuration check** — `queue:autoscale:doctor` reports configurations that are valid and still
+  govern the wrong queues
+- **Testable** — fakes and assertions in `src/Testing` for proving what your own configuration does
 - **Extensible** — custom scaling strategies and policies via interfaces
 - **Events** — react to scaling decisions, SLA breaches, fuse transitions and cluster changes
 - **Graceful shutdown** — SIGTERM, then SIGKILL after the shutdown timeout
 
 ## Requirements
 
-- PHP 8.3, 8.4 or 8.5
-- Laravel 11, 12 or 13
+- PHP 8.4 or 8.5
+- Laravel 12 or 13
 - `ext-pcntl` and `ext-posix` (the manager is a signal-handling daemon)
 - [`cboxdk/laravel-queue-metrics`](https://github.com/cboxdk/laravel-queue-metrics) `^3.0`
 
@@ -134,13 +139,14 @@ To customise, edit `config/queue-autoscale.php`. Each entry is **either** a `Pro
 
 ```php
 use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\ConnectionLimitedProfile;
 use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
 
 return [
     'enabled' => true,
 
     // Shipped profiles: BalancedProfile, CriticalProfile, HighVolumeProfile,
-    // BurstyProfile, BackgroundProfile, ExclusiveProfile.
+    // BurstyProfile, BackgroundProfile, ExclusiveProfile, ConnectionLimitedProfile.
     'sla_defaults' => BalancedProfile::class,
 
     'queues' => [
@@ -151,6 +157,13 @@ return [
         'reports' => [
             'sla' => ['target_seconds' => 120],
             'workers' => ['min' => 0, 'max' => 4],
+        ],
+
+        // ...or a glob, for queue names generated at runtime. An exact name
+        // above always wins over a pattern.
+        'scrape-tenant-*' => [
+            'profile' => ConnectionLimitedProfile::class,
+            'workers' => ['max' => 5],
         ],
     ],
 ];
@@ -175,6 +188,9 @@ php artisan queue:autoscale:cluster
 
 # Inspect one queue's raw state, metrics and fuse status
 php artisan queue:autoscale:debug --queue=payments
+
+# Check the configuration against the queues that actually exist
+php artisan queue:autoscale:doctor
 
 # Signal running managers to restart gracefully (use this on deploy)
 php artisan queue:autoscale:restart
@@ -287,12 +303,9 @@ The published `config/queue-autoscale.php` is documented inline. The keys most p
     'reserve_cpu_cores' => 0.2,
 ],
 
-'workers' => [
-    'timeout_seconds' => 3600,              // passed to queue:work as --max-time
-    'tries' => 3,
-    'sleep_seconds' => 3,
-    'shutdown_timeout_seconds' => 30,       // SIGTERM grace period before SIGKILL
-    'health_check_interval_seconds' => 10,
+'manager' => [
+    // Fallback drain window for workers whose queue config no longer resolves.
+    'shutdown_grace_seconds' => 30,
 ],
 
 'strategy' => HybridStrategy::class,        // a plain class string, not an array
@@ -315,9 +328,8 @@ that queue's workers:
 ],
 ```
 
-Note that `manager.evaluation_interval_seconds` exists in the published config but has no effect —
-the evaluation interval is taken from `queue:autoscale --interval=` (default 5). Set it on the
-command line or in your Supervisor program definition.
+`manager.evaluation_interval_seconds` (default 5) sets the evaluation interval;
+`queue:autoscale --interval=` overrides it for a single process.
 
 Every key, including the profile, forecast, fuse, pickup-time, spawn-latency, cluster, alerting and
 telemetry blocks, is covered in [Configuration](docs/basic-usage/configuration.md).
@@ -536,9 +548,8 @@ When [`cboxdk/laravel-telemetry`](https://github.com/cboxdk/laravel-telemetry) i
 autoscaler publishes its scaling signals automatically — no configuration needed. Disable with
 `QUEUE_AUTOSCALE_TELEMETRY_ENABLED=false`.
 
-`cboxdk/laravel-telemetry` requires Laravel 12+. This package still supports Laravel 11, but the
-telemetry integration is simply unavailable there — `queue:autoscale:debug` reports
-`Telemetry: not installed` in that case.
+When it is not installed, `queue:autoscale:debug` reports `Telemetry: not installed` and everything
+else carries on unchanged — the integration is optional, not a dependency.
 
 | Metric | Type | Unit | Labels |
 | --- | --- | --- | --- |
@@ -555,11 +566,11 @@ telemetry integration is simply unavailable there — `queue:autoscale:debug` re
 | `queue_autoscale.cluster.managers` | gauge (observable) | `{managers}` | — |
 | `queue_autoscale.cluster.workers` | gauge (observable) | `{workers}` | — |
 | `queue_autoscale.cluster.required_workers` | gauge (observable) | `{workers}` | — |
-| `queue_autoscale.cluster.capacity` | gauge (observable) | `{workers}` | — |
+| `queue_autoscale.cluster.worker_capacity` | gauge (observable) | `{workers}` | — |
 | `queue_autoscale.cluster.utilization` | gauge (observable) | `%` | — |
 | `queue_autoscale.cluster.recommended_hosts` | gauge (observable) | `{hosts}` | — |
-| `queue_autoscale.cluster.host.workers` | gauge (observable) | `{workers}` | `host` |
-| `queue_autoscale.cluster.host.capacity` | gauge (observable) | `{workers}` | `host` |
+| `queue_autoscale.cluster.host_workers` | gauge (observable) | `{workers}` | `host` |
+| `queue_autoscale.cluster.host_capacity` | gauge (observable) | `{workers}` | `host` |
 
 Scaling actions, SLA breaches and recoveries, fuse transitions, manager start/stop and cluster leader
 changes are also emitted as structured OTLP events (`queue_autoscale.scaling.action`,
@@ -577,11 +588,46 @@ Metrics are shipped to your OTLP endpoint by the telemetry package's `telemetry:
 
 ## Testing
 
+### Testing your own configuration
+
+The package ships fakes and assertions so an application can prove what its queues will do, without
+Redis and without waiting for load:
+
+```php
+use Cbox\LaravelQueueAutoscale\Testing\InteractsWithAutoscaling;
+use Cbox\LaravelQueueAutoscale\Testing\QueueMetricsFactory;
+
+uses(InteractsWithAutoscaling::class);
+
+test('no tenant ever gets a sixth connection', function () {
+    $this->assertWorkersCappedAt(5, 'scrape-tenant-42');
+});
+
+test('a failing provider stops the queue scaling up', function () {
+    $behind = QueueMetricsFactory::behind(1000, oldestJobAge: 300, queue: 'payments');
+
+    $this->tripFuseFor('payments');
+
+    expect($this->workersDemandedFor($behind))->toBe(0);
+});
+```
+
+See [Testing Your Configuration](docs/basic-usage/testing.md).
+
+### Testing the package itself
+
 ```bash
 composer test              # run the suite
 composer test-coverage     # run with coverage
 composer analyse           # PHPStan / Larastan
 vendor/bin/pint            # code style
+```
+
+SQS and FIFO specs run against [ElasticMQ](https://github.com/softwaremill/elasticmq) and skip when
+it is not running:
+
+```bash
+docker run -d --name autoscale-elasticmq -p 9324:9324 softwaremill/elasticmq-native:1.6.11
 ```
 
 ## Changelog

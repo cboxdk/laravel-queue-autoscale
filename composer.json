@@ -23,33 +23,33 @@
         }
     ],
     "require": {
-        "php": "^8.3|^8.4|^8.5",
+        "php": "^8.4|^8.5",
         "ext-pcntl": "*",
         "ext-posix": "*",
         "cboxdk/laravel-queue-metrics": "^3.0",
-        "illuminate/contracts": "^11.0||^12.0||^13.0",
+        "illuminate/contracts": "^12.0||^13.0",
         "symfony/process": "^7.0||^8.0"
     },
     "require-dev": {
+        "aws/aws-sdk-php": "^3.390",
         "cboxdk/laravel-telemetry": "^1.0.0",
         "larastan/larastan": "^3.0",
         "laravel/pint": "^1.14",
         "nunomaduro/collision": "^8.8",
-        "orchestra/testbench": "^11.0.0||^10.0.0||^9.0.0",
-        "pestphp/pest": "^4.0",
+        "orchestra/testbench": "^10.0.0||^11.0.0",
+        "pestphp/pest": "^4.4.1",
         "pestphp/pest-plugin-arch": "^4.0",
-        "pestphp/pest-plugin-laravel": "^4.0",
+        "pestphp/pest-plugin-laravel": "^4.1",
         "phpstan/extension-installer": "^1.4",
         "phpstan/phpstan-deprecation-rules": "^2.0",
         "phpstan/phpstan-phpunit": "^2.0"
     },
     "suggest": {
-        "cboxdk/laravel-telemetry": "Publishes scaling decisions, SLA breach state and cluster gauges to OpenTelemetry via the telemetry pipeline. Requires Laravel 12+; unavailable on Laravel 11."
+        "cboxdk/laravel-telemetry": "Publishes scaling decisions, SLA breach state and cluster gauges to OpenTelemetry via the telemetry pipeline."
     },
     "autoload": {
         "psr-4": {
-            "Cbox\\LaravelQueueAutoscale\\": "src/",
-            "Cbox\\LaravelQueueAutoscale\\Database\\Factories\\": "database/factories/"
+            "Cbox\\LaravelQueueAutoscale\\": "src/"
         }
     },
     "autoload-dev": {

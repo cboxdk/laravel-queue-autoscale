@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Workers;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
+use Cbox\LaravelQueueAutoscale\Support\WorkloadName;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Process\Process;
@@ -17,6 +19,33 @@ readonly class WorkerSpawner
     public function __construct(
         private SpawnLatencyTrackerContract $spawnLatencyTracker,
     ) {}
+
+    /**
+     * The argv the worker process is started with.
+     *
+     * Separate from spawn() so it can be asserted without starting anything.
+     * A spec that reads the command line off a live process is really testing
+     * whether a subprocess survives its first fifty milliseconds, which is a
+     * property of the machine rather than of this class — it held locally and
+     * did not in CI, where queue:work exits immediately and the liveness check
+     * correctly discards the worker before the spec can see it.
+     *
+     * @return list<string>
+     */
+    public function buildCommand(string $connection, string $queue, WorkerConfiguration $workerConfig): array
+    {
+        return [
+            PHP_BINARY,
+            base_path('artisan'),
+            'queue:work',
+            $connection,
+            '--queue='.$queue,
+            '--tries='.$workerConfig->tries,
+            '--max-time='.$workerConfig->maxTimeSeconds,
+            '--timeout='.$workerConfig->timeoutSeconds,
+            '--sleep='.$workerConfig->sleepSeconds,
+        ];
+    }
 
     /**
      * Spawn N queue:work worker processes.
@@ -39,25 +68,24 @@ readonly class WorkerSpawner
     ): Collection {
         $workers = new Collection;
 
-        // Per-queue settings when the caller resolved them, otherwise the
-        // global block. These used to be parsed per queue and then silently
-        // ignored — the spawner only ever read the global values, so a
-        // profile's tries/sleep/timeout never reached a worker.
-        $tries = $workerConfig !== null ? $workerConfig->tries : AutoscaleConfiguration::workerTries();
-        $maxTime = $workerConfig !== null ? $workerConfig->timeoutSeconds : AutoscaleConfiguration::workerTimeoutSeconds();
-        $sleep = $workerConfig !== null ? $workerConfig->sleepSeconds : AutoscaleConfiguration::workerSleepSeconds();
+        // The profile is the only source of worker settings. A caller that
+        // cannot resolve one is a bug, not a supported path, so fall back to
+        // the shipped default profile rather than to a second config surface.
+        $workerConfig ??= QueueConfiguration::fromConfig($connection, $queue)->workers;
+
+        // Defence in depth. The manager filters discovered names, but a caller
+        // reaching the spawner directly must not be able to turn a queue name
+        // into a command-line option or a second queue.
+        if (! WorkloadName::isSafe($connection) || ! WorkloadName::isSafe($queue)) {
+            $offender = WorkloadName::isSafe($queue) ? $connection : $queue;
+
+            throw new \InvalidArgumentException(
+                "Refusing to spawn a worker for '{$connection}:{$queue}': ".WorkloadName::reason($offender)
+            );
+        }
 
         for ($i = 0; $i < $count; $i++) {
-            $process = new Process([
-                PHP_BINARY,
-                base_path('artisan'),
-                'queue:work',
-                $connection,
-                '--queue='.$queue,
-                '--tries='.$tries,
-                '--max-time='.$maxTime,
-                '--sleep='.$sleep,
-            ]);
+            $process = new Process($this->buildCommand($connection, $queue, $workerConfig));
 
             // Inject environment variables for monitoring
             $env = [

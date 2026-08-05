@@ -5,11 +5,12 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Cluster;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ClusterStoreContract;
 use Illuminate\Redis\Connections\Connection;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Support\Facades\Redis;
 
-class ClusterStore
+class ClusterStore implements ClusterStoreContract
 {
     public function heartbeat(ClusterManagerState $state): void
     {
@@ -22,6 +23,51 @@ class ClusterStore
         );
 
         $redis->sadd($this->managersRegistryKey(), $state->managerId);
+    }
+
+    /**
+     * Leave the cluster cleanly on shutdown.
+     *
+     * Without this a deliberate stop is indistinguishable from a crash: the
+     * heartbeat key survives for its TTL and the registry entry survives until
+     * some other manager happens to prune it, so the leader keeps counting a
+     * host that is gone and distributing work to it. Releasing the lease in
+     * the same breath means a successor can be elected on its next cycle
+     * rather than after the lease expires.
+     *
+     * The lease release is conditional on still holding it — a manager that
+     * lost leadership mid-shutdown must not delete the new leader's key.
+     */
+    public function deregister(string $managerId): void
+    {
+        $redis = $this->redis();
+
+        $redis->del($this->managerStateKey($managerId));
+        $redis->srem($this->managersRegistryKey(), $managerId);
+
+        $script = <<<'LUA'
+local current = redis.call('get', KEYS[1])
+
+if not current then
+    return 0
+end
+
+local decoded_ok, decoded = pcall(cjson.decode, current)
+
+if decoded_ok and decoded['manager_id'] == ARGV[1] then
+    redis.call('del', KEYS[1])
+
+    return 1
+end
+
+return 0
+LUA;
+
+        $leaderKey = $this->leaderKey();
+
+        $redis instanceof PhpRedisConnection
+            ? $redis->command('eval', [$script, [$leaderKey, $managerId], 1])
+            : $redis->command('eval', [$script, 1, $leaderKey, $managerId]);
     }
 
     /**

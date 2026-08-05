@@ -77,7 +77,7 @@ The array is deep-merged over whatever `sla_defaults` resolves to. Every value t
 > ### The trap: `profile` + `overrides` do not work per queue
 >
 > ```php
-> // ❌ SILENTLY DOES NOTHING under 'queues'
+> // ✅ names the baseline; the rest of the array refines it
 > 'queues' => [
 >     'webhooks' => [
 >         'profile' => BalancedProfile::class,
@@ -107,7 +107,7 @@ The array is deep-merged over whatever `sla_defaults` resolves to. Every value t
 
 ## The five autoscaling profiles
 
-Each profile below lists the exact values from its `resolve()` method. All settings defaulted elsewhere (like `workers.timeout_seconds = 3600`, `spawn_compensation.enabled = true`) are omitted here for brevity — check the class source if you need the full shape.
+Each profile below lists the exact values from its `resolve()` method. All settings defaulted elsewhere (like `workers.max_time_seconds = 3600`, `spawn_compensation.enabled = true`) are omitted here for brevity — check the class source if you need the full shape.
 
 ### `CriticalProfile`
 
@@ -320,7 +320,7 @@ final readonly class ReportsProfile implements ProfileContract
                 'min' => 0,
                 'max' => 8,
                 'tries' => 3,
-                'timeout_seconds' => 3600,
+                'max_time_seconds' => 3600,
                 'sleep_seconds' => 5,
                 'shutdown_timeout_seconds' => 30,
             ],

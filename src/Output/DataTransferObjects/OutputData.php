@@ -11,13 +11,11 @@ readonly class OutputData
     /**
      * @param  array<string, QueueStats>  $queueStats  Keyed by "connection:queue"
      * @param  array<int, WorkerStatus>  $workers
-     * @param  array<int, JobActivity>  $recentJobs
      * @param  array<int, string>  $scalingLog  Recent scaling decision messages
      */
     public function __construct(
         public array $queueStats,
         public array $workers,
-        public array $recentJobs,
         public array $scalingLog,
         public DateTimeImmutable $timestamp,
     ) {}

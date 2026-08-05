@@ -14,10 +14,10 @@ From the package's `composer.json`:
 
 | Requirement | Constraint |
 |---|---|
-| PHP | `^8.3 \| ^8.4 \| ^8.5` |
+| PHP | `^8.4 \| ^8.5` |
 | `ext-pcntl` | required — the manager uses POSIX signals |
 | `ext-posix` | required — worker liveness checks and termination |
-| `illuminate/contracts` | `^11.0 \|\| ^12.0 \|\| ^13.0` |
+| `illuminate/contracts` | `^12.0 \|\| ^13.0` |
 | `cboxdk/laravel-queue-metrics` | `^3.0` |
 | `symfony/process` | `^7.0 \|\| ^8.0` |
 | `spatie/laravel-package-tools` | `^1.16` |
@@ -192,7 +192,7 @@ Full signature:
 queue:autoscale {--interval=5} {--replace}
 ```
 
-- `--interval=` sets the evaluation interval in seconds. **This is the only place the interval is set** — `manager.evaluation_interval_seconds` in the config file is not read by anything.
+- `--interval=` overrides the evaluation interval for this process. Without it the manager uses `manager.evaluation_interval_seconds` from the config (default 5).
 - `--replace` stops the existing local manager and takes over its host lock. Without it, starting a second manager for the same app on the same host fails.
 
 The autoscaler will:

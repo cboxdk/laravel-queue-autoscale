@@ -7,10 +7,10 @@ namespace Cbox\LaravelQueueAutoscale\Manager;
 use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterRecommendation;
-use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ClusterStoreContract;
 use Cbox\LaravelQueueAutoscale\Events\AutoscaleManagerStarted;
 use Cbox\LaravelQueueAutoscale\Events\AutoscaleManagerStopped;
 use Cbox\LaravelQueueAutoscale\Events\ClusterLeaderChanged;
@@ -35,6 +35,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
+use Cbox\LaravelQueueAutoscale\Support\WorkloadName;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerOutputBuffer;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerPool;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerProcess;
@@ -117,7 +118,7 @@ class AutoscaleManager
         private readonly PolicyExecutor $policies,
         private readonly SignalHandler $signals,
         private readonly RestartSignal $restartSignal,
-        private readonly ClusterStore $clusterStore,
+        private readonly ClusterStoreContract $clusterStore,
         private readonly CapacityCalculator $capacity,
         private readonly ResourceEstimateResolver $resolver,
         private readonly AlertRateLimiter $alerts = new AlertRateLimiter,
@@ -178,6 +179,35 @@ class AutoscaleManager
         }
 
         return $headroom;
+    }
+
+    /**
+     * Announce departure so the cluster does not keep counting this host.
+     *
+     * A deliberate stop was previously indistinguishable from a crash: the
+     * heartbeat key lived out its TTL and the registry entry survived until
+     * another manager pruned it, so the leader distributed work to a host that
+     * was already gone — and if this manager WAS the leader, the cluster had
+     * no leader until the lease expired.
+     *
+     * Best-effort by design: shutdown must complete even if Redis is the
+     * reason we are shutting down.
+     */
+    private function leaveCluster(): void
+    {
+        if (! AutoscaleConfiguration::clusterEnabled()) {
+            return;
+        }
+
+        try {
+            $this->clusterStore->deregister(AutoscaleConfiguration::managerId());
+            $this->verbose('   ✓ Left the cluster', 'info');
+        } catch (\Throwable $e) {
+            Log::channel(AutoscaleConfiguration::logChannel())->warning(
+                'Could not deregister from the cluster during shutdown',
+                ['exception' => $e::class, 'message' => $e->getMessage()]
+            );
+        }
     }
 
     private function logFuseHold(ScalingDecision $decision): void
@@ -279,9 +309,15 @@ class AutoscaleManager
 
         $this->renderer?->initialize();
 
-        $this->runLoop();
-
-        $this->shutdown();
+        // The loop must not be able to exit without draining the pool. Anything
+        // that escapes runLoop() would otherwise leave every queue:work child
+        // running until --max-time — an hour by default — while the supervisor
+        // restarts the manager and it spawns a full fresh set on top of them.
+        try {
+            $this->runLoop();
+        } finally {
+            $this->shutdown();
+        }
 
         return 0;
     }
@@ -289,23 +325,25 @@ class AutoscaleManager
     private function runLoop(): void
     {
         while (! $this->signals->shouldStop()) {
-            if ($this->restartSignal->requestedAfter($this->startedAt)) {
-                $this->verbose('Restart signal detected; shutting down manager for supervised restart.', 'info');
-                $this->stopReason = 'restart_signal';
-
-                Log::channel(AutoscaleConfiguration::logChannel())->info(
-                    'Restart signal detected; shutting down manager for supervised restart'
-                );
-
-                $this->signals->requestStop();
-
-                continue;
-            }
-
             $startTime = microtime(true);
             $this->signals->dispatch();
 
             try {
+                // Inside the try because it reads the cache, and a cache blip
+                // is not a reason to tear the manager down.
+                if ($this->restartSignal->requestedAfter($this->startedAt)) {
+                    $this->verbose('Restart signal detected; shutting down manager for supervised restart.', 'info');
+                    $this->stopReason = 'restart_signal';
+
+                    Log::channel(AutoscaleConfiguration::logChannel())->info(
+                        'Restart signal detected; shutting down manager for supervised restart'
+                    );
+
+                    $this->signals->requestStop();
+
+                    continue;
+                }
+
                 $this->processWorkerOutput();
                 $this->enforceTerminationDeadlines();
                 $this->cleanupDeadWorkers();
@@ -1336,6 +1374,12 @@ class AutoscaleManager
             $metrics = QueueMetricsData::fromArray($mappedData);
             $metricsByKey["{$metrics->connection}:{$metrics->queue}"] = $metrics;
 
+            // Discovered names reach a worker's command line, so a name that
+            // would change what the worker does never gets that far.
+            if (! $this->workloadNameIsSafe($metrics->connection, $metrics->queue)) {
+                continue;
+            }
+
             // Skip queues the operator has explicitly excluded from autoscaling.
             if (AutoscaleConfiguration::isExcluded($metrics->queue)) {
                 $this->announceExclusion($metrics->connection, $metrics->queue);
@@ -1383,6 +1427,41 @@ class AutoscaleManager
      * @var array<string, true>
      */
     private array $announcedExclusions = [];
+
+    /** @var array<string, true> */
+    private array $rejectedWorkloadNames = [];
+
+    /**
+     * Whether a discovered workload can safely be handed to a worker process.
+     *
+     * Rejection is announced once per name rather than every cycle: a queue
+     * that cannot be scaled is worth one loud line, not a log flood.
+     */
+    private function workloadNameIsSafe(string $connection, string $queue): bool
+    {
+        if (WorkloadName::isSafe($connection) && WorkloadName::isSafe($queue)) {
+            return true;
+        }
+
+        $key = "{$connection}\0{$queue}";
+
+        if (! isset($this->rejectedWorkloadNames[$key])) {
+            $this->rejectedWorkloadNames[$key] = true;
+
+            $offender = WorkloadName::isSafe($queue) ? $connection : $queue;
+
+            Log::channel(AutoscaleConfiguration::logChannel())->warning(
+                'Refusing to manage a queue whose name cannot be passed to a worker safely',
+                [
+                    'connection' => $connection,
+                    'queue' => $queue,
+                    'reason' => WorkloadName::reason($offender),
+                ]
+            );
+        }
+
+        return false;
+    }
 
     private function announceExclusion(string $connection, string $queue): void
     {
@@ -2021,7 +2100,10 @@ class AutoscaleManager
 
     private function scaleUpGroup(GroupConfiguration $group, ScalingDecision $decision): void
     {
-        $toAdd = $this->clampToHostCeiling($decision->workersToAdd());
+        $draining = $this->pool->liveCountGroup($group->connection, $group->name)
+            - $this->pool->countGroup($group->connection, $group->name);
+
+        $toAdd = $this->clampToHostCeiling(max($decision->workersToAdd() - $draining, 0));
 
         if ($toAdd === 0) {
             return;
@@ -2123,7 +2205,11 @@ class AutoscaleManager
         $queue = $config->queue;
         $key = "{$connection}:{$queue}";
         $target = $clusterTarget ?? $config->workers->pinnedCount();
-        $current = $this->pool->count($connection, $queue);
+        // liveCount, not count: a pinned queue exists because two workers on
+        // it at once would be wrong, and a worker draining toward exit is
+        // still on it. Counting only non-terminating workers here would spawn
+        // a replacement alongside the one still finishing its job.
+        $current = $this->pool->liveCount($connection, $queue);
 
         $this->verbose("  🔒 Exclusive/pinned queue: enforcing {$target} worker(s), current={$current}", 'debug');
 
@@ -2135,7 +2221,14 @@ class AutoscaleManager
         }
 
         if ($current < $target) {
-            $toAdd = $target - $current;
+            // Clamped like every other spawn path. Queues are discovered, so
+            // without this the host ceiling is simply not enforced here.
+            $toAdd = $this->clampToHostCeiling($target - $current);
+
+            if ($toAdd === 0) {
+                return;
+            }
+
             $this->verbose("  ⬆️  Supervisor respawn: spawning {$toAdd} worker(s)", 'info');
 
             $this->scalingLog[] = sprintf(
@@ -2152,6 +2245,7 @@ class AutoscaleManager
                 $queue,
                 $toAdd,
                 $config->spawnCompensation,
+                workerConfig: $config->workers,
             );
 
             foreach ($workers as $worker) {
@@ -2253,7 +2347,14 @@ class AutoscaleManager
 
     private function scaleUp(ScalingDecision $decision): void
     {
-        $toAdd = $this->clampToHostCeiling($decision->workersToAdd());
+        // A worker draining toward exit is invisible to count(), which is
+        // right for scale-down and wrong here: it is still a live process
+        // still polling the queue, so spawning against the smaller number
+        // puts a second worker on a queue that already has one.
+        $draining = $this->pool->liveCount($decision->connection, $decision->queue)
+            - $this->pool->count($decision->connection, $decision->queue);
+
+        $toAdd = $this->clampToHostCeiling(max($decision->workersToAdd() - $draining, 0));
 
         if ($toAdd === 0) {
             return;
@@ -2465,7 +2566,6 @@ class AutoscaleManager
         return new OutputData(
             queueStats: $this->currentQueueStats,
             workers: $workers,
-            recentJobs: [],
             scalingLog: $this->scalingLog,
             timestamp: new \DateTimeImmutable,
         );
@@ -2485,6 +2585,8 @@ class AutoscaleManager
         $this->terminator->terminateAll($this->pool->all(), function (WorkerProcess $worker): void {
             $this->verbose("   ✓ Terminating worker: PID {$worker->pid()}", 'info');
         });
+
+        $this->leaveCluster();
 
         $this->renderer?->shutdown();
 

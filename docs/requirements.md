@@ -12,8 +12,8 @@ Before installing Queue Autoscale for Laravel, ensure your environment meets the
 
 | Requirement | Version |
 |---|---|
-| **PHP** | 8.3, 8.4, or 8.5 |
-| **Laravel** | 11.0+, 12.0+, or 13.0+ |
+| **PHP** | 8.4 or 8.5 |
+| **Laravel** | 12.0+ or 13.0+ |
 | **Composer** | Latest version recommended |
 
 ## PHP Extensions
@@ -42,6 +42,16 @@ These are installed automatically via Composer:
 ### Redis (optional)
 
 Redis is **not required** for single-host autoscaling. The package works with any Laravel-supported queue driver (`database`, `sqs`, `redis`, etc.).
+
+`redis`, `database` and `sqs` are covered by tests. The SQS specs run against
+[ElasticMQ](https://github.com/softwaremill/elasticmq), which speaks the SQS wire protocol, and cover
+depth reading through the metrics facade end to end:
+
+```bash
+docker run -d --name autoscale-elasticmq -p 9324:9324 softwaremill/elasticmq-native:1.6.11
+```
+
+They skip when it is not running, so the default suite needs nothing installed.
 
 Redis **is required** when:
 

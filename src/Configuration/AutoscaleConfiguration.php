@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Configuration;
 
+use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
+use Cbox\LaravelQueueAutoscale\Fuse\CacheFailureWindowStore;
 use Cbox\LaravelQueueAutoscale\Fuse\ConfigurableFailureClassifier;
+use Cbox\LaravelQueueAutoscale\Fuse\NullFailureWindowStore;
 use Illuminate\Support\Str;
 
 readonly class AutoscaleConfiguration
@@ -126,6 +129,29 @@ readonly class AutoscaleConfiguration
         return is_string($configured) ? trim($configured) : 'auto';
     }
 
+    /**
+     * The failure-window store class the configuration selects.
+     *
+     * `fuse.store` accepts shorthands as well as class names, and the fuse
+     * being disabled overrides both. Resolving that in one place keeps the
+     * service provider and anything reporting on the fuse from disagreeing
+     * about which store is actually in use.
+     *
+     * @return class-string<FailureWindowStoreContract>|string
+     */
+    public static function fuseStoreClass(): string
+    {
+        if (! self::fuseEnabled()) {
+            return NullFailureWindowStore::class;
+        }
+
+        return match (self::fuseStore()) {
+            '', 'auto', 'cache' => CacheFailureWindowStore::class,
+            'null' => NullFailureWindowStore::class,
+            default => self::fuseStore(),
+        };
+    }
+
     public static function fuseClassifier(): string
     {
         $configured = config('queue-autoscale.fuse.classifier', ConfigurableFailureClassifier::class);
@@ -215,30 +241,27 @@ readonly class AutoscaleConfiguration
         return self::intConfig('queue-autoscale.manager.evaluation_interval_seconds', 5);
     }
 
+    /**
+     * How long a manager handover waits for the outgoing process, and the
+     * floor for a pool-wide drain.
+     *
+     * Manager-level on purpose: a worker's drain window is per-queue and
+     * lives in the profile. These used to be the same key, so lengthening one
+     * queue's drain also lengthened every deploy's handover.
+     */
+    public static function shutdownGraceSeconds(): int
+    {
+        return max(1, self::intConfig('queue-autoscale.manager.shutdown_grace_seconds', 30));
+    }
+
     public static function logChannel(): string
     {
         return self::stringConfig('queue-autoscale.manager.log_channel', 'stack');
     }
 
-    /**
-     * Get scaling config value with backwards compatibility for 'prediction' key
-     */
     private static function scalingConfig(string $key, mixed $default): mixed
     {
-        // Try new 'scaling' key first, then fall back to deprecated 'prediction'
-        return config("queue-autoscale.scaling.{$key}")
-            ?? config("queue-autoscale.prediction.{$key}")
-            ?? $default;
-    }
-
-    public static function trendWindowSeconds(): int
-    {
-        return self::intValue(self::scalingConfig('trend_window_seconds', 300), 300);
-    }
-
-    public static function forecastHorizonSeconds(): int
-    {
-        return self::intValue(self::scalingConfig('forecast_horizon_seconds', 60), 60);
+        return config("queue-autoscale.scaling.{$key}") ?? $default;
     }
 
     public static function breachThreshold(): float
@@ -308,31 +331,6 @@ readonly class AutoscaleConfiguration
         return self::floatConfig('queue-autoscale.limits.reserve_cpu_cores', 0.2);
     }
 
-    public static function workerTimeoutSeconds(): int
-    {
-        return self::intConfig('queue-autoscale.workers.timeout_seconds', 3600);
-    }
-
-    public static function workerTries(): int
-    {
-        return self::intConfig('queue-autoscale.workers.tries', 3);
-    }
-
-    public static function workerSleepSeconds(): int
-    {
-        return self::intConfig('queue-autoscale.workers.sleep_seconds', 3);
-    }
-
-    public static function shutdownTimeoutSeconds(): int
-    {
-        return self::intConfig('queue-autoscale.workers.shutdown_timeout_seconds', 30);
-    }
-
-    public static function healthCheckIntervalSeconds(): int
-    {
-        return self::intConfig('queue-autoscale.workers.health_check_interval_seconds', 10);
-    }
-
     public static function strategyClass(): string
     {
         return self::stringConfig('queue-autoscale.strategy');
@@ -397,6 +395,14 @@ readonly class AutoscaleConfiguration
         $queuesConfig = config('queue-autoscale.queues', []);
         $result = [];
 
+        // A glob key governs queues; it is not one. Left in, the manager would
+        // discover a queue literally named "tenant.*" and hold workers on it.
+        $queuesConfig = array_filter(
+            $queuesConfig,
+            static fn (mixed $key): bool => ! is_string($key) || ! QueueConfigResolver::isPattern($key),
+            ARRAY_FILTER_USE_KEY,
+        );
+
         foreach ($queuesConfig as $queueName => $config) {
             if (! is_string($queueName)) {
                 throw new \InvalidArgumentException(
@@ -430,7 +436,7 @@ readonly class AutoscaleConfiguration
      */
     public static function queueResources(string $queue): array
     {
-        $queueConfig = config("queue-autoscale.queues.{$queue}");
+        $queueConfig = QueueConfigResolver::overrideFor($queue);
 
         if (! is_array($queueConfig)) {
             return [];

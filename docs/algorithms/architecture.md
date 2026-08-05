@@ -392,12 +392,15 @@ Groups use the same semantics with a `group:` prefixed key.
 {PHP_BINARY} artisan queue:work {connection} \
   --queue={queue} \
   --tries={workers.tries} \
-  --max-time={workers.timeout_seconds} \
+  --max-time={workers.max_time_seconds} \
+  --timeout={workers.timeout_seconds} \
   --sleep={workers.sleep_seconds}
 ```
 
-`workers.timeout_seconds` maps to `--max-time` (worker lifetime), **not** `--timeout` (per-job
-timeout). No `--memory` flag is passed.
+The two time limits are separate settings and mean different things:
+`workers.max_time_seconds` becomes `--max-time`, the worker process's lifetime before it is recycled;
+`workers.timeout_seconds` becomes `--timeout`, how long a single job may run. Configuration rejects a
+job timeout that is not shorter than the process lifetime. No `--memory` flag is passed.
 
 Environment injected into the child: `LARAVEL_AUTOSCALE_WORKER=true`, `AUTOSCALE_MANAGER_ID`, and
 `AUTOSCALE_WORKER_GROUP` for group workers. Group workers get a comma-separated
@@ -490,9 +493,9 @@ php artisan queue:autoscale --interval=5
 ```
 
 The default is 5 seconds. Each cycle sleeps `max(0, interval - executionTime)`, so a slow cycle does
-not compound. `manager.evaluation_interval_seconds` exists in the config file and in
-`AutoscaleConfiguration::evaluationIntervalSeconds()`, but the running loop does not consult it —
-the CLI flag is what takes effect.
+not compound. The value comes from `manager.evaluation_interval_seconds`; the `--interval` flag
+overrides it for a single process, and an interval below one second is refused so the loop cannot
+busy-spin against the metrics store.
 
 Faster intervals react sooner and evaluate more often; slower intervals cost less and can miss short
 spikes. Five to ten seconds suits most workloads.

@@ -144,7 +144,7 @@ readonly class GroupConfiguration
          *     sla: array{target_seconds: int, percentile: int, window_seconds: int, min_samples: int},
          *     forecast: array{forecaster: class-string<ForecasterContract>, policy: class-string<ForecastPolicyContract>, horizon_seconds: int, history_seconds: int},
          *     spawn_compensation: array{enabled: bool, fallback_seconds: float, min_samples: int, ema_alpha: float},
-         *     workers: array{min: int, max: int, tries: int, timeout_seconds: int, sleep_seconds: int, shutdown_timeout_seconds: int, scalable?: bool},
+         *     workers: array{min: int, max: int, tries: int, max_time_seconds: int, timeout_seconds: int, sleep_seconds: int, shutdown_timeout_seconds: int, scalable?: bool},
          *     fuse?: array{enabled: bool, failure_threshold_percent: float, min_samples: int, window_seconds: int, cooldown_seconds: int},
          * } $merged
          */
@@ -175,6 +175,7 @@ readonly class GroupConfiguration
                 min: (int) $merged['workers']['min'],
                 max: (int) $merged['workers']['max'],
                 tries: (int) $merged['workers']['tries'],
+                maxTimeSeconds: (int) $merged['workers']['max_time_seconds'],
                 timeoutSeconds: (int) $merged['workers']['timeout_seconds'],
                 sleepSeconds: (int) $merged['workers']['sleep_seconds'],
                 shutdownTimeoutSeconds: (int) $merged['workers']['shutdown_timeout_seconds'],
@@ -217,9 +218,10 @@ readonly class GroupConfiguration
      */
     public static function assertNoQueueConflicts(array $groups): void
     {
-        /** @var array<string, array<string, mixed>> $perQueueConfig */
-        $perQueueConfig = config('queue-autoscale.queues', []);
-        $flatQueues = array_keys($perQueueConfig);
+        // Only literal names can conflict. A glob is a fallback for queues
+        // nothing else claims, so a group member matching one is governed by
+        // the group and the pattern simply never applies to it.
+        $flatQueues = array_keys(QueueConfigResolver::literal());
 
         foreach ($groups as $group) {
             foreach ($group->queues as $q) {

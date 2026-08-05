@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Telemetry;
 
-use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ClusterStoreContract;
 use Cbox\LaravelQueueAutoscale\Telemetry\Contracts\ProvidesTelemetrySnapshot;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Support\Facades\Cache;
@@ -45,7 +45,7 @@ readonly class QueueAutoscaleTelemetrySnapshot implements ProvidesTelemetrySnaps
             return ['cluster' => []];
         }
 
-        $store = $this->container->make(ClusterStore::class);
+        $store = $this->container->make(ClusterStoreContract::class);
         $summary = $store->summary();
 
         return ['cluster' => $summary];

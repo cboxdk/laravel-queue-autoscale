@@ -219,7 +219,7 @@ The thresholds are per-queue and live in the profile's `fuse` block:
 | `window_seconds` | `60` | Bucket size for outcome counting |
 | `cooldown_seconds` | `60` | How long to hold before probing for recovery |
 
-The block is optional. Configs written before the fuse existed keep working on the defaults above — see the [upgrade guide](../advanced-usage/upgrade-guide-v3.md).
+The block is optional. Configs written before the fuse existed keep working on the defaults above — see the [upgrade guide](../advanced-usage/upgrade-guide-v4.md).
 
 ## Per-profile defaults
 

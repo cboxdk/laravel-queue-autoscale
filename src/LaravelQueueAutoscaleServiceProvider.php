@@ -8,11 +8,13 @@ use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
 use Cbox\LaravelQueueAutoscale\Commands\ClusterAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Commands\DebugQueueCommand;
+use Cbox\LaravelQueueAutoscale\Commands\DoctorCommand;
 use Cbox\LaravelQueueAutoscale\Commands\InstallCommand;
 use Cbox\LaravelQueueAutoscale\Commands\LaravelQueueAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Commands\MigrateConfigCommand;
 use Cbox\LaravelQueueAutoscale\Commands\RestartAutoscaleCommand;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ClusterStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\FailureClassifierContract;
 use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ForecasterContract;
@@ -21,13 +23,12 @@ use Cbox\LaravelQueueAutoscale\Contracts\PercentileCalculatorContract;
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingStrategyContract;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
-use Cbox\LaravelQueueAutoscale\Fuse\CacheFailureWindowStore;
 use Cbox\LaravelQueueAutoscale\Fuse\FailureFuse;
 use Cbox\LaravelQueueAutoscale\Fuse\JobOutcomeRecorder;
-use Cbox\LaravelQueueAutoscale\Fuse\NullFailureWindowStore;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Manager\SignalHandler;
 use Cbox\LaravelQueueAutoscale\Pickup\NullPickupTimeStore;
+use Cbox\LaravelQueueAutoscale\Pickup\PickupSampler;
 use Cbox\LaravelQueueAutoscale\Pickup\PickupTimeRecorder;
 use Cbox\LaravelQueueAutoscale\Pickup\RedisPickupTimeStore;
 use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
@@ -104,7 +105,13 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
         $this->app->singleton(PickupTimeStoreContract::class, function () {
             $rawClass = $this->resolvePickupTimeStoreClass();
             $rawSamples = config('queue-autoscale.pickup_time.max_samples_per_queue', 1000);
-            $maxSamples = is_numeric($rawSamples) ? (int) $rawSamples : 1000;
+
+            // Floored at 1. The store trims with LTRIM key 0 (max - 1), so a
+            // configured 0 becomes `LTRIM key 0 -1` — which keeps the entire
+            // list. An operator setting 0 means "keep nothing"; without the
+            // floor they get "keep everything, forever", on the hot path of
+            // every job. To disable sampling entirely, bind the null store.
+            $maxSamples = max(1, is_numeric($rawSamples) ? (int) $rawSamples : 1000);
 
             if (! class_exists($rawClass) || ! is_subclass_of($rawClass, PickupTimeStoreContract::class)) {
                 throw new \RuntimeException("queue-autoscale.pickup_time.store must be a class that implements PickupTimeStoreContract, got: {$rawClass}");
@@ -115,6 +122,19 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
             }
 
             return new $rawClass;
+        });
+
+        // Singleton because the sampler's rate estimate lives in process memory;
+        // resolved per event it would report a rate of zero forever and sample
+        // nothing.
+        $this->app->singleton(PickupSampler::class, function () {
+            $rawEnabled = config('queue-autoscale.pickup_time.sampling.enabled', true);
+            $rawRate = config('queue-autoscale.pickup_time.sampling.max_per_second', 100);
+
+            return new PickupSampler(
+                enabled: (bool) $rawEnabled,
+                maxPerSecond: is_numeric($rawRate) ? (int) $rawRate : 100,
+            );
         });
 
         $this->app->singleton(FailureWindowStoreContract::class, function () {
@@ -176,6 +196,7 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
         // Register manager
         $this->app->singleton(LaravelQueueAutoscale::class);
         $this->app->singleton(ClusterStore::class);
+        $this->app->bind(ClusterStoreContract::class, ClusterStore::class);
         $this->app->singleton(ManagerProcessLock::class);
         $this->app->singleton(RestartSignal::class);
         $this->app->singleton(SignalHandler::class);
@@ -201,6 +222,7 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
                 RestartAutoscaleCommand::class,
                 ClusterAutoscaleCommand::class,
                 DebugQueueCommand::class,
+                DoctorCommand::class,
                 MigrateConfigCommand::class,
             ]);
         }
@@ -253,17 +275,7 @@ class LaravelQueueAutoscaleServiceProvider extends ServiceProvider
      */
     private function resolveFailureWindowStoreClass(): string
     {
-        if (! AutoscaleConfiguration::fuseEnabled()) {
-            return NullFailureWindowStore::class;
-        }
-
-        $configured = AutoscaleConfiguration::fuseStore();
-
-        return match ($configured) {
-            '', 'auto', 'cache' => CacheFailureWindowStore::class,
-            'null' => NullFailureWindowStore::class,
-            default => $configured,
-        };
+        return AutoscaleConfiguration::fuseStoreClass();
     }
 
     private function resolveSpawnLatencyTrackerClass(): string

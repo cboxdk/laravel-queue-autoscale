@@ -161,6 +161,7 @@ spawn path falls back to `QueueConfiguration::fromConfig()` to recover it.
 ```php
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 
 final class MinimumDuringBusinessHoursPolicy implements ScalingPolicy
 {
@@ -240,12 +241,12 @@ $target = min(max($proposed, $config->workers->min), $config->workers->max);
 ```
 
 This matters most for the failure fuse. When the fuse is open the engine has already pinned the
-target down to the fuse ceiling and set `$decision->capacity->limitingFactor === 'fuse'`. A policy
+target down to the fuse ceiling and set `$decision->capacity->limitingFactor` to `LimitingFactor::Fuse`. A policy
 that unconditionally raises the target will scale workers into the downstream outage the fuse was
 protecting you from. Check the limiting factor before overriding:
 
 ```php
-if ($decision->capacity?->limitingFactor === 'fuse') {
+if ($decision->capacity?->limitingFactor === LimitingFactor::Fuse) {
     return null; // Leave a fuse-limited decision alone.
 }
 ```

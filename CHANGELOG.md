@@ -5,7 +5,72 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v4.0.0 - 2026-08-05
+
+The first release to carry the failure fuse, which merged without a tag. Everything below the
+breaking changes shipped in that work; everything in them is new to this release.
+
+See the [upgrade guide](docs/advanced-usage/upgrade-guide-v4.md) for the full migration, and run
+`php artisan queue:autoscale:doctor` after upgrading — it reads your configuration against the queues
+you actually have.
+
+### Breaking
+
+- **PHP 8.4 is the minimum, and Laravel 11 is dropped.** Pest stays on 4.x rather than 5, because
+  `pest-plugin-laravel` v5 requires Laravel 13 and a library has to install on the current and
+  previous major.
+- **`workers.timeout_seconds` is now two settings.** It was passed as `--max-time`, the worker
+  *process's* lifetime, despite reading like a job timeout — so an operator setting 3600 believed
+  they had allowed hour-long jobs while jobs still died at Laravel's default. `max_time_seconds`
+  is now the process lifetime and `timeout_seconds` the per-job limit, and configuration refuses a
+  job timeout that is not shorter than the process it runs in.
+- **The global `queue-autoscale.workers` block is gone.** It was the only one that reached a spawned
+  worker, so the same keys set on a profile were validated and ignored. The profile is now the only
+  surface. `workers.shutdown_timeout_seconds` becomes `manager.shutdown_grace_seconds`, and is a
+  fallback rather than a floor — a pool of fast queues no longer waits for the slowest global value.
+- **Cluster metric names now agree across both surfaces.** `clusterMetrics()` and the telemetry
+  gauges disagreed about five names, so a query written from one page returned nothing against the
+  other endpoint — indistinguishable from the metric reading zero. `hosts_recommended` →
+  `recommended_hosts`, `workers_current` → `workers`, `workers_required` → `required_workers`,
+  `cluster.capacity` → `cluster.worker_capacity`, and every `manager_*` → `cluster_host_*`. A test
+  now pins the agreement rather than the names.
+- Deleted `Workers\ProcessHealthCheck` and `Output\DataTransferObjects\JobActivity`, both unused.
+
+### Added
+
+- **Queue matching by glob.** `queue-autoscale.queues` accepts pattern keys, so `scrape-tenant-*` can
+  govern every tenant queue at once — necessary when queue names are generated at runtime and cannot
+  be enumerated. Exact names win over patterns, and overlapping patterns resolve in declaration
+  order. A queue entry may also name a `profile` alongside its own overrides, matching what groups
+  already allowed.
+- **`ConnectionLimitedProfile`** for queues whose parallelism is dictated by something downstream —
+  an API that accepts five concurrent callers, a fixed database connection budget. The worker count
+  becomes the limit, which avoids the `RateLimited`/`WithoutOverlapping` trap of releasing jobs back
+  onto the queue and spending retry budget on lock contention. Verified against real backlogs on both
+  Redis and SQS, including that the cap is a fleet total rather than a per-host allowance.
+- **`queue:autoscale:doctor`** reports configurations that are valid and still govern the wrong
+  queues: patterns matching nothing, what each glob actually caught, queue names SQS rejects, caps
+  that are per-host because cluster mode is off, pattern matching with no `limits.max_total_workers`,
+  and FIFO queues allowing more parallelism than their message groups may support.
+- **`src/Testing`** — `InMemoryFailureWindowStore`, `FakeClusterStore`, `QueueMetricsFactory` and an
+  `InteractsWithAutoscaling` trait, so applications can assert what their own configuration will do
+  without Redis and without waiting for load.
+- **`ClusterStoreContract`.** The cluster store was the last capability not behind a contract, which
+  left everything reading cluster state untestable without live Redis.
+- SQS and FIFO queues are covered by integration specs running against ElasticMQ.
+
+### Changed
+
+- **Pickup samples cost one round trip and are sampled above a configurable rate.** Recording a
+  pickup issued LPUSH then LTRIM per job — two round trips on the hot path of every job the
+  application runs, against the same Redis the queue uses. They now travel as one Lua call. Above
+  100 pickups per second per worker process, a uniformly random subset is stored: since only
+  `max_samples_per_queue` entries ever survived, the discarded writes were already being trimmed
+  away, and the survivors described the last instant of the window rather than the window itself.
+  Sampling covers the window better and writes less.
+- **Queue names containing dots reach their own configuration.** The lookup used dot notation, so a
+  queue named `tenant.42` — or any `.fifo` queue — was unreachable and silently ran on defaults. If
+  you have such a queue, its configuration starts applying on upgrade.
 
 ### Failure fuse (circuit breaker for scaling decisions)
 
@@ -39,7 +104,7 @@ The fuse watches the recent job failure rate per queue and interrupts that loop:
 - **PHPStan runs at level max with no baseline.** Three of the baseline's four entries were suppressing "unreachable code" findings in the SIGTERM-wait-SIGKILL escalation, which is live code that analysis could not model; `WorkerProcess::isRunning()`/`isDead()` are now marked `@phpstan-impure`. The remaining errors were genuine typing holes, fixed at the cause.
 - Dropped `spatie/laravel-package-tools`, a runtime dependency referenced nowhere in `src/`.
 - Added `limits.max_total_workers`, an optional hard ceiling on total workers per host.
-- Per-queue `workers.tries` / `timeout_seconds` / `sleep_seconds` now reach the spawned worker. They were parsed and then ignored.
+- Per-queue `workers.tries` / `sleep_seconds` / `shutdown_timeout_seconds` now reach the spawned worker. They were parsed and then ignored. (The two timeout keys were split at the same time — see Breaking.)
 - Declared `ext-pcntl` and `ext-posix`, which the manager calls unguarded and which are commonly absent from the official PHP Docker images.
 
 ### Fixed

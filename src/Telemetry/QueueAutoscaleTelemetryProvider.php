@@ -37,7 +37,7 @@ readonly class QueueAutoscaleTelemetryProvider implements TelemetryProvider
             'queue_autoscale.cluster.managers' => ['manager_count', 'Active autoscale managers in the cluster', '{managers}'],
             'queue_autoscale.cluster.workers' => ['total_workers', 'Autoscaler-spawned workers across the cluster', '{workers}'],
             'queue_autoscale.cluster.required_workers' => ['required_workers', 'Cluster-wide worker demand', '{workers}'],
-            'queue_autoscale.cluster.capacity' => ['total_worker_capacity', 'Cluster-wide worker capacity', '{workers}'],
+            'queue_autoscale.cluster.worker_capacity' => ['total_worker_capacity', 'Cluster-wide worker capacity', '{workers}'],
             'queue_autoscale.cluster.utilization' => ['utilization_percent', 'Cluster worker capacity utilization', '%'],
         ];
 
@@ -58,17 +58,35 @@ readonly class QueueAutoscaleTelemetryProvider implements TelemetryProvider
         );
 
         $registry->gauge(
-            'queue_autoscale.cluster.host.workers',
+            'queue_autoscale.cluster.host_workers',
             fn (): array => $this->perHost('total_workers'),
             description: 'Autoscaler-spawned workers per host',
             unit: '{workers}',
         );
 
         $registry->gauge(
-            'queue_autoscale.cluster.host.capacity',
+            'queue_autoscale.cluster.host_capacity',
             fn (): array => $this->perHost('max_workers'),
             description: 'Worker capacity per host',
             unit: '{workers}',
+        );
+
+        // Resource pressure per host. The facade's metric list has always
+        // carried these; without them here the two surfaces described
+        // different clusters, and target-tracking autoscalers want exactly
+        // this signal.
+        $registry->gauge(
+            'queue_autoscale.cluster.host_cpu',
+            fn (): array => $this->perHost('cpu_percent'),
+            description: 'CPU in use per host',
+            unit: '%',
+        );
+
+        $registry->gauge(
+            'queue_autoscale.cluster.host_memory',
+            fn (): array => $this->perHost('memory_percent'),
+            description: 'Memory in use per host',
+            unit: '%',
         );
     }
 

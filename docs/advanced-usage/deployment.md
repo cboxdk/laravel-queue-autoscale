@@ -16,10 +16,10 @@ the operational details that apply across all platforms.
 
 From `composer.json`:
 
-- PHP **8.3, 8.4 or 8.5** (`"php": "^8.3|^8.4|^8.5"`)
+- PHP **8.4 or 8.5** (`"php": "^8.4|^8.5"`)
 - The **pcntl** and **posix** extensions (signal handling and process ownership — both are hard
   requirements, not suggestions)
-- Laravel 11, 12 or 13 (`illuminate/contracts: ^11.0||^12.0||^13.0`)
+- Laravel 12 or 13 (`illuminate/contracts: ^12.0||^13.0`)
 - `cboxdk/laravel-queue-metrics: ^3.0` — installed automatically as a dependency
 - A queue backend the metrics package can observe (Redis or database)
 - A process supervisor for the manager daemon (Supervisor or systemd)
@@ -236,7 +236,7 @@ sudo journalctl -u queue-autoscale -f
 ### Option 3: Docker
 
 ```dockerfile
-FROM php:8.3-cli
+FROM php:8.4-cli
 
 RUN apt-get update && apt-get install -y supervisor \
     && docker-php-ext-install pcntl \
@@ -252,7 +252,7 @@ COPY docker/supervisor-autoscale.conf /etc/supervisor/conf.d/
 CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]
 ```
 
-The base image must be PHP 8.3 or newer — `php:8.2-cli` cannot install this package. `posix` is
+The base image must be PHP 8.4 or newer — `php:8.3-cli` cannot install this package. `posix` is
 enabled by default in the official images; `pcntl` is not, hence the `docker-php-ext-install` line.
 
 `docker/supervisor-autoscale.conf`:
@@ -367,11 +367,11 @@ QUEUE_AUTOSCALE_TELEMETRY_CACHE_TTL=10
 Plus the metrics package's own variables — at minimum `QUEUE_METRICS_STORAGE` and, for Redis,
 `QUEUE_METRICS_CONNECTION`.
 
-### A note on `manager.evaluation_interval_seconds`
+### Setting the evaluation interval
 
-The published config contains `manager.evaluation_interval_seconds`, but the running loop does not
-consult it: `queue:autoscale` reads its own `--interval` option (default `5`) and passes that to the
-manager. Set the interval on the command line in your Supervisor or systemd unit.
+`manager.evaluation_interval_seconds` (default `5`) is the fleet-wide setting. `queue:autoscale
+--interval=` overrides it for one process, which is the right tool for a single host that needs to
+differ — not the only way to set it.
 
 ## What the spawned workers actually run
 
@@ -381,15 +381,18 @@ manager. Set the interval on the command line in your Supervisor or systemd unit
 php artisan queue:work {connection} \
     --queue={queue} \
     --tries={workers.tries} \
-    --max-time={workers.timeout_seconds} \
+    --max-time={workers.max_time_seconds} \
+    --timeout={workers.timeout_seconds} \
     --sleep={workers.sleep_seconds}
 ```
 
-Those five flags are the complete list. In particular:
+Those six flags are the complete list. In particular:
 
-- **`workers.timeout_seconds` maps to `--max-time`, not `--timeout`.** It bounds the worker's
-  *lifetime* (default `3600` seconds), not how long a single job may run. Per-job timeouts remain a
-  Laravel concern — set `$timeout` on the job class or `retry_after` on the connection.
+- **The two time limits are separate.** `workers.max_time_seconds` becomes `--max-time` and bounds
+  the worker process's *lifetime* (default `3600` seconds); `workers.timeout_seconds` becomes
+  `--timeout` and bounds how long a *single job* may run (default `900`). Configuration refuses a job
+  timeout that is not shorter than the process lifetime, since a job that outlives its worker can
+  never finish.
 - **There is no memory flag.** The spawner never passes `--memory`. Worker memory is bounded by
   PHP's own `memory_limit` and by the manager's `limits.max_memory_percent` ceiling, which stops new
   workers being spawned rather than stopping existing ones.
@@ -542,7 +545,7 @@ worker. In addition, `RestartSignal` watches the `illuminate:queue:restart` cach
 
 ## Deployment checklist
 
-- [ ] PHP 8.3+ with `pcntl` and `posix` enabled
+- [ ] PHP 8.4+ with `pcntl` and `posix` enabled
 - [ ] `laravel-queue-metrics` configured and returning data from `getAllQueuesWithMetrics()`
 - [ ] `config/queue-autoscale.php` published, profiles chosen per queue
 - [ ] `workers.max` set deliberately for every queue that matters

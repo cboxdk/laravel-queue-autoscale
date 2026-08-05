@@ -85,7 +85,10 @@ if ($capacity !== null) {
 }
 ```
 
-`limitingFactor` is one of `cpu`, `memory`, `balanced`, `config`, `strategy`, `fuse`, or `system_metrics_unavailable`.
+`limitingFactor` is a `LimitingFactor` enum, not a string — compare against the case
+(`LimitingFactor::Cpu`) or against `->value` if you need the raw token. The cases are `Cpu`,
+`Memory`, `Balanced`, `Config`, `Strategy`, `Fuse` and `SystemMetricsUnavailable`, whose values are
+the lowercase forms.
 
 **Watch for:**
 
@@ -218,7 +221,7 @@ class CollectScalingMetrics
         if ($decision->capacity !== null) {
             $this->metrics->gauge('autoscale.max_workers', $decision->capacity->finalMaxWorkers, [
                 ...$tags,
-                'limiter' => $decision->capacity->limitingFactor,
+                'limiter' => $decision->capacity->limitingFactor->value,
             ]);
         }
     }
@@ -317,11 +320,11 @@ Evaluated at scrape time from the Redis-backed cluster summary, so they report n
 | `queue_autoscale.cluster.managers` | Active autoscale managers in the cluster |
 | `queue_autoscale.cluster.workers` | Autoscaler-spawned workers across the cluster |
 | `queue_autoscale.cluster.required_workers` | Cluster-wide worker demand |
-| `queue_autoscale.cluster.capacity` | Cluster-wide worker capacity |
+| `queue_autoscale.cluster.worker_capacity` | Cluster-wide worker capacity |
 | `queue_autoscale.cluster.utilization` | Cluster worker capacity utilization, percent |
 | `queue_autoscale.cluster.recommended_hosts` | Host count recommended by the leader |
-| `queue_autoscale.cluster.host.workers` | Workers per host, labelled `host` |
-| `queue_autoscale.cluster.host.capacity` | Worker capacity per host, labelled `host` |
+| `queue_autoscale.cluster.host_workers` | Workers per host, labelled `host` |
+| `queue_autoscale.cluster.host_capacity` | Worker capacity per host, labelled `host` |
 
 The snapshot behind these is cached for `telemetry.cache_ttl` seconds so concurrent scrapes do not all hit the cluster store.
 
@@ -417,7 +420,7 @@ public function handle(ScalingDecisionMade $event): void
 {
     $capacity = $event->decision->capacity;
 
-    if ($capacity === null || $capacity->limitingFactor !== 'config') {
+    if ($capacity === null || $capacity->limitingFactor !== LimitingFactor::Config) {
         return;
     }
 

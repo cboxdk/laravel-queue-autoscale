@@ -1,6 +1,6 @@
 ---
 title: "Introduction"
-description: "SLA-driven autoscaling for Laravel queue workers, built on Little's Law and backlog-drain math"
+description: "Declare how long a job may wait. The autoscaler works out how many workers that takes."
 weight: 1
 ---
 
@@ -27,6 +27,135 @@ Here you state the outcome you actually care about:
 
 Every evaluation cycle the manager measures the queue, solves for the worker count that satisfies
 that target, bounds it by what the host can actually run, and moves the pool toward it.
+
+## Who does the translation?
+
+Every scaling model eventually needs one number: how many workers to run. The models differ in who
+works it out — you, or the autoscaler.
+
+| What you configure | What the system does with it | What you had to know |
+|---|---|---|
+| A fixed count | Nothing. It runs what you set. | How many workers your load needs. |
+| A ceiling, split between queues | Divides your ceiling between queues — by how deep each one is, or by how long each looks like it will take to clear. | How many workers your load needs — the ceiling *is* that guess. |
+| A jobs-per-worker target | Divides queue depth by your target. | How many jobs one worker clears in an acceptable time. |
+| **A pickup-time target** | Measures how long jobs actually take and how fast they arrive, then solves for the count. | **How long a job may wait before it matters to you.** |
+
+Only the last one asks a question you can answer from the business. "Password resets must go out within
+ten seconds" is a fact about your product. "Password resets need four workers" is a derivation from
+that fact, made with information you do not have on a Tuesday afternoon — how long the job takes this
+week, how many are arriving right now, how long a new worker takes to start.
+
+The first three are not wrong. They are fast, they need almost no measurement, and a fixed pool is
+genuinely the right answer for a queue whose load never changes. But each of them makes you do the
+arithmetic once, in advance, from numbers that move.
+
+### Why queue depth is a proxy, and where it breaks
+
+Depth is the cheapest signal there is — one call to any queue driver returns it. That is why most
+scaling models are built on it. It is also a stand-in for the thing you care about, and stand-ins
+break in specific ways:
+
+- **Jobs are not the same size.** Ten jobs at 100 ms and ten jobs at sixty seconds are the same
+  depth and nine minutes apart in real terms.
+- **Retries look like new work.** A job that fails and is released re-enters the queue. Depth goes
+  up, but no new work arrived.
+- **Contention looks like load.** Laravel's own `RateLimited` and `WithoutOverlapping` middleware
+  *release jobs back onto the queue* rather than running them. Under contention, depth measures how
+  many jobs are waiting for a lock — and adding workers makes it strictly worse. A depth-driven
+  scaler reads this as demand and scales into the spiral.
+
+That last case is why this package has a [failure fuse](basic-usage/failure-fuse.md): when jobs are
+failing rather than queueing, more workers are the wrong answer, and something has to say so.
+
+Some models improve on raw depth by dividing their pool according to how long each queue looks like
+it will take to clear, which does answer the first objection — a queue of slow jobs earns more
+workers than a queue of fast ones. It is a better split. It is still a split: the size of the pool
+being divided is the number you supplied.
+
+Pickup time has none of those failure modes, because it is not a proxy. It is the number you were
+trying to control in the first place, measured directly.
+
+### What happens before there is evidence
+
+Deriving workers from latency needs measurement that depth alone does not: how long jobs take, when
+they were enqueued, when they were picked up. A queue that has just been created has none of that.
+
+It does not fall over, and it does not guess. Every input degrades to a cruder one, and the decision
+reason names which it used:
+
+| Input | With evidence | Without it |
+|---|---|---|
+| SLA signal | p95 over observed pickup times | Age of the oldest waiting job |
+| Job duration | Measured average, sanity-bounded | A configured fallback |
+| Arrival rate | Backlog deltas, blended with a forecast | Observed processing rate, then derived from backlog and age |
+| Memory and CPU per worker | Measured from running workers | Your per-queue figure, then a global default |
+| Host capacity | Measured CPU and memory headroom | A deliberately small ceiling |
+
+Read the right-hand column together and it describes a depth-and-age scaler — which is to say, a cold
+start behaves roughly like the models in the table above, and improves from there as evidence arrives.
+You are not worse off on minute one for having chosen this; you are better off by minute ten. The
+`EstimateSource` on every decision tells you which column you are in, so "is it warmed up yet?" is a
+question you can answer rather than assume.
+
+### It stays a good neighbour
+
+A scaling model that only knows queue depth has no idea what machine it is running on. `ceil(20 / 5)`
+is four workers whether the box can carry forty or two.
+
+Every target here is bounded by measured CPU and memory headroom on the host *before* any minimum is
+applied, and each queue can only claim capacity the other queues are not already using. If the host
+cannot be read at all, the ceiling drops to a small conservative number and the decision says
+`system_metrics_unavailable` rather than assuming the machine is empty. An optional
+`limits.max_total_workers` puts a hard cap across every queue and group, for the case where queue
+names are discovered rather than configured.
+
+The failure mode of a queue-depth scaler under a backlog it cannot drain is to keep adding workers.
+The failure mode here is to stop at what the machine has and say why.
+
+## What the number counts
+
+A worker count only means something once you know what it is counted over. Three models, three
+different answers — and the difference shows up as either surprise cost or surprise latency.
+
+**Counted per host.** A process supervisor running on each machine scales that machine and knows
+nothing about the others. Set a ceiling of twenty and run six hosts and you have authorised a hundred
+and twenty workers against one database. The ceiling reads like a budget and behaves like a budget
+per replica. Making it a real fleet budget means dividing it by your host count by hand and redoing
+that arithmetic every time you add or lose a machine.
+
+**Counted per container.** One worker to a container makes the platform's own limits the enforcement
+mechanism, which is a genuinely sound trade: nothing can oversubscribe a box, because nothing shares
+one. You pay for it in granularity. Each worker carries a full container's allocation and a full cold
+start, so a queue that needs eleven workers for ninety seconds costs eleven containers spun up and
+torn down, and the memory a worker does not use is not available to anything else.
+
+**Counted per fleet.** Here the leader solves for the demand of a workload once, across every host,
+and then hands each host a share weighted by the capacity that host actually reported. A host with
+more headroom takes more; a host already busy with other queues takes fewer; every host still applies
+its own resource ceiling to whatever it is handed. The ceiling you configure is the number of workers
+that will exist, not the number that will exist somewhere.
+
+## Queues you forgot to configure still get processed
+
+Naming your queues is the step everyone gets wrong eventually. A developer adds
+`dispatch(new ThingJob)->onQueue('exports')` and nobody adds `exports` to the supervisor config. A
+queue name is misspelled in one of the two places it appears. A tenant-specific queue is created at
+runtime and no config file knows about it. In every case the jobs are enqueued successfully, nothing
+errors, and they are never picked up — until someone notices days later.
+
+This package does not read its list of queues from configuration. It reads it from the metrics
+package, which sees every queue that has actually received a job. Anything that appears there is
+managed, using your default profile, with no configuration at all. Configuration exists to *change*
+how a queue is treated, not to make it visible.
+
+That trades one failure mode for another, so both halves ship:
+
+- [`excluded`](basic-usage/configuration.md) takes glob patterns for queues this package must never
+  touch — the ones another supervisor owns, or throwaway queues you do not want workers for.
+- [`limits.max_total_workers`](basic-usage/configuration.md) caps the whole host. Discovery means an
+  application that generates queue names per tenant can present thousands of them, and each would
+  otherwise be raised to its floor. The cap is the backstop; it is worth setting the moment queue
+  names are dynamic.
 
 ## Key features
 
@@ -113,7 +242,7 @@ deep dive.
 
 ## Requirements
 
-- **PHP**: 8.3, 8.4 or 8.5
+- **PHP**: 8.4 or 8.5
 - **Laravel**: 11, 12 or 13
 - **Extensions**: `ext-pcntl`, `ext-posix`
 - **Redis**: optional; required only for cluster mode

@@ -10,7 +10,7 @@ Zero to a working autoscaled queue in about 5 minutes. Every command and file pa
 
 ## Prerequisites
 
-- PHP 8.3+ and Laravel 11+, with `ext-pcntl` and `ext-posix` available
+- PHP 8.4+ and Laravel 12+, with `ext-pcntl` and `ext-posix` available
 - Redis configured in `config/database.php` only if you plan to use the Redis or cluster presets
 - `cboxdk/laravel-queue-metrics` already set up — see [Installation](basic-usage/installation.md)
 
@@ -41,8 +41,8 @@ Starting Queue Autoscale Manager
 ```
 
 The manager ID is your hostname plus a short hash derived from container/machine identity, so two
-managers on the same host never collide. The interval comes from `--interval` (default 5); the
-`manager.evaluation_interval_seconds` config key is not consulted. Leave the manager running.
+managers on the same host never collide. The interval comes from `manager.evaluation_interval_seconds` (default 5), which `--interval`
+overrides when given. Leave the manager running.
 
 > Use `-vv` for debug-level output (per-queue metrics and decisions) and `-vvv` to also see the capacity breakdown used for each scaling decision.
 

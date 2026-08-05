@@ -41,7 +41,7 @@ The evaluation interval controls how often scaling decisions are made. **It is s
 php artisan queue:autoscale --interval=5   # 5 is the default
 ```
 
-> `queue-autoscale.manager.evaluation_interval_seconds` exists in the published config and is documented as 5 seconds, but nothing in the package reads it — `AutoscaleConfiguration::evaluationIntervalSeconds()` has no callers. Changing that key has **no effect**. Set the interval on the command line in your supervisor/systemd unit.
+> `queue-autoscale.manager.evaluation_interval_seconds` sets the default. The `--interval` flag overrides it when given, so the config key is the right place to set a fleet-wide value and the flag is the per-process exception.
 
 **Faster intervals (2-5s):**
 - Quicker response to traffic spikes
@@ -161,7 +161,7 @@ Per-worker runtime knobs live under the `workers` key of a queue config:
 'queues' => [
     'exports' => [
         'workers' => [
-            'timeout_seconds' => 300,  // --max-time= on queue:work
+            'max_time_seconds' => 300,  // --max-time: recycle the worker this often
             'sleep_seconds' => 3,      // --sleep= on queue:work
             'tries' => 3,              // --tries= on queue:work
         ],
@@ -169,9 +169,11 @@ Per-worker runtime knobs live under the `workers` key of a queue config:
 ],
 ```
 
-Note that `timeout_seconds` maps to `--max-time` (total worker lifetime before it exits and is respawned), **not** to `--timeout` (per-job limit). The spawner never passes `--timeout` or `--memory`; set those in `php.ini` or in your own worker supervision if you need them.
+`max_time_seconds` becomes `--max-time`, the worker process's total lifetime before it exits and is respawned; `timeout_seconds` becomes `--timeout`, how long one job may run. The spawner passes no `--memory` flag — set that in `php.ini` if you need it.
 
-**Tuning `timeout_seconds`** (how long a worker is kept alive before recycling). Look at recent job durations in your metrics store and set it comfortably above the longest job you expect a worker to be mid-way through when it recycles.
+**Tuning `max_time_seconds`** (how long a worker process is kept alive before recycling). Look at recent job durations in your metrics store and set it comfortably above the longest job a worker might be part-way through when it recycles.
+
+**Tuning `timeout_seconds`** (how long a single job may run). Set it above your slowest job and below `max_time_seconds`; configuration refuses the reverse.
 
 **Tuning `sleep_seconds`** (how long a worker sleeps when the queue is empty). Higher-frequency queues benefit from 1–2s; background queues save CPU with 5–10s.
 
@@ -214,6 +216,37 @@ $hostCeiling = max(min($maxByCpu, $maxByMemory), 0);
 The host ceiling is then divided among queues: each queue's share is `hostCeiling - (workers running for other queues)`, and the per-queue `workers.max` is applied on top of that.
 
 System metrics are cached for 4 seconds inside the capacity calculator, because sampling CPU blocks for a second. If the system-metrics read fails entirely, the calculator falls back to a conservative fixed ceiling and reports `limitingFactor: 'system_metrics_unavailable'`.
+
+### Cost of measuring pickup time
+
+The p95 that drives every SLA decision is built from samples recorded as jobs are picked up, which
+puts one write on the hot path of every job the application runs. Two things keep that cheap.
+
+The write is a single round trip — the push and the trim that caps the sample list travel as one
+call, rather than as two commands against the same Redis instance the queue itself is using.
+
+Above a configurable rate, each worker process forwards only a uniformly random subset of pickups:
+
+```php
+'pickup_time' => [
+    'max_samples_per_queue' => 1000,
+    'sampling' => [
+        'enabled' => true,
+        'max_per_second' => 100,
+    ],
+],
+```
+
+This costs nothing in accuracy, and at high throughput it buys some. Only `max_samples_per_queue`
+entries survive, so a queue running well above that rate was paying to write samples that were
+trimmed away moments later — and the ones that survived all described the last instant of the window
+rather than the window as a whole. A random subset spans the window instead, and because every job in
+a window has the same chance of being chosen, its p95 estimates the p95 of everything that ran.
+
+The rate is per worker process, so a host running twenty workers forwards up to twenty times
+`max_per_second`. Queues below the threshold record every pickup and are unaffected. Setting
+`max_per_second` to zero disables sampling rather than silencing the signal — a misconfigured rate
+must not blind the p95.
 
 ### Queue prioritisation
 
@@ -333,7 +366,7 @@ Spawn latency is unavoidable when a queue has to grow from cold. Two ways to avo
 **Diagnosis:** run the manager in `-vv` mode and watch the time between evaluation cycles and the `current → target` transitions. If several cycles pass with `current < target` and no spawn, the cooldown or a policy is blocking.
 
 **Solutions:**
-1. Reduce the daemon's `--interval` (default 5s). This is the only place the interval is set — the config key has no effect.
+1. Reduce `manager.evaluation_interval_seconds` (default 5s), or `--interval` on a single daemon.
 2. Reduce `scaling.cooldown_seconds` (default 60s) if the block is a direction reversal
 3. Lower `scaling.breach_threshold` (default 0.5) so backlog-drain engages earlier in the SLA window
 4. Swap to a profile with a more aggressive forecast policy (`CriticalProfile` or `BurstyProfile`)

@@ -36,7 +36,7 @@ class ManagerProcessLock
         }
 
         $this->requestShutdown($existing);
-        $deadline = microtime(true) + max(AutoscaleConfiguration::shutdownTimeoutSeconds(), 10);
+        $deadline = microtime(true) + max(AutoscaleConfiguration::shutdownGraceSeconds(), 10);
 
         do {
             if (flock($handle, LOCK_EX | LOCK_NB)) {

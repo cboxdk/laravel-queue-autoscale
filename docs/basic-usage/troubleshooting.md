@@ -66,7 +66,7 @@ The output names the limiting factor for every queue.
 
    The error will be immediate — almost always `.env` permissions, missing Redis connection, or a wrong PHP path.
 2. **PHP is running out of memory on each job.** Check `storage/logs/laravel.log` for `Allowed memory size` errors in the spawned workers. The autoscaler never passes `--memory` to `queue:work`, so raise `memory_limit` in the php.ini the manager's PHP binary uses.
-3. **A worker is hitting `workers.timeout_seconds`.** That value is passed as `--max-time`, so the worker exits after that many seconds of life and is respawned. Default is 3600s. Expected behaviour unless you see it every few seconds.
+3. **A worker is hitting `workers.max_time_seconds`.** That value is passed as `--max-time`, so the worker process exits after that many seconds of life and is respawned. Default is 3600s. Expected behaviour unless you see it every few seconds. (A job exceeding `workers.timeout_seconds` is a different event — that kills the job, not the worker.)
 
 ## Workers keep spawning and terminating (flapping)
 
@@ -168,7 +168,7 @@ If the reason string does **not** mention the fuse, the cause is elsewhere — s
 **Causes:**
 
 1. **The worker job is crashing.** Run one of the queue's jobs synchronously to see the error: `php artisan queue:work redis --queue=legacy-sync --once`.
-2. **A memory leak in the job code is hitting PHP's `memory_limit`.** Long-running workers accumulate memory. For jobs with known leaks, set `workers.timeout_seconds` to a low value (e.g. 300) on that queue so they recycle regularly — the supervisor respawns them automatically.
+2. **A memory leak in the job code is hitting PHP's `memory_limit`.** Long-running workers accumulate memory. For jobs with known leaks, set `workers.max_time_seconds` to a low value (e.g. 300) on that queue so the process recycles regularly — the supervisor respawns them automatically.
 3. **Something external is killing PHP processes.** OS-level OOM-killer, a misconfigured systemd service, or a deploy script that kills `queue:work` but leaves the autoscaler running. Check `dmesg` and systemd journals.
 
 ## A group never scales up even though its members have jobs

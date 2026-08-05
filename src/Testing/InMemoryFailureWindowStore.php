@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Cbox\LaravelQueueAutoscale\Tests\Helpers;
+namespace Cbox\LaravelQueueAutoscale\Testing;
 
 use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
 

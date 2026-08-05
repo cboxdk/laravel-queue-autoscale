@@ -3,7 +3,9 @@ parameters:
     paths:
         - src
         - config
-        - database
+        # Composition sites for the traits shipped in src/Testing, which Pest's
+        # uses() hides from analysis.
+        - tests/Fixtures
     tmpDir: build/phpstan
     checkOctaneCompatibility: true
     checkModelProperties: true

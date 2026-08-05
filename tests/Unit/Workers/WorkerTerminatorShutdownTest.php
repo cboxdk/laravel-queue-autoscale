@@ -33,7 +33,13 @@ function stubbornWorker(): WorkerProcess
 }
 
 beforeEach(function (): void {
+    // The drain window is resolved per queue from the profile, which is the
+    // real config surface — the global block is only the fallback.
     config()->set('queue-autoscale.workers.shutdown_timeout_seconds', 1);
+    config()->set('queue-autoscale.queues.default', [
+        'workers' => ['shutdown_timeout_seconds' => 1],
+    ]);
+
     $this->terminator = new WorkerTerminator;
 });
 

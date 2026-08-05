@@ -118,6 +118,22 @@ return [
         'store' => env('QUEUE_AUTOSCALE_PICKUP_TIME_STORE', 'auto'),
         'percentile_calculator' => SortBasedPercentileCalculator::class,
         'max_samples_per_queue' => 1000,
+
+        /*
+         * Recording a pickup costs a write on the hot path of every job. Since
+         * only `max_samples_per_queue` entries survive, a high-throughput queue
+         * spends that write producing samples the store trims away moments
+         * later — and the survivors describe the last instant of the window
+         * rather than the window as a whole.
+         *
+         * Above `max_per_second` each worker process forwards a uniformly
+         * random subset instead, which costs less and covers the window better.
+         * Set `enabled` to false to record every pickup.
+         */
+        'sampling' => [
+            'enabled' => env('QUEUE_AUTOSCALE_PICKUP_SAMPLING', true),
+            'max_per_second' => env('QUEUE_AUTOSCALE_PICKUP_SAMPLES_PER_SECOND', 100),
+        ],
     ],
 
     /*
@@ -232,23 +248,6 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Worker configuration
-    |--------------------------------------------------------------------------
-    |
-    | Settings for spawned queue workers. These control how queue:work
-    | processes are started by the autoscale manager.
-    |
-    */
-    'workers' => [
-        'timeout_seconds' => 3600,
-        'tries' => 3,
-        'sleep_seconds' => 3,
-        'shutdown_timeout_seconds' => 30,
-        'health_check_interval_seconds' => 10,
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
     | Manager process
     |--------------------------------------------------------------------------
     |
@@ -262,6 +261,14 @@ return [
     */
     'manager' => [
         'evaluation_interval_seconds' => 5,
+
+        /*
+         * How long a handover waits for the outgoing manager to finish
+         * draining, and the floor for a pool-wide drain. This is about the
+         * MANAGER process — a worker's own drain window is per-queue, in the
+         * profile's workers.shutdown_timeout_seconds.
+         */
+        'shutdown_grace_seconds' => 30,
         'log_channel' => env('QUEUE_AUTOSCALE_LOG_CHANNEL', 'stack'),
         'restart_scope' => env('QUEUE_AUTOSCALE_RESTART_SCOPE'),
         'honor_queue_restart' => env('QUEUE_AUTOSCALE_HONOR_QUEUE_RESTART', true),

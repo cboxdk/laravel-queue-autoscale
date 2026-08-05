@@ -113,6 +113,45 @@ class WorkerPool
         )->count();
     }
 
+    /**
+     * Workers that still hold a slot, including those draining.
+     *
+     * `count()` excludes terminating workers so a scale-down is not repeated
+     * on the next cycle. That is right for deciding what to remove and wrong
+     * for deciding what to add: a draining worker is still a live OS process
+     * still consuming memory and — until it exits — still polling its queue.
+     * Spawning against the smaller number puts a second worker on a queue that
+     * already has one, which for a queue pinned to exactly one worker is the
+     * single thing that configuration exists to prevent.
+     */
+    public function liveCount(string $connection, string $queue): int
+    {
+        return $this->workers->filter(
+            fn (WorkerProcess $w) => $w->matches($connection, $queue) && $w->isRunning()
+        )->count();
+    }
+
+    public function liveCountGroup(string $connection, string $group): int
+    {
+        return $this->workers->filter(
+            fn (WorkerProcess $w) => $w->matchesGroup($connection, $group) && $w->isRunning()
+        )->count();
+    }
+
+    /**
+     * Every running worker, draining or not.
+     *
+     * Used wherever the question is about resources rather than about the
+     * scaling target: host ceilings and the cluster heartbeat must count a
+     * draining worker, because the machine is still running it.
+     */
+    public function liveTotalCount(): int
+    {
+        return $this->workers->filter(
+            fn (WorkerProcess $w) => $w->isRunning()
+        )->count();
+    }
+
     public function totalCount(): int
     {
         return $this->workers->filter(

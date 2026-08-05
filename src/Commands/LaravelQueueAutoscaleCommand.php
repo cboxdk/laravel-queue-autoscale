@@ -16,7 +16,7 @@ use Illuminate\Console\Command;
 class LaravelQueueAutoscaleCommand extends Command
 {
     public $signature = 'queue:autoscale
-                        {--interval=5 : Evaluation interval in seconds}
+                        {--interval= : Evaluation interval in seconds; defaults to manager.evaluation_interval_seconds}
                         {--replace : Stop the existing local manager and take over its host lock}';
 
     public $description = 'Intelligent queue autoscaling daemon with predictive SLA-based scaling';
@@ -68,10 +68,22 @@ class LaravelQueueAutoscaleCommand extends Command
         return new DefaultOutputRenderer($this->output);
     }
 
+    /**
+     * The flag wins, the config key is the default.
+     *
+     * manager.evaluation_interval_seconds was documented as the knob in five
+     * places and read by nothing — the interval came only from --interval,
+     * which defaulted to a hardcoded 5. Editing the documented key had no
+     * effect at all.
+     */
     private function getInterval(): int
     {
         $interval = $this->option('interval');
 
-        return is_string($interval) ? (int) $interval : 5;
+        if (is_string($interval) && trim($interval) !== '') {
+            return max(1, (int) $interval);
+        }
+
+        return max(1, AutoscaleConfiguration::evaluationIntervalSeconds());
     }
 }

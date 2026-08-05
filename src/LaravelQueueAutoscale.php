@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale;
 
-use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ClusterStoreContract;
 
 readonly class LaravelQueueAutoscale
 {
     public function __construct(
-        private ClusterStore $clusterStore,
+        private ClusterStoreContract $clusterStore,
     ) {}
 
     /**
@@ -44,12 +44,12 @@ readonly class LaravelQueueAutoscale
                 'labels' => ['cluster' => $this->metricLabel($summary['cluster_id'] ?? null)],
             ],
             [
-                'name' => 'queue_autoscale_cluster_workers_current',
+                'name' => 'queue_autoscale_cluster_workers',
                 'value' => $this->metricInt($summary['total_workers'] ?? 0),
                 'labels' => ['cluster' => $this->metricLabel($summary['cluster_id'] ?? null)],
             ],
             [
-                'name' => 'queue_autoscale_cluster_workers_required',
+                'name' => 'queue_autoscale_cluster_required_workers',
                 'value' => $this->metricInt($summary['required_workers'] ?? 0),
                 'labels' => ['cluster' => $this->metricLabel($summary['cluster_id'] ?? null)],
             ],
@@ -59,8 +59,15 @@ readonly class LaravelQueueAutoscale
                 'labels' => ['cluster' => $this->metricLabel($summary['cluster_id'] ?? null)],
             ],
             [
-                'name' => 'queue_autoscale_cluster_hosts_recommended',
+                'name' => 'queue_autoscale_cluster_recommended_hosts',
                 'value' => $this->metricInt($scaleSignal['recommended_hosts'] ?? 0),
+                'labels' => ['cluster' => $this->metricLabel($summary['cluster_id'] ?? null)],
+            ],
+            [
+                // Carries the _percent suffix the telemetry renderer appends
+                // for a '%' unit, so the two surfaces name it identically.
+                'name' => 'queue_autoscale_cluster_utilization_percent',
+                'value' => $this->metricFloat($summary['utilization_percent'] ?? 0.0),
                 'labels' => ['cluster' => $this->metricLabel($summary['cluster_id'] ?? null)],
             ],
         ];
@@ -80,22 +87,22 @@ readonly class LaravelQueueAutoscale
             ];
 
             $metrics[] = [
-                'name' => 'queue_autoscale_manager_workers',
+                'name' => 'queue_autoscale_cluster_host_workers',
                 'value' => $this->metricInt($manager['total_workers'] ?? 0),
                 'labels' => $labels,
             ];
             $metrics[] = [
-                'name' => 'queue_autoscale_manager_capacity',
+                'name' => 'queue_autoscale_cluster_host_capacity',
                 'value' => $this->metricInt($manager['max_workers'] ?? 0),
                 'labels' => $labels,
             ];
             $metrics[] = [
-                'name' => 'queue_autoscale_manager_cpu_percent',
+                'name' => 'queue_autoscale_cluster_host_cpu_percent',
                 'value' => $this->metricFloat($manager['cpu_percent'] ?? 0.0),
                 'labels' => $labels,
             ];
             $metrics[] = [
-                'name' => 'queue_autoscale_manager_memory_percent',
+                'name' => 'queue_autoscale_cluster_host_memory_percent',
                 'value' => $this->metricFloat($manager['memory_percent'] ?? 0.0),
                 'labels' => $labels,
             ];

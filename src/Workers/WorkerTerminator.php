@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Workers;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Illuminate\Support\Facades\Log;
 
 readonly class WorkerTerminator
@@ -31,10 +33,17 @@ readonly class WorkerTerminator
      */
     public function terminateAll(iterable $workers, ?callable $onTerminate = null): int
     {
-        $timeout = AutoscaleConfiguration::shutdownTimeoutSeconds();
+        // One deadline covers the whole pool, so it has to be the longest
+        // window any worker in it asked for — a shared deadline set to the
+        // shortest would cut the slowest queue's jobs off mid-flight. The
+        // manager grace is the fallback for an empty pool, not a floor: a
+        // pool of fast queues should not be held open for it.
+        $timeout = 0;
         $pending = [];
 
         foreach ($workers as $worker) {
+            $timeout = max($timeout, $this->shutdownTimeoutFor($worker));
+
             if ($onTerminate !== null) {
                 $onTerminate($worker);
             }
@@ -57,7 +66,7 @@ readonly class WorkerTerminator
             );
         }
 
-        $deadline = time() + $timeout;
+        $deadline = time() + max($timeout, 1);
 
         while ($pending !== [] && time() < $deadline) {
             foreach ($pending as $pid => $worker) {
@@ -83,6 +92,40 @@ readonly class WorkerTerminator
         return count($pending);
     }
 
+    /**
+     * The drain window for THIS worker's queue.
+     *
+     * Per-queue workers.shutdown_timeout_seconds was parsed into
+     * WorkerConfiguration and then never read — every path used the global
+     * value, so a queue whose jobs genuinely need longer to finish could not
+     * be given more time. A worker knows which queue it serves, so it can
+     * resolve its own window.
+     *
+     * Group workers resolve theirs from the group's own profile.
+     */
+    private function shutdownTimeoutFor(WorkerProcess $worker): int
+    {
+        try {
+            // A group worker polls a comma-separated list, which is not a
+            // configurable queue name — its window comes from the group.
+            if ($worker->group !== null) {
+                $group = GroupConfiguration::allFromConfig()[$worker->group] ?? null;
+
+                return $group?->workers->shutdownTimeoutSeconds
+                    ?? AutoscaleConfiguration::shutdownGraceSeconds();
+            }
+
+            return QueueConfiguration::fromConfig($worker->connection, $worker->queue)
+                ->workers
+                ->shutdownTimeoutSeconds;
+        } catch (\Throwable) {
+            // A worker whose configuration no longer resolves — a queue
+            // removed from config while it was running — must still be
+            // terminable. The manager-level grace is the safe fallback.
+            return AutoscaleConfiguration::shutdownGraceSeconds();
+        }
+    }
+
     public function requestTermination(WorkerProcess $worker): bool
     {
         if ($worker->isTerminating()) {
@@ -104,7 +147,7 @@ readonly class WorkerTerminator
             return false;
         }
 
-        $worker->markTerminationRequested(now(), AutoscaleConfiguration::shutdownTimeoutSeconds());
+        $worker->markTerminationRequested(now(), $this->shutdownTimeoutFor($worker));
 
         Log::channel(AutoscaleConfiguration::logChannel())->info(
             'Worker termination requested',
@@ -154,7 +197,7 @@ readonly class WorkerTerminator
             return true;
         }
 
-        $timeout = AutoscaleConfiguration::shutdownTimeoutSeconds();
+        $timeout = $this->shutdownTimeoutFor($worker);
 
         // 1. Send SIGTERM for graceful shutdown
         if (! posix_kill($pid, SIGTERM)) {

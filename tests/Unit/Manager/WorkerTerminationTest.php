@@ -77,3 +77,42 @@ it('enforces termination deadlines on workers already shutting down', function (
 
     expect($process->isRunning())->toBeFalse();
 });
+
+it('does not spawn a replacement for a worker that is still draining', function () {
+    // A pinned queue exists because two workers on it at once would corrupt
+    // state. count() hides terminating workers so a scale-down is not
+    // repeated; if the spawn path used that number, a target that came back
+    // up while a worker was still finishing its job would put a second worker
+    // on the queue for the length of the drain.
+    $pool = new WorkerPool;
+
+    $process = new Process([PHP_BINARY, '-r', 'sleep(30);']);
+    $process->start();
+
+    $worker = new WorkerProcess($process, 'redis', 'exports', now());
+    $pool->add($worker);
+    $worker->markTerminationRequested(now(), 30);
+
+    expect($pool->count('redis', 'exports'))->toBe(0)
+        ->and($pool->liveCount('redis', 'exports'))->toBe(1);
+
+    $process->stop(0, SIGKILL);
+});
+
+it('counts a draining worker toward the host total', function () {
+    // Host ceilings are about resources, and the machine is still running the
+    // process regardless of whether it is on its way out.
+    $pool = new WorkerPool;
+
+    $process = new Process([PHP_BINARY, '-r', 'sleep(30);']);
+    $process->start();
+
+    $worker = new WorkerProcess($process, 'redis', 'exports', now());
+    $pool->add($worker);
+    $worker->markTerminationRequested(now(), 30);
+
+    expect($pool->totalCount())->toBe(0)
+        ->and($pool->liveTotalCount())->toBe(1);
+
+    $process->stop(0, SIGKILL);
+});

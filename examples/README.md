@@ -228,7 +228,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 
 class MyCustomPolicy implements ScalingPolicy
 {
-    public function before(ScalingDecision $decision): void
+    public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
     {
         // Actions before scaling occurs
         // - Validation
@@ -236,7 +236,7 @@ class MyCustomPolicy implements ScalingPolicy
         // - Logging
     }
 
-    public function after(ScalingDecision $decision): void
+    public function afterScaling(ScalingDecision $decision): void
     {
         // Actions after scaling completes
         // - Notifications

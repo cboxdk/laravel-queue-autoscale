@@ -6,7 +6,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\FailureClassifierContract;
 use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
 use Cbox\LaravelQueueAutoscale\Fuse\JobOutcomeRecorder;
 use Cbox\LaravelQueueAutoscale\Fuse\NullFailureWindowStore;
-use Cbox\LaravelQueueAutoscale\Tests\Helpers\InMemoryFailureWindowStore;
+use Cbox\LaravelQueueAutoscale\Testing\InMemoryFailureWindowStore;
 use Illuminate\Contracts\Queue\Job;
 use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobProcessed;

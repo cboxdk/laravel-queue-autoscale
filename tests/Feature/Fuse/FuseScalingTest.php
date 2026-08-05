@@ -16,7 +16,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
-use Cbox\LaravelQueueAutoscale\Tests\Helpers\InMemoryFailureWindowStore;
+use Cbox\LaravelQueueAutoscale\Testing\InMemoryFailureWindowStore;
 
 beforeEach(function (): void {
     $spawnTracker = new class implements SpawnLatencyTrackerContract

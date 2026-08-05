@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Scaling\Strategies\SimpleRateStrategy;
-use Tests\Helpers\MetricsHelper;
+use Cbox\LaravelQueueAutoscale\Testing\QueueMetricsFactory;
 
 beforeEach(function () {
     $this->strategy = app(SimpleRateStrategy::class);
@@ -11,7 +11,7 @@ beforeEach(function () {
 });
 
 test('calculates workers using little\'s law', function () {
-    $metrics = MetricsHelper::createMetrics([
+    $metrics = QueueMetricsFactory::make([
         'pending' => 100,
         'throughputPerMinute' => 60.0, // 1 job/sec
         'avgDuration' => 2.0,
@@ -26,7 +26,7 @@ test('calculates workers using little\'s law', function () {
 });
 
 test('returns zero workers for idle queue', function () {
-    $metrics = MetricsHelper::createMetrics();
+    $metrics = QueueMetricsFactory::make();
 
     $workers = $this->strategy->calculateTargetWorkers($metrics, $this->config);
 
@@ -34,7 +34,7 @@ test('returns zero workers for idle queue', function () {
 });
 
 test('uses fallback job time when metrics unavailable', function () {
-    $metrics = MetricsHelper::createMetrics([
+    $metrics = QueueMetricsFactory::make([
         'pending' => 50,
         'throughputPerMinute' => 60.0, // 1 job/sec
         'avgDuration' => 0, // No duration data
@@ -50,7 +50,7 @@ test('uses fallback job time when metrics unavailable', function () {
 });
 
 test('provides descriptive reason', function () {
-    $metrics = MetricsHelper::createMetrics([
+    $metrics = QueueMetricsFactory::make([
         'pending' => 100,
         'throughputPerMinute' => 120.0, // 2 jobs/sec
         'avgDuration' => 1.5,
@@ -69,7 +69,7 @@ test('provides descriptive reason', function () {
 });
 
 test('returns null prediction for simple strategy', function () {
-    $metrics = MetricsHelper::createMetrics([
+    $metrics = QueueMetricsFactory::make([
         'pending' => 50,
         'throughputPerMinute' => 60.0,
         'avgDuration' => 2.0,
@@ -85,7 +85,7 @@ test('returns null prediction for simple strategy', function () {
 });
 
 test('handles high throughput scenarios', function () {
-    $metrics = MetricsHelper::createMetrics([
+    $metrics = QueueMetricsFactory::make([
         'pending' => 1000,
         'throughputPerMinute' => 6000.0, // 100 jobs/sec
         'avgDuration' => 0.5,

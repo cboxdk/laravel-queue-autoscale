@@ -49,7 +49,7 @@ readonly class QueueConfiguration
     public static function fromConfig(string $connection, string $queue): self
     {
         $defaults = self::resolveProfileOrArray(config('queue-autoscale.sla_defaults'));
-        $override = config("queue-autoscale.queues.{$queue}", []);
+        $override = QueueConfigResolver::overrideFor($queue);
 
         $overrideArray = self::resolveProfileOrArray($override);
 
@@ -57,7 +57,7 @@ readonly class QueueConfiguration
          *     sla: array{target_seconds: int, percentile: int, window_seconds: int, min_samples: int},
          *     forecast: array{forecaster: class-string<ForecasterContract>, policy: class-string<ForecastPolicyContract>, horizon_seconds: int, history_seconds: int},
          *     spawn_compensation: array{enabled: bool, fallback_seconds: float, min_samples: int, ema_alpha: float},
-         *     workers: array{min: int, max: int, tries: int, timeout_seconds: int, sleep_seconds: int, shutdown_timeout_seconds: int, scalable?: bool},
+         *     workers: array{min: int, max: int, tries: int, max_time_seconds: int, timeout_seconds: int, sleep_seconds: int, shutdown_timeout_seconds: int, scalable?: bool},
          *     fuse?: array{enabled: bool, failure_threshold_percent: float, min_samples: int, window_seconds: int, cooldown_seconds: int},
          * } $merged
          */
@@ -88,6 +88,7 @@ readonly class QueueConfiguration
                 min: (int) $merged['workers']['min'],
                 max: (int) $merged['workers']['max'],
                 tries: (int) $merged['workers']['tries'],
+                maxTimeSeconds: (int) $merged['workers']['max_time_seconds'],
                 timeoutSeconds: (int) $merged['workers']['timeout_seconds'],
                 sleepSeconds: (int) $merged['workers']['sleep_seconds'],
                 shutdownTimeoutSeconds: (int) $merged['workers']['shutdown_timeout_seconds'],
@@ -102,15 +103,33 @@ readonly class QueueConfiguration
      */
     private static function resolveProfileOrArray(mixed $value): array
     {
-        if (is_string($value) && class_exists($value) && is_subclass_of($value, ProfileContract::class)) {
-            /** @var ProfileContract $instance */
-            $instance = new $value;
-
-            return $instance->resolve();
+        if (self::isProfileClass($value)) {
+            return (new $value)->resolve();
         }
 
         if (! is_array($value)) {
             return [];
+        }
+
+        // A 'profile' key names the baseline and the rest of the array refines
+        // it, matching how groups already accept a profile alongside their
+        // own settings. Without this a caller wanting one shipped profile with
+        // a single value changed had to restate every field it contains.
+        if (isset($value['profile'])) {
+            $profile = $value['profile'];
+            unset($value['profile']);
+
+            if (! self::isProfileClass($profile)) {
+                throw new InvalidConfigurationException(
+                    "queue-autoscale.queues 'profile' must be a class implementing ProfileContract, got: "
+                    .(is_string($profile) ? $profile : get_debug_type($profile))
+                );
+            }
+
+            return self::deepMerge(
+                (new $profile)->resolve(),
+                self::resolveProfileOrArray($value),
+            );
         }
 
         // Config arrays are string-keyed by construction; filtering rather
@@ -125,6 +144,16 @@ readonly class QueueConfiguration
         }
 
         return $resolved;
+    }
+
+    /**
+     * @phpstan-assert-if-true class-string<ProfileContract> $value
+     */
+    private static function isProfileClass(mixed $value): bool
+    {
+        return is_string($value)
+            && class_exists($value)
+            && is_subclass_of($value, ProfileContract::class);
     }
 
     /**

@@ -1,6 +1,6 @@
 ---
 title: "How It Works"
-description: "Comprehensive guide to understanding how the autoscaler makes scaling decisions"
+description: "What the manager does each cycle, and why it decided what it decided"
 weight: 10
 ---
 
@@ -352,11 +352,15 @@ If you create a custom profile with both a tight SLA (< 10s) and `workers.min = 
 {PHP_BINARY} artisan queue:work {connection} \
     --queue={queue} \
     --tries={workers.tries} \
-    --max-time={workers.timeout_seconds} \
+    --max-time={workers.max_time_seconds} \
+    --timeout={workers.timeout_seconds} \
     --sleep={workers.sleep_seconds}
 ```
 
-Those three flag values come from the **global** `queue-autoscale.workers` block — not from the queue's profile. Note also that `timeout_seconds` maps to `--max-time` (worker lifetime), **not** to `--timeout` (per-job limit); the spawner passes neither `--timeout` nor `--memory`.
+Every value comes from the queue's own profile; there is no global `workers` block. The two time
+limits are separate settings: `max_time_seconds` becomes `--max-time` and recycles the worker
+process, `timeout_seconds` becomes `--timeout` and bounds a single job. The spawner passes no
+`--memory` flag.
 
 Three environment variables are injected into each worker, and nothing else:
 
