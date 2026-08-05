@@ -21,6 +21,33 @@ readonly class WorkerSpawner
     ) {}
 
     /**
+     * The argv the worker process is started with.
+     *
+     * Separate from spawn() so it can be asserted without starting anything.
+     * A spec that reads the command line off a live process is really testing
+     * whether a subprocess survives its first fifty milliseconds, which is a
+     * property of the machine rather than of this class — it held locally and
+     * did not in CI, where queue:work exits immediately and the liveness check
+     * correctly discards the worker before the spec can see it.
+     *
+     * @return list<string>
+     */
+    public function buildCommand(string $connection, string $queue, WorkerConfiguration $workerConfig): array
+    {
+        return [
+            PHP_BINARY,
+            base_path('artisan'),
+            'queue:work',
+            $connection,
+            '--queue='.$queue,
+            '--tries='.$workerConfig->tries,
+            '--max-time='.$workerConfig->maxTimeSeconds,
+            '--timeout='.$workerConfig->timeoutSeconds,
+            '--sleep='.$workerConfig->sleepSeconds,
+        ];
+    }
+
+    /**
      * Spawn N queue:work worker processes.
      *
      * @param  string  $connection  Queue connection name
@@ -58,17 +85,7 @@ readonly class WorkerSpawner
         }
 
         for ($i = 0; $i < $count; $i++) {
-            $process = new Process([
-                PHP_BINARY,
-                base_path('artisan'),
-                'queue:work',
-                $connection,
-                '--queue='.$queue,
-                '--tries='.$workerConfig->tries,
-                '--max-time='.$workerConfig->maxTimeSeconds,
-                '--timeout='.$workerConfig->timeoutSeconds,
-                '--sleep='.$workerConfig->sleepSeconds,
-            ]);
+            $process = new Process($this->buildCommand($connection, $queue, $workerConfig));
 
             // Inject environment variables for monitoring
             $env = [

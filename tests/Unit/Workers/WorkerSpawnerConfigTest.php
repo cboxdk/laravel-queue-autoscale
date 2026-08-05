@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
@@ -18,19 +18,14 @@ function spawnedCommandLine(?WorkerConfiguration $workerConfig, string $queue = 
 {
     $spawner = new WorkerSpawner(app(SpawnLatencyTrackerContract::class));
 
-    $workers = $spawner->spawn(
-        connection: 'redis',
-        queue: $queue,
-        count: 1,
-        spawnConfig: new SpawnCompensationConfiguration(false, 2.0, 5, 0.2),
-        workerConfig: $workerConfig,
-    );
+    // Reads the argv the spawner builds rather than starting a process and
+    // reading it back. The old form depended on `queue:work` surviving the
+    // spawner's fifty-millisecond liveness check — true on a laptop, false in
+    // CI, where the worker exits at once and is correctly discarded before the
+    // spec can see it.
+    $workerConfig ??= QueueConfiguration::fromConfig('redis', $queue)->workers;
 
-    $worker = $workers->first();
-    $line = $worker?->process->getCommandLine() ?? '';
-    $worker?->process->stop(0);
-
-    return $line;
+    return implode(' ', $spawner->buildCommand('redis', $queue, $workerConfig));
 }
 
 test('falls back to the queue profile when the caller resolved none', function (): void {
