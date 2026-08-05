@@ -493,9 +493,9 @@ php artisan queue:autoscale --interval=5
 ```
 
 The default is 5 seconds. Each cycle sleeps `max(0, interval - executionTime)`, so a slow cycle does
-not compound. `manager.evaluation_interval_seconds` exists in the config file and in
-`AutoscaleConfiguration::evaluationIntervalSeconds()`, but the running loop does not consult it —
-the CLI flag is what takes effect.
+not compound. The value comes from `manager.evaluation_interval_seconds`; the `--interval` flag
+overrides it for a single process, and an interval below one second is refused so the loop cannot
+busy-spin against the metrics store.
 
 Faster intervals react sooner and evaluate more often; slower intervals cost less and can miss short
 spikes. Five to ten seconds suits most workloads.

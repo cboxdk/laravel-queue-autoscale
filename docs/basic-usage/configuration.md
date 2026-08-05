@@ -227,7 +227,7 @@ v3 introduces three new capabilities on top of per-queue autoscaling. Each is ex
 ],
 ```
 
-> `profile` + `overrides` is a **groups-only** shape, read by `GroupConfiguration::fromConfig()`. Using those two keys inside a `queues.{name}` entry silently does nothing — see [Workload Profiles → Using a profile](workload-profiles.md#using-a-profile).
+> A `queues.{name}` entry may name a `profile` alongside its own settings: the profile supplies the baseline and the rest of the array is merged over it. A `profile` that does not implement `ProfileContract` throws rather than being ignored. `overrides` remains a groups-only key.
 
 - Each worker spawned for the group invokes `queue:work redis --queue=email,sms,push` — Laravel polls them in that order per poll cycle.
 - The group is the scaling unit. Metrics are aggregated across members (`pending`, `throughput`: summed; `oldest_job_age`: max). The SLA target is the group's SLA, not any individual queue's.
@@ -351,7 +351,7 @@ The interval is set **on the command line**, and nowhere else:
 php artisan queue:autoscale --interval=5   # 5 is the default
 ```
 
-> `manager.evaluation_interval_seconds` is present in the published config file but **has no effect**. `AutoscaleConfiguration::evaluationIntervalSeconds()` exists and returns it, but nothing calls that method — the running loop uses the value passed from `--interval`. Set the interval in your supervisor or systemd unit.
+> `manager.evaluation_interval_seconds` sets the evaluation interval. `--interval` on `queue:autoscale` overrides it for a single process. Values below one second are refused, because the loop would then busy-spin against the metrics store.
 
 Lower values (2-5s) react faster and cost more manager CPU; higher values (15-60s) are cheaper and slower. Keep the interval well below your tightest `sla.target_seconds`.
 
@@ -359,7 +359,7 @@ Lower values (2-5s) react faster and cost more manager CPU; higher values (15-60
 
 ```php
 'manager' => [
-    'evaluation_interval_seconds' => 5,   // NOT READ — see above
+    'evaluation_interval_seconds' => 5,   // overridden by --interval when given
     'log_channel' => env('QUEUE_AUTOSCALE_LOG_CHANNEL', 'stack'),
     'restart_scope' => env('QUEUE_AUTOSCALE_RESTART_SCOPE'),
     'honor_queue_restart' => env('QUEUE_AUTOSCALE_HONOR_QUEUE_RESTART', true),

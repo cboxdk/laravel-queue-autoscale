@@ -41,8 +41,8 @@ Starting Queue Autoscale Manager
 ```
 
 The manager ID is your hostname plus a short hash derived from container/machine identity, so two
-managers on the same host never collide. The interval comes from `--interval` (default 5); the
-`manager.evaluation_interval_seconds` config key is not consulted. Leave the manager running.
+managers on the same host never collide. The interval comes from `manager.evaluation_interval_seconds` (default 5), which `--interval`
+overrides when given. Leave the manager running.
 
 > Use `-vv` for debug-level output (per-queue metrics and decisions) and `-vvv` to also see the capacity breakdown used for each scaling decision.
 

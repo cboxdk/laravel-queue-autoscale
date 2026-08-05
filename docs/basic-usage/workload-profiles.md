@@ -77,7 +77,7 @@ The array is deep-merged over whatever `sla_defaults` resolves to. Every value t
 > ### The trap: `profile` + `overrides` do not work per queue
 >
 > ```php
-> // ❌ SILENTLY DOES NOTHING under 'queues'
+> // ✅ names the baseline; the rest of the array refines it
 > 'queues' => [
 >     'webhooks' => [
 >         'profile' => BalancedProfile::class,

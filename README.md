@@ -328,9 +328,8 @@ that queue's workers:
 ],
 ```
 
-Note that `manager.evaluation_interval_seconds` exists in the published config but has no effect —
-the evaluation interval is taken from `queue:autoscale --interval=` (default 5). Set it on the
-command line or in your Supervisor program definition.
+`manager.evaluation_interval_seconds` (default 5) sets the evaluation interval;
+`queue:autoscale --interval=` overrides it for a single process.
 
 Every key, including the profile, forecast, fuse, pickup-time, spawn-latency, cluster, alerting and
 telemetry blocks, is covered in [Configuration](docs/basic-usage/configuration.md).

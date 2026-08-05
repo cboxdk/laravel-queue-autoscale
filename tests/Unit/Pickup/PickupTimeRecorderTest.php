@@ -79,8 +79,36 @@ test('uses default queue name when none provided', function (): void {
 });
 
 test('a declining sampler keeps the write off the hot path', function (): void {
-    // The sampler is consulted before the store, so a declined pickup costs no
-    // Redis round trip at all — which is the entire point of sampling.
+    // A mutation that deleted the sampler check entirely used to survive the
+    // suite, because this spec configured maxPerSecond: 0 — which disables
+    // sampling — and then asserted the write happened. It proved the opposite
+    // of its name. The sampler must actually decline.
+    $recorded = [];
+    $now = 1000.0;
+
+    // Prime a busy window, then roll past it so the next one is sampled hard.
+    $rolling = new PickupSampler(
+        enabled: true,
+        maxPerSecond: 1,
+        clock: function () use (&$now): float {
+            return $now;
+        },
+        randomizer: fn (): float => 0.99,
+    );
+    for ($i = 0; $i < 500; $i++) {
+        $rolling->shouldRecord();
+    }
+    $now += 1.0;
+
+    $recorder = recorderWith(recordingStore($recorded), $rolling);
+    $recorder->handle(jobProcessing(microtime(true) - 1.0));
+
+    expect($recorded)->toHaveCount(0);
+});
+
+test('a non-positive rate disables sampling rather than discarding everything', function (): void {
+    // Misconfiguration must fail toward recording. Split out from the spec
+    // above, which used to conflate the two.
     $recorded = [];
     $recorder = recorderWith(
         recordingStore($recorded),
@@ -89,8 +117,6 @@ test('a declining sampler keeps the write off the hot path', function (): void {
 
     $recorder->handle(jobProcessing(microtime(true) - 1.0));
 
-    // maxPerSecond of 0 disables sampling entirely rather than discarding
-    // everything; a misconfigured rate must not blind the autoscaler.
     expect($recorded)->toHaveCount(1);
 });
 

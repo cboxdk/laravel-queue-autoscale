@@ -64,14 +64,12 @@ test('prevents normal scale down', function () {
     $result = $this->policy->beforeScaling($decision);
 
     // On most systems, 2 workers won't exceed capacity, so policy prevents scale-down
-    if ($result !== null) {
-        expect($result->targetWorkers)->toBe(2)
-            ->and($result->reason)->toContain('NoScaleDownPolicy');
-    } else {
-        // If result is null, system capacity is very constrained (< 2 workers)
-        // which is acceptable for the test
-        expect(true)->toBeTrue();
-    }
+    // A mutation making beforeScaling() return null unconditionally — the
+    // policy doing nothing at all — used to survive, because the assertion
+    // sat behind this guard and the else branch asserted true is true.
+    expect($result)->not->toBeNull();
+    expect($result->targetWorkers)->toBe(2)
+        ->and($result->reason)->toContain('NoScaleDownPolicy');
 });
 
 test('afterScaling does nothing', function () {
@@ -109,10 +107,9 @@ test('preserves capacity in modified decision', function () {
     $result = $this->policy->beforeScaling($decision);
 
     // When policy prevents scale-down, it should preserve capacity
-    if ($result !== null) {
-        expect($result->capacity)->toBe($originalCapacity);
-    } else {
-        // If null, system capacity is constrained - skip capacity assertion
-        expect(true)->toBeTrue();
-    }
+    // A mutation making beforeScaling() return null unconditionally — the
+    // policy doing nothing at all — used to survive, because the assertion
+    // sat behind this guard and the else branch asserted true is true.
+    expect($result)->not->toBeNull();
+    expect($result->capacity)->toBe($originalCapacity);
 });

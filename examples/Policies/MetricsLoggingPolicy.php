@@ -33,7 +33,7 @@ class MetricsLoggingPolicy implements ScalingPolicy
         }
     }
 
-    public function before(ScalingDecision $decision): void
+    public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
     {
         $key = $this->getDecisionKey($decision);
 
@@ -49,9 +49,11 @@ class MetricsLoggingPolicy implements ScalingPolicy
             'change' => $decision->targetWorkers - $decision->currentWorkers,
             'reason' => $decision->reason,
         ]);
+
+        return null;
     }
 
-    public function after(ScalingDecision $decision): void
+    public function afterScaling(ScalingDecision $decision): void
     {
         $key = $this->getDecisionKey($decision);
         $before = $this->beforeMetrics[$key] ?? null;

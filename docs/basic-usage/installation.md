@@ -192,7 +192,7 @@ Full signature:
 queue:autoscale {--interval=5} {--replace}
 ```
 
-- `--interval=` sets the evaluation interval in seconds. **This is the only place the interval is set** — `manager.evaluation_interval_seconds` in the config file is not read by anything.
+- `--interval=` overrides the evaluation interval for this process. Without it the manager uses `manager.evaluation_interval_seconds` from the config (default 5).
 - `--replace` stops the existing local manager and takes over its host lock. Without it, starting a second manager for the same app on the same host fails.
 
 The autoscaler will:

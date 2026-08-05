@@ -85,7 +85,10 @@ if ($capacity !== null) {
 }
 ```
 
-`limitingFactor` is one of `cpu`, `memory`, `balanced`, `config`, `strategy`, `fuse`, or `system_metrics_unavailable`.
+`limitingFactor` is a `LimitingFactor` enum, not a string — compare against the case
+(`LimitingFactor::Cpu`) or against `->value` if you need the raw token. The cases are `Cpu`,
+`Memory`, `Balanced`, `Config`, `Strategy`, `Fuse` and `SystemMetricsUnavailable`, whose values are
+the lowercase forms.
 
 **Watch for:**
 
@@ -218,7 +221,7 @@ class CollectScalingMetrics
         if ($decision->capacity !== null) {
             $this->metrics->gauge('autoscale.max_workers', $decision->capacity->finalMaxWorkers, [
                 ...$tags,
-                'limiter' => $decision->capacity->limitingFactor,
+                'limiter' => $decision->capacity->limitingFactor->value,
             ]);
         }
     }
@@ -417,7 +420,7 @@ public function handle(ScalingDecisionMade $event): void
 {
     $capacity = $event->decision->capacity;
 
-    if ($capacity === null || $capacity->limitingFactor !== 'config') {
+    if ($capacity === null || $capacity->limitingFactor !== LimitingFactor::Config) {
         return;
     }
 

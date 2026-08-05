@@ -367,11 +367,11 @@ QUEUE_AUTOSCALE_TELEMETRY_CACHE_TTL=10
 Plus the metrics package's own variables — at minimum `QUEUE_METRICS_STORAGE` and, for Redis,
 `QUEUE_METRICS_CONNECTION`.
 
-### A note on `manager.evaluation_interval_seconds`
+### Setting the evaluation interval
 
-The published config contains `manager.evaluation_interval_seconds`, but the running loop does not
-consult it: `queue:autoscale` reads its own `--interval` option (default `5`) and passes that to the
-manager. Set the interval on the command line in your Supervisor or systemd unit.
+`manager.evaluation_interval_seconds` (default `5`) is the fleet-wide setting. `queue:autoscale
+--interval=` overrides it for one process, which is the right tool for a single host that needs to
+differ — not the only way to set it.
 
 ## What the spawned workers actually run
 

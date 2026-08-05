@@ -366,7 +366,7 @@ Spawn latency is unavoidable when a queue has to grow from cold. Two ways to avo
 **Diagnosis:** run the manager in `-vv` mode and watch the time between evaluation cycles and the `current → target` transitions. If several cycles pass with `current < target` and no spawn, the cooldown or a policy is blocking.
 
 **Solutions:**
-1. Reduce the daemon's `--interval` (default 5s). This is the only place the interval is set — the config key has no effect.
+1. Reduce `manager.evaluation_interval_seconds` (default 5s), or `--interval` on a single daemon.
 2. Reduce `scaling.cooldown_seconds` (default 60s) if the block is a direction reversal
 3. Lower `scaling.breach_threshold` (default 0.5) so backlog-drain engages earlier in the SLA window
 4. Swap to a profile with a more aggressive forecast policy (`CriticalProfile` or `BurstyProfile`)

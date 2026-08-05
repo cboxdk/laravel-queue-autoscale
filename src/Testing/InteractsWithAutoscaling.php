@@ -92,6 +92,8 @@ trait InteractsWithAutoscaling
     {
         $config = QueueConfiguration::fromConfig($connection, $queue);
 
+        $deepest = 0;
+
         foreach ([10, 1_000, 100_000] as $pending) {
             $metrics = QueueMetricsFactory::behind($pending, oldestJobAge: 3_600, queue: $queue);
             $actual = $this->workersDemandedFor($metrics, $config);
@@ -101,7 +103,19 @@ trait InteractsWithAutoscaling
                 $actual,
                 "{$connection}:{$queue} demanded {$actual} workers with {$pending} pending, above its cap of {$cap}."
             );
+
+            $deepest = $actual;
         }
+
+        // Without this the assertion is vacuous: a configuration that demands
+        // zero workers for every backlog would "prove" the cap holds. A cap is
+        // only meaningful if the queue can actually reach it.
+        Assert::assertSame(
+            $cap,
+            $deepest,
+            "{$connection}:{$queue} never reached its cap of {$cap} even with 100,000 overdue jobs — "
+            ."it demanded {$deepest}, so this assertion would pass for a queue that scales not at all."
+        );
     }
 
     /**
