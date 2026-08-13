@@ -17,7 +17,9 @@ class ManagerProcessLock
             @mkdir($directory, 0777, true);
         }
 
-        $handle = fopen($path, 'c+');
+        // 'e' sets O_CLOEXEC so spawned workers do not inherit the lock fd and
+        // keep the flock held after the manager exits (crash-looping restarts).
+        $handle = fopen($path, 'c+e');
 
         if ($handle === false) {
             throw new \RuntimeException("Unable to open manager lock file: {$path}");
