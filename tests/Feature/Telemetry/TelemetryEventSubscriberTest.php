@@ -19,6 +19,7 @@ use Cbox\LaravelQueueAutoscale\Telemetry\TelemetryEventSubscriber;
 use Cbox\Telemetry\Facades\Telemetry;
 use Cbox\Telemetry\Metrics\Registry;
 use Cbox\Telemetry\Metrics\Stores\ArrayMetricStore;
+use Cbox\Telemetry\Support\ExportReport;
 use Cbox\Telemetry\TelemetryManager;
 use Cbox\Telemetry\Tracing\Tracer;
 
@@ -196,11 +197,11 @@ it('debounces flushes for rapid decisions, then flushes again once the window pa
     {
         public int $flushCount = 0;
 
-        public function flush(bool $forceDetails = false): void
+        public function flush(bool $forceDetails = false): ExportReport
         {
             $this->flushCount++;
 
-            parent::flush($forceDetails);
+            return parent::flush($forceDetails);
         }
     };
 
