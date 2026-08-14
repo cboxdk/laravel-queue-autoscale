@@ -50,7 +50,23 @@ class FairShareAllocator
 
         $remainingCapacity = $clusterCapacity - array_sum($targets);
 
-        if ($remainingCapacity <= 0) {
+        if ($remainingCapacity < 0) {
+            // The minimums alone do not fit. Returning them verbatim handed
+            // back a total larger than the capacity we were given, and the
+            // caller then placed workloads until hosts filled up and silently
+            // dropped whatever was left — in metrics-discovery order, which is
+            // not stable between cycles. A critical queue could be starved to
+            // zero while a bulk queue kept its floor, and the victim changed
+            // from one cycle to the next.
+            //
+            // Scaling the floors down proportionally instead spreads the
+            // shortfall across every workload, so the outcome is the same one
+            // twice running and no queue is singled out by an ordering
+            // accident.
+            return $this->scaleMinimumsToFit($targets, $clusterCapacity);
+        }
+
+        if ($remainingCapacity === 0) {
             return $targets;
         }
 
@@ -58,6 +74,50 @@ class FairShareAllocator
         $this->waterFill($targets, $demands, $configs, $clusterCapacity);
 
         return $targets;
+    }
+
+    /**
+     * Fit a set of minimums into a capacity too small to hold them.
+     *
+     * Proportional, then largest-remainder for the rounding, so the result is
+     * deterministic and sums exactly to the capacity rather than to whatever
+     * floor() left behind.
+     *
+     * @param  array<string, int>  $targets
+     * @return array<string, int>
+     */
+    private function scaleMinimumsToFit(array $targets, int $clusterCapacity): array
+    {
+        $total = array_sum($targets);
+
+        if ($clusterCapacity <= 0 || $total <= 0) {
+            return array_map(static fn (): int => 0, $targets);
+        }
+
+        $scaled = [];
+        $remainders = [];
+
+        foreach ($targets as $key => $min) {
+            $exact = $min * $clusterCapacity / $total;
+            $scaled[$key] = (int) floor($exact);
+            $remainders[$key] = $exact - $scaled[$key];
+        }
+
+        // Hand the rounding leftovers to the largest fractional parts, and
+        // break ties by key so two identical inputs never disagree.
+        arsort($remainders);
+        $leftover = $clusterCapacity - array_sum($scaled);
+
+        foreach (array_keys($remainders) as $key) {
+            if ($leftover <= 0) {
+                break;
+            }
+
+            $scaled[$key]++;
+            $leftover--;
+        }
+
+        return $scaled;
     }
 
     /**

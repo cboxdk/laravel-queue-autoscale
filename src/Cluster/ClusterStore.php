@@ -189,13 +189,67 @@ LUA;
         return $acquired === true || $acquired === 1 || $acquired === '1';
     }
 
+    /**
+     * Publish a recommendation, but only while the fencing token still holds.
+     *
+     * The token was checked by the reader and never by the writer, which is
+     * the half that does not fence anything: a manager that stalled long
+     * enough to lose the lease still believed it led, and on waking wrote over
+     * the live leader's recommendation keys with a plain setex. Followers
+     * rejected the stale payload on the leader id, so the visible damage was
+     * one wasted cycle — but the write itself always succeeded, and the
+     * package called that a fencing token.
+     *
+     * The Lua script makes the check and the write one operation against the
+     * leader key, so a deposed leader's write is refused rather than merely
+     * ignored afterwards.
+     */
     public function publishRecommendation(ClusterRecommendation $recommendation): void
     {
-        $this->redis()->setex(
-            $this->recommendationKey($recommendation->managerId),
-            AutoscaleConfiguration::clusterRecommendationTtlSeconds(),
+        $token = $recommendation->leaderToken;
+
+        if ($token === null) {
+            // No token to fence with — a caller outside the leader path, or a
+            // rolling upgrade from a version that did not issue them. Falls
+            // back to the previous behaviour rather than dropping the write.
+            $this->redis()->setex(
+                $this->recommendationKey($recommendation->managerId),
+                AutoscaleConfiguration::clusterRecommendationTtlSeconds(),
+                $this->encode($recommendation->toArray()),
+            );
+
+            return;
+        }
+
+        $script = <<<'LUA'
+local current = redis.call('get', KEYS[1])
+
+if not current then
+    return 0
+end
+
+local decoded_ok, decoded = pcall(cjson.decode, current)
+
+if not decoded_ok or decoded['leader_token'] ~= ARGV[1] then
+    return 0
+end
+
+redis.call('setex', KEYS[2], tonumber(ARGV[3]), ARGV[2])
+
+return 1
+LUA;
+
+        $redis = $this->redis();
+        $keys = [$this->leaderKey(), $this->recommendationKey($recommendation->managerId)];
+        $argv = [
+            $token,
             $this->encode($recommendation->toArray()),
-        );
+            (string) AutoscaleConfiguration::clusterRecommendationTtlSeconds(),
+        ];
+
+        $redis instanceof PhpRedisConnection
+            ? $redis->command('eval', [$script, [...$keys, ...$argv], 2])
+            : $redis->command('eval', [$script, 2, ...$keys, ...$argv]);
     }
 
     public function recommendationFor(string $managerId): ?ClusterRecommendation

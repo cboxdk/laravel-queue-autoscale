@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
+use Cbox\LaravelQueueAutoscale\Cluster\ClusterRecommendation;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
+use Illuminate\Redis\Connections\Connection;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Support\Facades\Redis;
 use Mockery\MockInterface;
@@ -88,4 +90,51 @@ it('reads the current leader fencing token from the lease payload', function () 
     $store = new ClusterStore;
 
     expect($store->leaderToken())->toBe('lease-token-a');
+});
+
+it('fences the recommendation write on the leader token', function () {
+    // The token was checked by the reader and never by the writer, which is
+    // the half that does not fence anything: a deposed leader's write always
+    // succeeded and was merely ignored afterwards.
+    $connection = Mockery::mock(Connection::class);
+    $sent = [];
+
+    $connection->shouldReceive('command')->andReturnUsing(function (string $cmd, array $args) use (&$sent): int {
+        $sent[] = [$cmd, $args];
+
+        return 1;
+    });
+    Redis::shouldReceive('connection')->andReturn($connection);
+
+    (new ClusterStore)->publishRecommendation(new ClusterRecommendation(
+        managerId: 'web-01',
+        issuedAt: 0,
+        workloads: [],
+        leaderId: 'web-01',
+        leaderToken: 'token-7',
+    ));
+
+    expect($sent)->toHaveCount(1)
+        ->and($sent[0][0])->toBe('eval');
+
+    $script = is_string($sent[0][1][0]) ? $sent[0][1][0] : '';
+
+    expect($script)->toContain('leader_token')
+        ->and($script)->toContain('setex');
+});
+
+it('still writes when no token was issued', function () {
+    // A rolling upgrade from a version that did not issue tokens must not lose
+    // its recommendations entirely.
+    $connection = Mockery::mock(Connection::class);
+    $connection->shouldReceive('setex')->once()->andReturn(true);
+    $connection->shouldReceive('command')->never();
+    Redis::shouldReceive('connection')->andReturn($connection);
+
+    (new ClusterStore)->publishRecommendation(new ClusterRecommendation(
+        managerId: 'web-01',
+        issuedAt: 0,
+        workloads: [],
+        leaderId: 'web-01',
+    ));
 });
