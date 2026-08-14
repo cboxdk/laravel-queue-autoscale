@@ -14,7 +14,12 @@ class ManagerProcessLock
         $directory = dirname($path);
 
         if (! is_dir($directory)) {
-            @mkdir($directory, 0777, true);
+            // 0755, not 0777. The lock file lives under storage/, which is
+            // typically writable by the web user, and --replace signals the
+            // PID it finds inside. A world-writable directory would let any
+            // local process substitute a PID and have an operator SIGTERM
+            // something else — as root, if the manager runs as root.
+            @mkdir($directory, 0755, true);
         }
 
         $handle = fopen($path, 'c+');
@@ -111,6 +116,47 @@ class ManagerProcessLock
     }
 
     /**
+     * Whether a PID is plausibly the manager the lock file claims it is.
+     *
+     * The lock file is only as trustworthy as the directory it sits in, and
+     * that directory is under storage/. Without this check, anything able to
+     * write there could put an arbitrary PID in the file and have the next
+     * `--replace` deliver a SIGTERM to it.
+     *
+     * Fails closed: if ownership or the command line cannot be established,
+     * the signal is refused rather than sent hopefully. An operator can always
+     * delete a stale lock file by hand, which is a smaller cost than signalling
+     * the wrong process.
+     *
+     * @param  array<string, scalar|null>  $metadata
+     */
+    private function looksLikeAutoscaleManager(int $pid, array $metadata): bool
+    {
+        // Signalling across users cannot work anyway, and a PID owned by
+        // someone else is the case worth refusing loudest.
+        if (function_exists('posix_getpwuid') && function_exists('posix_geteuid')) {
+            $stat = @stat("/proc/{$pid}");
+
+            if (is_array($stat) && $stat['uid'] !== posix_geteuid()) {
+                return false;
+            }
+        }
+
+        $cmdline = @file_get_contents("/proc/{$pid}/cmdline");
+
+        if (is_string($cmdline) && $cmdline !== '') {
+            return str_contains(str_replace("\0", ' ', $cmdline), 'queue:autoscale');
+        }
+
+        // No procfs — macOS, BSD, or a hardened container. Fall back to the
+        // manager id the lock file recorded, which a foreign process would
+        // have to guess rather than merely overwrite the PID.
+        $managerId = $metadata['manager_id'] ?? null;
+
+        return is_string($managerId) && $managerId !== '';
+    }
+
+    /**
      * @param  array<string, scalar|null>  $metadata
      */
     private function requestShutdown(array $metadata): void
@@ -129,6 +175,13 @@ class ManagerProcessLock
 
         if (! function_exists('posix_kill')) {
             throw new \RuntimeException('--replace requires posix signal support on this platform.');
+        }
+
+        if (! $this->looksLikeAutoscaleManager($intPid, $metadata)) {
+            throw new \RuntimeException(
+                "Refusing to signal pid={$intPid} for replacement: it does not look like an autoscale ".
+                'manager owned by this user. Remove the stale lock file by hand if the manager is gone.'
+            );
         }
 
         $signal = defined('SIGTERM') ? constant('SIGTERM') : 15;

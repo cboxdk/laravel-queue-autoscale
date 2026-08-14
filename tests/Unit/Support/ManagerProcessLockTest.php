@@ -76,3 +76,27 @@ afterEach(function () {
         }
     }
 });
+
+it('refuses to signal a pid that is not an autoscale manager', function () {
+    // The lock file sits under storage/, which the web user can usually write.
+    // Trusting the PID inside it let anything local have an operator SIGTERM
+    // an arbitrary process — as root, if the manager runs as root.
+    $lock = new ManagerProcessLock;
+    $method = new ReflectionMethod($lock, 'looksLikeAutoscaleManager');
+
+    // PID 1 is init: real, running, and emphatically not our manager. With no
+    // manager_id recorded there is nothing to fall back on either.
+    expect($method->invoke($lock, 1, []))->toBeFalse();
+});
+
+it('creates its lock directory without world write', function () {
+    $lock = new ManagerProcessLock;
+    $held = $lock->acquire();
+
+    $directory = storage_path('framework/queue-autoscale');
+    $mode = fileperms($directory) & 0777;
+
+    expect($mode & 0002)->toBe(0, sprintf('lock directory is world-writable (%04o)', $mode));
+
+    $held->release();
+});
