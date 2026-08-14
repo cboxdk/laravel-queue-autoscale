@@ -37,6 +37,16 @@ use Illuminate\Contracts\Container\Container;
 class TelemetryEventSubscriber
 {
     /**
+     * Queue names that have been given a label of their own.
+     *
+     * Static because the subscriber is resolved per event; an instance
+     * property would reset the count every time and cap nothing.
+     *
+     * @var array<string, true>
+     */
+    private static array $namedQueues = [];
+
+    /**
      * The fuse reports as one gauge with an encoded state rather than a
      * boolean per state, so a dashboard reads the current state from a single
      * series instead of reconciling several that can disagree mid-transition.
@@ -83,7 +93,7 @@ class TelemetryEventSubscriber
 
         $telemetry = $this->telemetry();
         $decision = $event->decision;
-        $labels = ['connection' => $decision->connection, 'queue' => $decision->queue];
+        $labels = $this->labelsFor($decision->connection, $decision->queue);
 
         $telemetry->gauge('queue_autoscale.workers.target', description: 'Worker count the autoscaler is steering toward', unit: '{workers}')
             ->set((float) $decision->targetWorkers, $labels);
@@ -111,7 +121,7 @@ class TelemetryEventSubscriber
         }
 
         $telemetry = $this->telemetry();
-        $labels = ['connection' => $event->connection, 'queue' => $event->queue];
+        $labels = $this->labelsFor($event->connection, $event->queue);
 
         $telemetry->counter('queue_autoscale.scaling.actions', 'Executed scaling actions', unit: '{actions}')
             ->inc(1, [...$labels, 'direction' => $event->action]);
@@ -134,7 +144,7 @@ class TelemetryEventSubscriber
         }
 
         $telemetry = $this->telemetry();
-        $labels = ['connection' => $event->connection, 'queue' => $event->queue];
+        $labels = $this->labelsFor($event->connection, $event->queue);
 
         $telemetry->gauge('queue_autoscale.sla.breach', description: 'Whether the queue is currently breaching its SLA', unit: '1')
             ->set(1.0, $labels);
@@ -162,7 +172,7 @@ class TelemetryEventSubscriber
         }
 
         $telemetry = $this->telemetry();
-        $labels = ['connection' => $event->connection, 'queue' => $event->queue];
+        $labels = $this->labelsFor($event->connection, $event->queue);
 
         $telemetry->gauge('queue_autoscale.sla.breach', description: 'Whether the queue is currently breaching its SLA', unit: '1')
             ->set(0.0, $labels);
@@ -245,7 +255,7 @@ class TelemetryEventSubscriber
         }
 
         $telemetry = $this->telemetry();
-        $labels = ['connection' => $event->connection, 'queue' => $event->queue];
+        $labels = $this->labelsFor($event->connection, $event->queue);
 
         $telemetry->gauge('queue_autoscale.fuse.state', description: self::FUSE_STATE_DESCRIPTION, unit: '1')
             ->set(self::FUSE_STATE_OPEN, $labels);
@@ -272,7 +282,7 @@ class TelemetryEventSubscriber
         }
 
         $telemetry = $this->telemetry();
-        $labels = ['connection' => $event->connection, 'queue' => $event->queue];
+        $labels = $this->labelsFor($event->connection, $event->queue);
 
         $telemetry->gauge('queue_autoscale.fuse.state', description: self::FUSE_STATE_DESCRIPTION, unit: '1')
             ->set(self::FUSE_STATE_HALF_OPEN, $labels);
@@ -293,7 +303,7 @@ class TelemetryEventSubscriber
         }
 
         $telemetry = $this->telemetry();
-        $labels = ['connection' => $event->connection, 'queue' => $event->queue];
+        $labels = $this->labelsFor($event->connection, $event->queue);
 
         $telemetry->gauge('queue_autoscale.fuse.state', description: self::FUSE_STATE_DESCRIPTION, unit: '1')
             ->set(self::FUSE_STATE_CLOSED, $labels);
@@ -305,6 +315,47 @@ class TelemetryEventSubscriber
         ]);
 
         $telemetry->flush();
+    }
+
+    /**
+     * Metric labels for a queue, with the queue name capped by cardinality.
+     *
+     * Queues are discovered rather than listed, so an application naming them
+     * per tenant presents thousands — one time series per tenant per metric,
+     * which is how a metrics backend falls over or produces a very large bill.
+     * Queue names embedding tenant identifiers also reach a system with a
+     * different access-control model than the app.
+     *
+     * Past the cap, further queues share one bucket rather than minting new
+     * series. Which queues get named is whichever appeared first, and that is
+     * deliberate: a stable set of names beats a set that churns.
+     *
+     * @return array<string, string>
+     */
+    private function labelsFor(string $connection, string $queue): array
+    {
+        return ['connection' => $connection, 'queue' => $this->queueLabel($queue)];
+    }
+
+    private function queueLabel(string $queue): string
+    {
+        $cap = config('queue-autoscale.telemetry.max_queue_labels', 100);
+
+        if (! is_numeric($cap) || (int) $cap <= 0) {
+            return $queue;
+        }
+
+        if (isset(self::$namedQueues[$queue])) {
+            return $queue;
+        }
+
+        if (count(self::$namedQueues) >= (int) $cap) {
+            return '__other__';
+        }
+
+        self::$namedQueues[$queue] = true;
+
+        return $queue;
     }
 
     private function enabled(): bool
