@@ -1019,7 +1019,11 @@ class AutoscaleManager
             spawnCompensation: $config->spawnCompensation,
         );
 
-        $this->applyDecisionThroughPolicies($decision);
+        $this->applyDecision(
+            $decision,
+            fn (ScalingDecision $d) => $this->scaleUp($d),
+            fn (ScalingDecision $d) => $this->scaleDown($d),
+        );
     }
 
     private function reconcileGroupTarget(GroupConfiguration $group, int $targetWorkers): void
@@ -1040,22 +1044,35 @@ class AutoscaleManager
             spawnCompensation: $group->spawnCompensation,
         );
 
-        $this->applyDecisionThroughPolicies($decision, $group);
+        $this->applyDecision(
+            $decision,
+            fn (ScalingDecision $d) => $this->scaleUpGroup($group, $d),
+            fn (ScalingDecision $d) => $this->scaleDownGroup($group, $d),
+        );
     }
 
     /**
-     * Run a decision through the policy chain, then act on what comes back.
+     * The one place a scaling decision is put into effect.
      *
-     * The single-host paths did this inline and the cluster paths did not, so
-     * a policy was silently inert the moment cluster mode was enabled — the
-     * autoscaler would scale past whatever limit the policy existed to impose,
-     * with no error and no log line saying the policy had been skipped.
+     * Every caller goes through here, because the alternative is what caused
+     * the defect this replaces: the sequence — consult the policies, act on
+     * what they return, tell them what happened — was written out inline at
+     * four call sites, and the two cluster ones simply never grew the policy
+     * half. A policy was therefore silently inert the moment cluster mode was
+     * enabled, with no error and no log line saying it had been skipped.
      *
-     * A policy's answer is authoritative here exactly as it is on a single
-     * host: nothing re-clamps afterwards. See docs/advanced-usage/scaling-policies.md.
+     * A policy's answer is authoritative: nothing re-clamps afterwards. That
+     * is deliberate and documented in docs/advanced-usage/scaling-policies.md.
+     *
+     * @param  \Closure(ScalingDecision): void  $scaleUp
+     * @param  \Closure(ScalingDecision): void  $scaleDown
      */
-    private function applyDecisionThroughPolicies(ScalingDecision $decision, ?GroupConfiguration $group = null): void
-    {
+    private function applyDecision(
+        ScalingDecision $decision,
+        \Closure $scaleUp,
+        \Closure $scaleDown,
+        ?string $noActionMessage = null,
+    ): ScalingDecision {
         $finalDecision = $this->policies->beforeScaling($decision);
 
         if ($finalDecision->targetWorkers !== $decision->targetWorkers) {
@@ -1066,16 +1083,16 @@ class AutoscaleManager
         }
 
         if ($finalDecision->shouldScaleUp()) {
-            $group === null
-                ? $this->scaleUp($finalDecision)
-                : $this->scaleUpGroup($group, $finalDecision);
+            $scaleUp($finalDecision);
         } elseif ($finalDecision->shouldScaleDown()) {
-            $group === null
-                ? $this->scaleDown($finalDecision)
-                : $this->scaleDownGroup($group, $finalDecision);
+            $scaleDown($finalDecision);
+        } elseif ($noActionMessage !== null) {
+            $this->verbose($noActionMessage, 'debug');
         }
 
         $this->policies->afterScaling($finalDecision);
+
+        return $finalDecision;
     }
 
     private function currentTimestamp(): int
@@ -1847,25 +1864,14 @@ class AutoscaleManager
             scheduled: $metrics->scheduled,
         );
 
-        // 7. Execute policies (before) - policies can modify the decision
-        $finalDecision = $this->policies->beforeScaling($decision);
-
-        // Log if decision was modified by policies
-        if ($finalDecision->targetWorkers !== $decision->targetWorkers) {
-            $this->verbose("  🔧 Policy modified decision: {$decision->targetWorkers} → {$finalDecision->targetWorkers} workers", 'info');
-        }
-
-        // 8. Execute scaling action using potentially modified decision
-        if ($finalDecision->shouldScaleUp()) {
-            $this->scaleUp($finalDecision);
-        } elseif ($finalDecision->shouldScaleDown()) {
-            $this->scaleDown($finalDecision);
-        } else {
-            $this->verbose('  ✓ No scaling action needed', 'debug');
-        }
-
-        // 9. Execute policies (after)
-        $this->policies->afterScaling($finalDecision);
+        // 7-9. Consult the policies, act on what they return, tell them what
+        // happened. Shared with the cluster path so the two cannot drift.
+        $finalDecision = $this->applyDecision(
+            $decision,
+            fn (ScalingDecision $d) => $this->scaleUp($d),
+            fn (ScalingDecision $d) => $this->scaleDown($d),
+            noActionMessage: '  ✓ No scaling action needed',
+        );
 
         // 10. Broadcast events using final decision
         event(new ScalingDecisionMade($finalDecision));
@@ -1983,17 +1989,13 @@ class AutoscaleManager
             scheduled: $aggregated->scheduled,
         );
 
-        $finalDecision = $this->policies->beforeScaling($decision);
+        $finalDecision = $this->applyDecision(
+            $decision,
+            fn (ScalingDecision $d) => $this->scaleUpGroup($group, $d),
+            fn (ScalingDecision $d) => $this->scaleDownGroup($group, $d),
+            noActionMessage: '  ✓ No group scaling action needed',
+        );
 
-        if ($finalDecision->shouldScaleUp()) {
-            $this->scaleUpGroup($group, $finalDecision);
-        } elseif ($finalDecision->shouldScaleDown()) {
-            $this->scaleDownGroup($group, $finalDecision);
-        } else {
-            $this->verbose('  ✓ No group scaling action needed', 'debug');
-        }
-
-        $this->policies->afterScaling($finalDecision);
         event(new ScalingDecisionMade($finalDecision));
 
         if ($finalDecision->isSlaBreachRisk()) {
