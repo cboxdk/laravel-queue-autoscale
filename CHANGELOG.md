@@ -5,6 +5,119 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v4.0.1 - 2026-08-14
+
+**Upgrade promptly if you use queue groups: v4.0.0 could not start a group
+worker at all.** Everything below is a fix; there are no new features and no
+breaking configuration changes.
+
+### Queue groups were completely broken
+
+The queue-name guard v4.0.0 added against argument injection refuses commas,
+because a comma makes `queue:work` read the value as a priority list. A group
+worker polls several queues and the package joins them with commas on purpose,
+so the guard rejected the package's own argument and every group worker threw
+on spawn:
+
+```
+Refusing to spawn a worker for 'redis:email,sms': a comma makes queue:work
+treat it as a list of queues
+```
+
+For a group the comma is now the separator and each member is validated on its
+own. An injected option inside a member is still caught.
+
+### Policies were never applied in cluster mode
+
+The policy chain ran only on the single-host evaluation paths. In cluster mode
+the leader's recommendation is applied by different code, and none of it
+consulted the executor — so a policy went silently inert the moment cluster
+mode was enabled, with no error and no log line saying it had been skipped. A
+policy written to cap workers simply did not.
+
+Every path that acts on a scaling decision now goes through one method, which
+is what stops the two from drifting apart again. Pinned queues are included:
+`min == max` leaves a policy little to move, but one that reports or alerts
+should not fall silent because a queue happens to be pinned. Policies also see
+a hold now, as they always did on a single host — that is what lets a policy
+raise a target the strategy left alone.
+
+### Fixed
+
+- **A group's fuse could never trip.** Workers recorded outcomes with the
+  member queue's window while the manager read them back with the group's.
+  The bucket is part of the cache key, so the two halves wrote and read
+  disjoint keys and the fuse stayed closed through a total outage.
+- **The manager could leave every worker running.** An exception escaping the
+  evaluation loop skipped shutdown entirely, so a one-second cache blip
+  orphaned the whole pool until `--max-time` — an hour by default — while the
+  supervisor restarted the manager on top of it.
+- **The manager lock was inherited by spawned workers.** Without `O_CLOEXEC`
+  the workers held the `flock` after the manager exited, so the replacement
+  crash-looped until they aged out. Thanks to @Orrison for the diagnosis and
+  the fix.
+- **A draining worker was invisible to the worker counts.** For a queue pinned
+  to exactly one worker — where two running at once is the thing the
+  configuration exists to prevent — a replacement could be spawned alongside
+  the one still finishing its job.
+- **Cache keys could collide across tenants.** Keys interpolated connection
+  and queue around a colon, and queue names may contain colons, so `redis` +
+  `a:b` equalled `redis:a` + `b`. Reachable by anyone who chooses a queue
+  name: collide with a victim's fuse counters, fail your own jobs, and their
+  queue is pinned to `workers.min` for the cooldown.
+- **`--replace` trusted the PID in the lock file**, whose directory was created
+  world-writable. Anything able to write to `storage/` could have an operator
+  SIGTERM an arbitrary process. The directory is now `0755`, and the PID is
+  checked for same-owner and a `queue:autoscale` command line before
+  signalling.
+- **Spawn-latency records collided across hosts**, being keyed by bare PID in
+  shared Redis for five minutes, so spawn compensation was computed from
+  another queue's numbers.
+- **A manager regaining cluster leadership replayed a stale layout**, churning
+  every host to match a picture from before it lost the lease, for no change
+  in demand.
+- **The fair-share allocator returned more than the capacity it was given**
+  when the minimums did not fit, after which the overflow was dropped in
+  metrics-discovery order — so the starved queue changed from cycle to cycle.
+  Floors are now scaled down proportionally and deterministically.
+- **The fencing token did not fence.** It was checked by the reader and never
+  by the writer, so a deposed leader still overwrote the live leader's
+  recommendation keys. The check and the write are now one operation.
+- **Per-queue bookkeeping grew without bound** in a process meant to run for
+  weeks — one entry per tenant that ever dispatched a job.
+- **`pickup_time.max_samples_per_queue = 0`** kept every sample forever rather
+  than none, because the trim bound became `-1`.
+
+### Changed
+
+- **Cache key format.** Pickup samples and fuse counters written by v4.0.0
+  become unreachable on upgrade. Both are short-lived caches with TTLs, so the
+  cost is one evaluation cycle of cold-start behaviour — the fuse rebuilds its
+  window within `window_seconds`, pickup samples within the SLA window — not
+  lost data.
+- **`ScalingDecisionMade` in cluster mode.** The leader used to emit it for the
+  whole fleet with the pre-policy target, which stopped describing what any
+  host did once policies could change that target per host. It now comes from
+  each host as it acts, so listeners receive one event per host per workload
+  rather than one from the leader. The cluster's own view remains available as
+  `ClusterSummaryPublished` and `ClusterScalingSignalUpdated`.
+- `composer analyse` clears the package-discovery manifest and PHPStan's result
+  cache first, and passes the memory limit the command always needed. A stale
+  manifest made larastan narrow configurable container bindings to whatever was
+  bound by default, so the same source analysed differently on a developer's
+  machine than in CI — and without the memory limit the run crashed a parallel
+  worker and reported that crash as a finding.
+
+### Documentation
+
+Claims audited against the source rather than read for sense:
+`ProcessHealthCheck` described as a live class in four pages though it was
+deleted in v4; "the CPU sample blocks for a second" in six, including
+interval-tuning advice built on a cost that no longer exists; and seven
+profiles reported as six, with `ConnectionLimitedProfile` missing from every
+list and both comparison tables — including the page the FIFO cookbook links
+to when it recommends that profile.
+
 ## v4.0.0 - 2026-08-05
 
 The first release to carry the failure fuse, which merged without a tag. Everything below the
