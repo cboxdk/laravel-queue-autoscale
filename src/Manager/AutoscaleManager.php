@@ -111,6 +111,9 @@ class AutoscaleManager
      */
     private array $previousDistributions = [];
 
+    /** Whether this manager held the lease on the previous cycle. */
+    private bool $wasLeader = false;
+
     public function __construct(
         private readonly ScalingEngine $engine,
         private readonly WorkerSpawner $spawner,
@@ -418,6 +421,8 @@ class AutoscaleManager
 
         $currentLeaderId = $this->clusterStore->leaderId();
         $isLeader = $this->clusterStore->isLeader($state->managerId);
+
+        $this->noteLeadership($isLeader);
 
         if ($isLeader) {
             $currentLeaderId = $state->managerId;
@@ -1091,6 +1096,28 @@ class AutoscaleManager
         $this->policies->afterScaling($finalDecision);
 
         return $finalDecision;
+    }
+
+    /**
+     * Record whether this manager holds the lease, discarding stale working
+     * memory when it has just taken it.
+     *
+     * The distribution cache exists so a steady cluster is not reshuffled
+     * every cycle. That makes it a leader's working memory: losing the lease
+     * and winning it back means another manager has been placing workers in
+     * between, so anything remembered from before describes a cluster that no
+     * longer exists. Because the cache is only checked for feasibility, a
+     * stale layout that still sums to the right total was replayed wholesale —
+     * every host churning its workers to match a ten-minute-old picture, for
+     * no change in demand.
+     */
+    private function noteLeadership(bool $isLeader): void
+    {
+        if ($isLeader && ! $this->wasLeader) {
+            $this->previousDistributions = [];
+        }
+
+        $this->wasLeader = $isLeader;
     }
 
     private function currentTimestamp(): int
