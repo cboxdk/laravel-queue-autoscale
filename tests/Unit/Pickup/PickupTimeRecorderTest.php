@@ -96,7 +96,7 @@ test('a declining sampler keeps the write off the hot path', function (): void {
         randomizer: fn (): float => 0.99,
     );
     for ($i = 0; $i < 500; $i++) {
-        $rolling->shouldRecord();
+        $rolling->shouldRecord('redis', 'default');
     }
     $now += 1.0;
 

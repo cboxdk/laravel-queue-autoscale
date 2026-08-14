@@ -23,13 +23,17 @@ class PickupTimeRecorder
             return;
         }
 
-        if (! $this->sampler->shouldRecord()) {
+        $queue = $event->job->getQueue() ?: 'default';
+
+        // Sampled per queue, not per process: a group worker polls several at
+        // once, and one shared counter let a busy queue set the probability
+        // for the quiet queue beside it.
+        if (! $this->sampler->shouldRecord($event->connectionName, $queue)) {
             return;
         }
 
         $now = microtime(true);
         $pickupSeconds = max(0.0, $now - (float) $pushedAt);
-        $queue = $event->job->getQueue() ?: 'default';
 
         $this->store->record(
             connection: $event->connectionName,
