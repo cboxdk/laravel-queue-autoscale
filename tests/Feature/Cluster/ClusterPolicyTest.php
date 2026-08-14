@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
@@ -61,4 +62,35 @@ test('afterScaling runs on the cluster path too', function (): void {
 
     expect(array_filter(RecordingScalingPolicy::$seen, fn (string $e): bool => str_starts_with($e, 'after:')))
         ->not->toBeEmpty();
+});
+
+test('a policy sees a hold, and can raise it', function (): void {
+    // On a single host the chain runs every cycle including holds, so a policy
+    // can raise a target the strategy left alone. Returning early when the
+    // target already matched would take that away in cluster mode — the same
+    // asymmetry as the original defect, one level down.
+    RecordingScalingPolicy::reset(capTo: 99);
+
+    // Nothing is running and the leader recommends nothing: a hold at zero.
+    reconcileInCluster('exports', 0);
+
+    expect(RecordingScalingPolicy::$seen)->toContain('before:exports:0')
+        ->and(RecordingScalingPolicy::$seen)->toContain('after:exports:0');
+});
+
+test('the group cluster path runs policies too', function (): void {
+    // reconcileGroupTarget was changed by this fix and no test invoked it.
+    config()->set('queue-autoscale.groups.notifications', [
+        'queues' => ['email', 'sms'],
+        'connection' => 'redis',
+    ]);
+
+    $manager = app(AutoscaleManager::class);
+    $method = new ReflectionMethod($manager, 'reconcileGroupTarget');
+    $group = GroupConfiguration::allFromConfig()['notifications'];
+
+    $method->invoke($manager, $group, 6);
+
+    expect(RecordingScalingPolicy::$seen)->toContain('before:notifications:6')
+        ->and(RecordingScalingPolicy::$seen)->toContain('after:notifications:2');
 });

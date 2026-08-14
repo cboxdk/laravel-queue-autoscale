@@ -1006,10 +1006,12 @@ class AutoscaleManager
         $currentWorkers = $this->pool->count($config->connection, $config->queue);
         $targetWorkers = max(0, $targetWorkers);
 
-        if ($currentWorkers === $targetWorkers) {
-            return;
-        }
-
+        // No early return when the target already matches. A single host runs
+        // the policy chain on every cycle including holds, so a policy there
+        // can raise a target the strategy left alone — and can report on a
+        // steady queue from afterScaling. Returning here would make both
+        // impossible the moment cluster mode was enabled, which is the same
+        // asymmetry this whole change exists to remove.
         $decision = new ScalingDecision(
             connection: $config->connection,
             queue: $config->queue,
@@ -1030,10 +1032,6 @@ class AutoscaleManager
     {
         $currentWorkers = $this->pool->countGroup($group->connection, $group->name);
         $targetWorkers = max(0, $targetWorkers);
-
-        if ($currentWorkers === $targetWorkers) {
-            return;
-        }
 
         $decision = new ScalingDecision(
             connection: $group->connection,

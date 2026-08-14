@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Support\WorkloadName;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
@@ -57,4 +58,41 @@ test('the spawner refuses an unsafe connection', function (): void {
         count: 1,
         spawnConfig: new SpawnCompensationConfiguration(false, 2.0, 5, 0.2),
     ))->toThrow(InvalidArgumentException::class, 'command-line option');
+});
+
+test('a group worker may poll a comma-joined queue list', function (): void {
+    // The package joins a group's member queues with commas on purpose, so for
+    // a group the comma is the separator rather than an injected one. Refusing
+    // the joined argument stopped every group worker from starting — shipped
+    // in v4.0.0 and caught only when a test finally invoked the group path.
+    $spawner = new WorkerSpawner(app(SpawnLatencyTrackerContract::class));
+
+    expect($spawner->buildCommand('redis', 'email,sms', new WorkerConfiguration(
+        min: 1, max: 2, tries: 3, maxTimeSeconds: 3600,
+        timeoutSeconds: 900, sleepSeconds: 3, shutdownTimeoutSeconds: 30,
+    )))->toContain('--queue=email,sms');
+});
+
+test('a group member is still checked on its own', function (): void {
+    // The separator is allowed; an injected option inside a member is not.
+    $spawner = new WorkerSpawner(app(SpawnLatencyTrackerContract::class));
+
+    expect(fn () => $spawner->spawn(
+        connection: 'redis',
+        queue: 'email,--env=staging',
+        count: 1,
+        spawnConfig: new SpawnCompensationConfiguration(false, 2.0, 5, 0.2),
+        group: 'notifications',
+    ))->toThrow(InvalidArgumentException::class, 'command-line option');
+});
+
+test('a comma is still refused for a non-group queue', function (): void {
+    $spawner = new WorkerSpawner(app(SpawnLatencyTrackerContract::class));
+
+    expect(fn () => $spawner->spawn(
+        connection: 'redis',
+        queue: 'tenant-me,tenant-victim',
+        count: 1,
+        spawnConfig: new SpawnCompensationConfiguration(false, 2.0, 5, 0.2),
+    ))->toThrow(InvalidArgumentException::class, 'list of queues');
 });
