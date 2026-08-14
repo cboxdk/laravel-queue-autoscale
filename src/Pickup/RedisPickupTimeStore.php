@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Pickup;
 
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
+use Cbox\LaravelQueueAutoscale\Support\WorkloadKey;
 use Illuminate\Redis\Connections\Connection;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Support\Facades\Redis;
@@ -72,7 +73,11 @@ LUA;
 
     private function key(string $connection, string $queue): string
     {
-        return sprintf('autoscale:pickup:%s:%s', $connection, $queue);
+        return sprintf(
+            'autoscale:pickup:%s:%s',
+            WorkloadKey::label($queue),
+            WorkloadKey::for($connection, $queue),
+        );
     }
 
     private function redis(): Connection
