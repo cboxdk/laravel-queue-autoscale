@@ -76,12 +76,19 @@ readonly class WorkerSpawner
         // Defence in depth. The manager filters discovered names, but a caller
         // reaching the spawner directly must not be able to turn a queue name
         // into a command-line option or a second queue.
-        if (! WorkloadName::isSafe($connection) || ! WorkloadName::isSafe($queue)) {
-            $offender = WorkloadName::isSafe($queue) ? $connection : $queue;
+        //
+        // A group worker polls several queues, and the package joins them with
+        // commas on purpose — so for a group the comma is the separator rather
+        // than an injected one, and each member is checked on its own. Refusing
+        // the joined argument outright stopped every group worker from starting.
+        $names = $group === null ? [$queue] : explode(',', $queue);
 
-            throw new \InvalidArgumentException(
-                "Refusing to spawn a worker for '{$connection}:{$queue}': ".WorkloadName::reason($offender)
-            );
+        foreach ([$connection, ...$names] as $name) {
+            if (! WorkloadName::isSafe($name)) {
+                throw new \InvalidArgumentException(
+                    "Refusing to spawn a worker for '{$connection}:{$queue}': ".WorkloadName::reason($name)
+                );
+            }
         }
 
         for ($i = 0; $i < $count; $i++) {
