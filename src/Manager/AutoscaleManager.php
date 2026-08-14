@@ -1019,11 +1019,7 @@ class AutoscaleManager
             spawnCompensation: $config->spawnCompensation,
         );
 
-        if ($decision->shouldScaleUp()) {
-            $this->scaleUp($decision);
-        } elseif ($decision->shouldScaleDown()) {
-            $this->scaleDown($decision);
-        }
+        $this->applyDecisionThroughPolicies($decision);
     }
 
     private function reconcileGroupTarget(GroupConfiguration $group, int $targetWorkers): void
@@ -1044,11 +1040,42 @@ class AutoscaleManager
             spawnCompensation: $group->spawnCompensation,
         );
 
-        if ($decision->shouldScaleUp()) {
-            $this->scaleUpGroup($group, $decision);
-        } elseif ($decision->shouldScaleDown()) {
-            $this->scaleDownGroup($group, $decision);
+        $this->applyDecisionThroughPolicies($decision, $group);
+    }
+
+    /**
+     * Run a decision through the policy chain, then act on what comes back.
+     *
+     * The single-host paths did this inline and the cluster paths did not, so
+     * a policy was silently inert the moment cluster mode was enabled — the
+     * autoscaler would scale past whatever limit the policy existed to impose,
+     * with no error and no log line saying the policy had been skipped.
+     *
+     * A policy's answer is authoritative here exactly as it is on a single
+     * host: nothing re-clamps afterwards. See docs/advanced-usage/scaling-policies.md.
+     */
+    private function applyDecisionThroughPolicies(ScalingDecision $decision, ?GroupConfiguration $group = null): void
+    {
+        $finalDecision = $this->policies->beforeScaling($decision);
+
+        if ($finalDecision->targetWorkers !== $decision->targetWorkers) {
+            $this->verbose(
+                "  🔧 Policy modified decision: {$decision->targetWorkers} → {$finalDecision->targetWorkers} workers",
+                'info'
+            );
         }
+
+        if ($finalDecision->shouldScaleUp()) {
+            $group === null
+                ? $this->scaleUp($finalDecision)
+                : $this->scaleUpGroup($group, $finalDecision);
+        } elseif ($finalDecision->shouldScaleDown()) {
+            $group === null
+                ? $this->scaleDown($finalDecision)
+                : $this->scaleDownGroup($group, $finalDecision);
+        }
+
+        $this->policies->afterScaling($finalDecision);
     }
 
     private function currentTimestamp(): int

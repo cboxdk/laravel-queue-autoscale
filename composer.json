@@ -63,7 +63,11 @@
         "prepare": "@php vendor/bin/testbench package:discover --ansi",
         "lint": "vendor/bin/pint --test",
         "format": "vendor/bin/pint",
-        "analyse": "vendor/bin/phpstan analyse",
+        "analyse": [
+            "@php -r \"array_map('unlink', glob('vendor/orchestra/testbench-core/laravel/bootstrap/cache/*.php') ?: []);\"",
+            "vendor/bin/phpstan clear-result-cache",
+            "vendor/bin/phpstan analyse --memory-limit=1G"
+        ],
         "test": "vendor/bin/pest",
         "test-coverage": "vendor/bin/pest --coverage",
         "license-check": "@php bin/check-licenses.php",
