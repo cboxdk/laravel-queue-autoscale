@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Fuse;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\FailureClassifierContract;
 use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
@@ -82,6 +83,31 @@ class JobOutcomeRecorder
         // bucket size, so counters were written into differently-sized buckets
         // than the manager reads and the fuse saw zeros forever.
         return $this->windowSeconds["{$connection}\0{$queue}"]
-            ??= QueueConfiguration::fromConfig($connection, $queue)->fuse->windowSeconds;
+            ??= $this->resolveWindowSeconds($connection, $queue);
+    }
+
+    /**
+     * The bucket size the manager will read these counters back with.
+     *
+     * A grouped queue is the awkward case. Workers record under the real queue
+     * name, but the manager evaluates the group and therefore reads with the
+     * GROUP's fuse window. The bucket number is `intdiv(time, window) * window`
+     * and it is part of the cache key, so any disagreement about the window
+     * produces two disjoint sets of keys: the worker's counters are written
+     * where nothing looks, the manager reads buckets that are always empty,
+     * and the group's fuse can never reach min_samples no matter how badly the
+     * dependency is failing.
+     *
+     * Resolving the group's window here keeps both halves on the same key.
+     */
+    private function resolveWindowSeconds(string $connection, string $queue): int
+    {
+        foreach (GroupConfiguration::allFromConfig() as $group) {
+            if ($group->connection === $connection && in_array($queue, $group->queues, true)) {
+                return $group->fuse->windowSeconds;
+            }
+        }
+
+        return QueueConfiguration::fromConfig($connection, $queue)->fuse->windowSeconds;
     }
 }

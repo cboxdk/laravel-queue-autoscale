@@ -56,6 +56,14 @@ class AutoscaleManager
     private int $interval = 5;
 
     /**
+     * How long per-queue bookkeeping outlives the last scaling action.
+     *
+     * Comfortably longer than any sane cooldown, so the anti-flapping window
+     * is never truncated by the cleanup that exists to bound memory.
+     */
+    private const QUEUE_STATE_RETENTION_SECONDS = 3600;
+
+    /**
      * @var array<string, Carbon>
      */
     private array $lastScaleTime = [];
@@ -110,6 +118,9 @@ class AutoscaleManager
      * @var array<string, array<string, int>> workloadKey => [managerId => assignedWorkers]
      */
     private array $previousDistributions = [];
+
+    /** Whether this manager held the lease on the previous cycle. */
+    private bool $wasLeader = false;
 
     public function __construct(
         private readonly ScalingEngine $engine,
@@ -418,6 +429,8 @@ class AutoscaleManager
 
         $currentLeaderId = $this->clusterStore->leaderId();
         $isLeader = $this->clusterStore->isLeader($state->managerId);
+
+        $this->noteLeadership($isLeader);
 
         if ($isLeader) {
             $currentLeaderId = $state->managerId;
@@ -1093,6 +1106,28 @@ class AutoscaleManager
         return $finalDecision;
     }
 
+    /**
+     * Record whether this manager holds the lease, discarding stale working
+     * memory when it has just taken it.
+     *
+     * The distribution cache exists so a steady cluster is not reshuffled
+     * every cycle. That makes it a leader's working memory: losing the lease
+     * and winning it back means another manager has been placing workers in
+     * between, so anything remembered from before describes a cluster that no
+     * longer exists. Because the cache is only checked for feasibility, a
+     * stale layout that still sums to the right total was replayed wholesale —
+     * every host churning its workers to match a ten-minute-old picture, for
+     * no change in demand.
+     */
+    private function noteLeadership(bool $isLeader): void
+    {
+        if ($isLeader && ! $this->wasLeader) {
+            $this->previousDistributions = [];
+        }
+
+        $this->wasLeader = $isLeader;
+    }
+
     private function currentTimestamp(): int
     {
         return (int) round(microtime(true) * 1000);
@@ -1336,6 +1371,41 @@ class AutoscaleManager
     private function beginEvaluationCycle(): void
     {
         $this->capacity->invalidateCache();
+
+        // Per-queue state is keyed by queue name and the manager runs for
+        // weeks. An application that generates queue names per tenant will
+        // therefore accumulate one entry per tenant that has ever dispatched a
+        // job, in a process that never restarts to shed them. currentQueueStats
+        // has a second problem: it is what the renderer draws, so a queue that
+        // stopped existing kept being displayed forever.
+        $this->currentQueueStats = [];
+
+        $this->forgetQueuesNotSeenRecently();
+    }
+
+    /**
+     * Drop per-queue bookkeeping for queues that have gone quiet.
+     *
+     * Bounded rather than cleared: the anti-flapping window and the breach
+     * state are what stop a queue oscillating, so discarding them every cycle
+     * would defeat both. A queue that has not been scaled within the retention
+     * window has nothing left worth remembering.
+     */
+    private function forgetQueuesNotSeenRecently(): void
+    {
+        $cutoff = now()->subSeconds(self::QUEUE_STATE_RETENTION_SECONDS);
+
+        foreach ($this->lastScaleTime as $key => $at) {
+            if ($at->greaterThanOrEqualTo($cutoff)) {
+                continue;
+            }
+
+            unset(
+                $this->lastScaleTime[$key],
+                $this->lastScaleDirection[$key],
+                $this->breachState[$key],
+            );
+        }
     }
 
     private function evaluateAndScale(): void

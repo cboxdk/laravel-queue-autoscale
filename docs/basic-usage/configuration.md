@@ -97,7 +97,7 @@ return [
 ];
 ```
 
-Six profiles ship with the package: five autoscaling ones (`BalancedProfile`, `CriticalProfile`, `HighVolumeProfile`, `BurstyProfile`, `BackgroundProfile`) plus the pinned single-worker `ExclusiveProfile`. See [Workload Profiles](workload-profiles.md) for what each one sets.
+Seven profiles ship with the package: five general autoscaling ones (`BalancedProfile`, `CriticalProfile`, `HighVolumeProfile`, `BurstyProfile`, `BackgroundProfile`), the pinned single-worker `ExclusiveProfile`, and `ConnectionLimitedProfile` for queues whose parallelism something downstream dictates. See [Workload Profiles](workload-profiles.md) for what each one sets.
 
 ## Queue Configuration
 

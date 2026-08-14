@@ -5,8 +5,7 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Fuse;
 
 use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
-use Illuminate\Support\Facades\Cache;
-
+use Cbox\LaravelQueueAutoscale\Support\WorkloadKey;
 /**
  * Cache-backed outcome counters using fixed tumbling buckets.
  *
@@ -25,7 +24,8 @@ use Illuminate\Support\Facades\Cache;
  * work in single-host mode, which this package supports without Redis. Any
  * shared cache backend works; the array driver confines the fuse to one
  * process, which is only correct in tests.
- */
+ */ use Illuminate\Support\Facades\Cache;
+
 class CacheFailureWindowStore implements FailureWindowStoreContract
 {
     private const int STATE_TTL_SECONDS = 86400;
@@ -134,11 +134,21 @@ class CacheFailureWindowStore implements FailureWindowStoreContract
 
     private function counterKey(string $connection, string $queue, int $bucket, string $suffix): string
     {
-        return sprintf('autoscale:fuse:window:%s:%s:%d:%s', $connection, $queue, $bucket, $suffix);
+        return sprintf(
+            'autoscale:fuse:window:%s:%s:%d:%s',
+            WorkloadKey::label($queue),
+            WorkloadKey::for($connection, $queue),
+            $bucket,
+            $suffix,
+        );
     }
 
     private function stateKey(string $connection, string $queue): string
     {
-        return sprintf('autoscale:fuse:state:%s:%s', $connection, $queue);
+        return sprintf(
+            'autoscale:fuse:state:%s:%s',
+            WorkloadKey::label($queue),
+            WorkloadKey::for($connection, $queue),
+        );
     }
 }

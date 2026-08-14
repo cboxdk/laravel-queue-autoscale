@@ -35,7 +35,7 @@ Performance tuning focuses on:
 
 ### Evaluation Interval
 
-The evaluation interval controls how often scaling decisions are made. **It is set by the `--interval` flag on the daemon, and nowhere else:**
+The evaluation interval controls how often scaling decisions are made. It comes from `manager.evaluation_interval_seconds`, and `--interval` overrides it for a single daemon:
 
 ```bash
 php artisan queue:autoscale --interval=5   # 5 is the default
@@ -215,7 +215,7 @@ $hostCeiling = max(min($maxByCpu, $maxByMemory), 0);
 
 The host ceiling is then divided among queues: each queue's share is `hostCeiling - (workers running for other queues)`, and the per-queue `workers.max` is applied on top of that.
 
-System metrics are cached for 4 seconds inside the capacity calculator, because sampling CPU blocks for a second. If the system-metrics read fails entirely, the calculator falls back to a conservative fixed ceiling and reports `limitingFactor: 'system_metrics_unavailable'`.
+System metrics are cached for 4 seconds inside the capacity calculator, because reading system metrics is not free. If the system-metrics read fails entirely, the calculator falls back to a conservative fixed ceiling and reports `limitingFactor: 'system_metrics_unavailable'`.
 
 ### Cost of measuring pickup time
 

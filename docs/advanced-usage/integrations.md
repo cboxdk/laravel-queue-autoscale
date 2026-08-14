@@ -178,7 +178,7 @@ object and no configuration — and they carry the decision *after* policies hav
 | `ClusterSummaryPublished` | `clusterId, leaderId, summary, publishedAt` |
 | `ClusterScalingSignalUpdated` | see `src/Events/ClusterScalingSignalUpdated.php` |
 
-There is no worker-level health event. `src/Workers/ProcessHealthCheck.php` exists but dispatches
+There is no worker-level health event. `src/Workers/the manager's inline liveness check.php` exists but dispatches
 nothing — worker deaths are visible only through the log channel and the next cycle's decision.
 
 ### Registering listeners

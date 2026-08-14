@@ -174,7 +174,7 @@ $metrics->utilizationRate;      // float percent
 $metrics->activeWorkers;        // int
 ```
 
-There is no worker-health event in this package. `ProcessHealthCheck` only answers whether a tracked PID is still alive; dead workers are dropped from the pool and, if the target still calls for them, respawned on the next cycle. The respawn shows up as a `WorkersScaled` event.
+There is no worker-health event in this package. the manager's inline liveness check only answers whether a tracked PID is still alive; dead workers are dropped from the pool and, if the target still calls for them, respawned on the next cycle. The respawn shows up as a `WorkersScaled` event.
 
 ## Collecting metrics
 

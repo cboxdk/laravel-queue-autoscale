@@ -10,6 +10,7 @@ use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Support\WorkloadName;
+use Cbox\LaravelQueueAutoscale\Workers\SpawnLatency\SpawnIdentity;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Process\Process;
@@ -118,7 +119,12 @@ readonly class WorkerSpawner
                     // For group workers the "queue" identity used by the spawn tracker
                     // is the group name so pickup-time EMA is shared across member queues.
                     $trackingQueue = $group ?? $queue;
-                    $this->spawnLatencyTracker->recordSpawn((string) $pid, $connection, $trackingQueue, $spawnConfig);
+                    $this->spawnLatencyTracker->recordSpawn(
+                        SpawnIdentity::forPid($pid),
+                        $connection,
+                        $trackingQueue,
+                        $spawnConfig,
+                    );
                 }
 
                 // Brief pause to allow process to fail fast if command is invalid
