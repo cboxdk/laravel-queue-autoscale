@@ -44,6 +44,33 @@ raise a target the strategy left alone.
 
 ### Fixed
 
+- **Pickup sampling was per process, not per queue.** A group worker polls
+  several queues at once, so a queue running at five thousand jobs a second set
+  the sampling probability for the queue beside it running at two — the quiet
+  queue never reached `sla.min_samples`, its p95 never existed, and the
+  SLA-driven strategy went blind on it for as long as its noisy neighbour
+  stayed hot.
+- **Scale-down reported what it asked for, not what it did.** Some workers may
+  already be draining, so the log and the `WorkersScaled` event described a
+  pool state that was never reached.
+- **Telemetry queue labels were unbounded.** Queues are discovered rather than
+  listed, so per-tenant naming meant one time series per tenant per metric.
+  Capped by `telemetry.max_queue_labels` (100; `null` disables), with further
+  queues sharing an `__other__` bucket.
+- **The manager id could be identical across containers.** It is derived from
+  container-runtime variables to keep two managers on one host apart, but they
+  were read through the config layer — so an image built with `config:cache`
+  baked in the build host's values and every container from it derived the same
+  id.
+- **Pinned queues skipped the policy chain**, and in cluster mode a policy
+  never saw a hold — so a policy could not raise a target the strategy had left
+  alone, as it can on a single host.
+- **The fair-share allocator returned more than the capacity it was given**
+  when the minimums did not fit, after which the overflow was dropped in
+  metrics-discovery order — so the starved queue changed from cycle to cycle.
+- **The fencing token did not fence.** It was checked by the reader and never
+  by the writer, so a deposed leader still overwrote the live leader's
+  recommendation keys.
 - **A group's fuse could never trip.** Workers recorded outcomes with the
   member queue's window while the manager read them back with the group's.
   The bucket is part of the cache key, so the two halves wrote and read
