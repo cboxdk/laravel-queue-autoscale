@@ -6,7 +6,7 @@ use Cbox\LaravelQueueAutoscale\Support\ManagerProcessLock;
 use Symfony\Component\Process\Process;
 
 it('acquires a lock successfully', function () {
-    $lock = new ManagerProcessLock();
+    $lock = new ManagerProcessLock;
     $held = $lock->acquire();
 
     expect($held->metadata())->toHaveKeys(['pid', 'manager_id', 'host', 'acquired_at', 'cluster_enabled']);
@@ -15,10 +15,10 @@ it('acquires a lock successfully', function () {
 });
 
 it('prevents a second lock on the same host', function () {
-    $lock1 = new ManagerProcessLock();
+    $lock1 = new ManagerProcessLock;
     $held1 = $lock1->acquire();
 
-    $lock2 = new ManagerProcessLock();
+    $lock2 = new ManagerProcessLock;
 
     try {
         $lock2->acquire();
@@ -33,7 +33,7 @@ it('prevents a second lock on the same host', function () {
 it('uses host-scoped lock path in cluster mode', function () {
     config()->set('queue-autoscale.cluster.enabled', true);
 
-    $lock = new ManagerProcessLock();
+    $lock = new ManagerProcessLock;
     $held = $lock->acquire();
 
     $lockDir = storage_path('framework/queue-autoscale');
@@ -51,7 +51,7 @@ it('uses host-scoped lock path in cluster mode', function () {
 it('uses app-only lock path in single-host mode', function () {
     config()->set('queue-autoscale.cluster.enabled', false);
 
-    $lock = new ManagerProcessLock();
+    $lock = new ManagerProcessLock;
     $held = $lock->acquire();
 
     $lockDir = storage_path('framework/queue-autoscale');
@@ -71,7 +71,7 @@ it('releases the lock immediately after the manager exits even while spawned chi
         $this->markTestSkipped('proc_open is required to spawn an inheriting child.');
     }
 
-    $lock1 = new ManagerProcessLock();
+    $lock1 = new ManagerProcessLock;
     $held1 = $lock1->acquire();
 
     // A child spawned while the lock is held must NOT inherit the lock fd
@@ -86,7 +86,7 @@ it('releases the lock immediately after the manager exits even while spawned chi
         // Manager exits: release and close the parent handle while the child lives on.
         $held1->release();
 
-        $lock2 = new ManagerProcessLock();
+        $lock2 = new ManagerProcessLock;
         $held2 = $lock2->acquire();
 
         expect($held2->metadata())->toHaveKey('pid');
