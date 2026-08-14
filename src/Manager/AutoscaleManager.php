@@ -2588,14 +2588,30 @@ class AutoscaleManager
             $this->terminator->requestTermination($worker);
         }
 
+        // Report what was actually terminated. getTerminatable() can return
+        // fewer workers than asked for — some may already be draining — and
+        // reporting the request instead made the log and the event describe a
+        // pool state that was never reached. scaleUp was fixed for exactly
+        // this; the down path was missed.
+        $removed = $workers->count();
+        $reached = $decision->currentWorkers - $removed;
+
+        if ($removed < $toRemove) {
+            $this->verbose(
+                "  ⚠️  Only {$removed} of {$toRemove} worker(s) could be terminated; the rest are already draining",
+                'warn'
+            );
+        }
+
         Log::channel(AutoscaleConfiguration::logChannel())->info(
             'Scaled down workers',
             [
                 'connection' => $decision->connection,
                 'queue' => $decision->queue,
                 'from' => $decision->currentWorkers,
-                'to' => $decision->targetWorkers,
-                'removed' => $toRemove,
+                'to' => $reached,
+                'requested' => $decision->targetWorkers,
+                'removed' => $removed,
                 'reason' => $decision->reason,
             ]
         );
@@ -2604,7 +2620,7 @@ class AutoscaleManager
             connection: $decision->connection,
             queue: $decision->queue,
             from: $decision->currentWorkers,
-            to: $decision->targetWorkers,
+            to: $reached,
             action: 'down',
             reason: $decision->reason
         ));
