@@ -56,6 +56,14 @@ class AutoscaleManager
     private int $interval = 5;
 
     /**
+     * How long per-queue bookkeeping outlives the last scaling action.
+     *
+     * Comfortably longer than any sane cooldown, so the anti-flapping window
+     * is never truncated by the cleanup that exists to bound memory.
+     */
+    private const QUEUE_STATE_RETENTION_SECONDS = 3600;
+
+    /**
      * @var array<string, Carbon>
      */
     private array $lastScaleTime = [];
@@ -1363,6 +1371,41 @@ class AutoscaleManager
     private function beginEvaluationCycle(): void
     {
         $this->capacity->invalidateCache();
+
+        // Per-queue state is keyed by queue name and the manager runs for
+        // weeks. An application that generates queue names per tenant will
+        // therefore accumulate one entry per tenant that has ever dispatched a
+        // job, in a process that never restarts to shed them. currentQueueStats
+        // has a second problem: it is what the renderer draws, so a queue that
+        // stopped existing kept being displayed forever.
+        $this->currentQueueStats = [];
+
+        $this->forgetQueuesNotSeenRecently();
+    }
+
+    /**
+     * Drop per-queue bookkeeping for queues that have gone quiet.
+     *
+     * Bounded rather than cleared: the anti-flapping window and the breach
+     * state are what stop a queue oscillating, so discarding them every cycle
+     * would defeat both. A queue that has not been scaled within the retention
+     * window has nothing left worth remembering.
+     */
+    private function forgetQueuesNotSeenRecently(): void
+    {
+        $cutoff = now()->subSeconds(self::QUEUE_STATE_RETENTION_SECONDS);
+
+        foreach ($this->lastScaleTime as $key => $at) {
+            if ($at->greaterThanOrEqualTo($cutoff)) {
+                continue;
+            }
+
+            unset(
+                $this->lastScaleTime[$key],
+                $this->lastScaleDirection[$key],
+                $this->breachState[$key],
+            );
+        }
     }
 
     private function evaluateAndScale(): void
