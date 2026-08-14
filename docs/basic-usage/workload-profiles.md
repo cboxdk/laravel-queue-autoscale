@@ -18,7 +18,7 @@ See [Understanding SLA Timing](how-it-works.md#understanding-sla-timing) for the
 
 ## Shipped Profiles
 
-Six profiles ship with the package:
+Seven profiles ship with the package:
 
 | Profile | SLA | Min | Max | Percentile | Forecast policy | Intended use |
 |---|---|---|---|---|---|---|
@@ -28,6 +28,7 @@ Six profiles ship with the package:
 | **BurstyProfile** | 60s | 0 | 100 | p90 | Aggressive | Webhook storms, campaign fanouts |
 | **BackgroundProfile** | 300s | 0 | 5 | p95 | Hint-only | Cleanup, analytics |
 | **ExclusiveProfile** (v3) | 60s | 1 (pinned) | 1 (pinned) | p95 | Disabled | Sequential integrations |
+| **ConnectionLimitedProfile** | 60s | 0 | 5 | p95 | Disabled | A downstream concurrency limit |
 
 Each profile also ships [failure fuse](failure-fuse.md) tuning matched to its traffic shape:
 
@@ -38,6 +39,7 @@ Each profile also ships [failure fuse](failure-fuse.md) tuning matched to its tr
 | **BalancedProfile** ⭐ | 50% | 20 | 60s | 60s |
 | **BurstyProfile** | 50% | 20 | 120s | 60s |
 | **BackgroundProfile** | 60% | 10 | 300s | 300s |
+| **ConnectionLimitedProfile** | 50% | 10 | 120s | 120s |
 | **ExclusiveProfile** | — | — | — | disabled |
 
 Higher-volume profiles demand more samples before acting; lower-volume ones widen the window so `min_samples` is reachable at all. `ExclusiveProfile` disables the fuse because a pinned queue has no scale-up to hold back.

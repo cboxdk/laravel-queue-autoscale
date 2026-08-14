@@ -376,7 +376,7 @@ AUTOSCALE_WORKER_GROUP=<group name>   # group workers only
 
 ```text
 Every evaluation cycle:
-1. ProcessHealthCheck::isHealthy() → is the tracked PID still alive?
+1. the manager's inline liveness check::isHealthy() → is the tracked PID still alive?
    (posix_kill($pid, 0) — a liveness probe, nothing more)
 2. Dead workers are removed from the pool
 3. If the target still calls for them, replacements are spawned
@@ -421,7 +421,7 @@ finalMaxWorkers     = max(min(maxByCpu, maxByMemory), 0)
 
 The `currentWorkers +` term is essential: the CPU and memory those workers are already consuming is reflected in `currentCpuPercent` / `currentMemoryPercent`, so the calculation adds headroom to what exists rather than recomputing from zero.
 
-System metrics are cached for 4 seconds because sampling CPU blocks for a second. If the read fails entirely, a conservative fixed fallback is returned with `limitingFactor: 'system_metrics_unavailable'`.
+System metrics are cached for 4 seconds because reading system metrics is not free. If the read fails entirely, a conservative fixed fallback is returned with `limitingFactor: 'system_metrics_unavailable'`.
 
 ### Configuration Limits
 

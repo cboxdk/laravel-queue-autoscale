@@ -77,7 +77,7 @@ The defaults cover ~80% of cases. When they don't, pick a shipped profile or ove
 
 ### Pick a profile
 
-Six profiles ship with the package. Each is a pre-tuned bundle of SLA, worker limits, forecast and
+Seven profiles ship with the package. Each is a pre-tuned bundle of SLA, worker limits, forecast and
 fuse settings.
 
 ```php

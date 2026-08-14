@@ -589,7 +589,7 @@ Names that appear in older documentation, blog posts or generated code but do **
 | `ProfilePresets` (`::balanced()` etc.) | Removed in v3. Use the profile classes. |
 | `ResourceConstraintChecker`, `ResourceConstraintPolicy` | Resource limits live in `CapacityCalculator`, applied inside `ScalingEngine`. |
 | `ScalingDecision::$confidence` | No confidence value exists anywhere in the package. |
-| `WorkerHealthCheckFailed` | No worker-health event exists. `ProcessHealthCheck` only answers whether a PID is alive. |
+| `WorkerHealthCheckFailed` | No worker-health event exists. the manager's inline liveness check only answers whether a PID is alive. |
 | `WorkersScaled::$newCount` | The properties are `from` and `to`. |
 | `QueueConfiguration::$minWorkers` / `$maxWorkers` / `$maxPickupTimeSeconds` | Nested: `$config->workers->min`, `$config->workers->max`, `$config->sla->targetSeconds`. |
 | `AutoscaleManager::getWorkerCount()` | The manager exposes only `configure()`, `setOutput()`, `setRenderer()` and `run()`. |
