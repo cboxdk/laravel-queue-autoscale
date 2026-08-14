@@ -69,3 +69,11 @@ jobs:
 
       - name: Execute tests
         run: vendor/bin/pest --ci --exclude-group=simulation
+
+      # The simulation suite holds the strongest end-to-end assertions in the
+      # repo — whole outages and traffic ramps driven through the real engine —
+      # and takes about eighteen minutes, so it is excluded from the matrix
+      # above and run once rather than on every leg.
+      - name: Run simulation suite
+        if: matrix.php == '8.4' && matrix.laravel == '13.*' && matrix.stability == 'prefer-stable'
+        run: vendor/bin/pest --ci --group=simulation
