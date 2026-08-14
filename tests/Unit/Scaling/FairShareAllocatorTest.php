@@ -188,7 +188,7 @@ it('guarantees min workers even under heavy contention', function () {
     expect(array_sum($result))->toBeLessThanOrEqual(5);
 });
 
-it('returns mins even when they exceed capacity', function () {
+it('scales the minimums down when they do not all fit', function () {
     $allocator = new FairShareAllocator;
 
     // 5 queues min=3 each, capacity=10 — mins alone = 15 > 10
@@ -209,15 +209,38 @@ it('returns mins even when they exceed capacity', function () {
 
     $result = $allocator->allocate($demands, $configs, 10);
 
-    // Each queue gets exactly its min — mins are hard guarantees
-    expect($result['queue:redis:a'])->toBe(3)
-        ->and($result['queue:redis:b'])->toBe(3)
-        ->and($result['queue:redis:c'])->toBe(3)
-        ->and($result['queue:redis:d'])->toBe(3)
-        ->and($result['queue:redis:e'])->toBe(3);
+    // This spec used to assert the sum was 15 — larger than the capacity the
+    // allocator was handed. That is not a guarantee the cluster can keep: the
+    // caller then placed workloads until hosts filled and silently dropped
+    // whatever was left, in metrics-discovery order, which is not stable
+    // between cycles. A critical queue could be starved to zero while a bulk
+    // queue kept its floor, and the victim changed from cycle to cycle.
+    expect(array_sum($result))->toBe(10);
 
-    // Total exceeds capacity — cluster is undersized, scale signal will flag it
-    expect(array_sum($result))->toBe(15);
+    // The shortfall is spread rather than aimed at whoever was evaluated last.
+    foreach ($result as $workers) {
+        expect($workers)->toBeGreaterThan(0)->toBeLessThan(3);
+    }
+});
+
+it('produces the same allocation twice when the minimums do not fit', function () {
+    // The point of scaling them down rather than dropping the overflow: the
+    // outcome cannot depend on iteration order, so a queue is not starved one
+    // cycle and restored the next.
+    $allocator = new FairShareAllocator;
+
+    $demands = ['a' => 9, 'b' => 9, 'c' => 9];
+    $configs = [
+        'a' => ['min' => 4, 'max' => 9],
+        'b' => ['min' => 3, 'max' => 9],
+        'c' => ['min' => 3, 'max' => 9],
+    ];
+
+    $first = $allocator->allocate($demands, $configs, 5);
+    $second = $allocator->allocate($demands, $configs, 5);
+
+    expect($first)->toBe($second)
+        ->and(array_sum($first))->toBe(5);
 });
 
 it('caps at workers max and redistributes freed capacity', function () {

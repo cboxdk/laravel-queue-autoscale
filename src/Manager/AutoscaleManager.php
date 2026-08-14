@@ -648,7 +648,14 @@ class AutoscaleManager
                 $this->clusterStore->recordDecision($decisionEntry);
             }
 
-            event(new ScalingDecisionMade($decision));
+            // Deliberately not ScalingDecisionMade. What the leader produces
+            // is a recommendation, not a decision that was acted on — each
+            // host still applies its own policies and its own resource ceiling
+            // to it. Emitting it here made the event describe a target no host
+            // necessarily used. The cluster's own view is published as
+            // ClusterSummaryPublished and ClusterScalingSignalUpdated; the
+            // per-host decisions arrive as ScalingDecisionMade from each host
+            // as it acts.
 
             // SLA breach/recovery tracking
             $slaTarget = $meta['config']->sla->targetSeconds;
@@ -1102,6 +1109,13 @@ class AutoscaleManager
         }
 
         $this->policies->afterScaling($finalDecision);
+
+        // Announced here so the event means the same thing in both modes:
+        // this manager decided and acted. The cluster leader used to emit it
+        // for the whole fleet with the pre-policy target, which stopped
+        // describing what any given host did the moment policies could change
+        // that target per host.
+        event(new ScalingDecisionMade($finalDecision));
 
         return $finalDecision;
     }
@@ -1941,9 +1955,7 @@ class AutoscaleManager
             noActionMessage: '  ✓ No scaling action needed',
         );
 
-        // 10. Broadcast events using final decision
-        event(new ScalingDecisionMade($finalDecision));
-
+        // 10. Broadcast the remaining events using the final decision
         if ($finalDecision->isSlaBreachRisk()) {
             $this->verbose('  ⚠️  SLA BREACH RISK DETECTED!', 'warn');
             event(new SlaBreachPredicted($finalDecision));
@@ -2063,8 +2075,6 @@ class AutoscaleManager
             fn (ScalingDecision $d) => $this->scaleDownGroup($group, $d),
             noActionMessage: '  ✓ No group scaling action needed',
         );
-
-        event(new ScalingDecisionMade($finalDecision));
 
         if ($finalDecision->isSlaBreachRisk()) {
             $this->verbose('  ⚠️  GROUP SLA BREACH RISK DETECTED!', 'warn');
@@ -2308,6 +2318,22 @@ class AutoscaleManager
         // a replacement alongside the one still finishing its job.
         $current = $this->pool->liveCount($connection, $queue);
 
+        // A pinned queue is still a scaling decision, so the policies see it.
+        // They can rarely move it — min equals max by definition — but a
+        // policy that reports, alerts or refuses on a queue's behalf should
+        // not fall silent just because that queue happens to be pinned. This
+        // was the last path that skipped the chain.
+        $decision = $this->policies->beforeScaling(new ScalingDecision(
+            connection: $connection,
+            queue: $queue,
+            currentWorkers: $current,
+            targetWorkers: $target,
+            reason: 'supervisor:pinned',
+            spawnCompensation: $config->spawnCompensation,
+        ));
+
+        $target = max(0, $decision->targetWorkers);
+
         $this->verbose("  🔒 Exclusive/pinned queue: enforcing {$target} worker(s), current={$current}", 'debug');
 
         // Track SLA breach state for events, even though we cannot scale to fix it.
@@ -2323,6 +2349,8 @@ class AutoscaleManager
             $toAdd = $this->clampToHostCeiling($target - $current);
 
             if ($toAdd === 0) {
+                $this->policies->afterScaling($decision);
+
                 return;
             }
 
@@ -2440,6 +2468,8 @@ class AutoscaleManager
         }
 
         $this->breachState[$key] = $isBreaching;
+
+        $this->policies->afterScaling($decision);
     }
 
     private function scaleUp(ScalingDecision $decision): void
