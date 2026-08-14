@@ -199,12 +199,19 @@ readonly class AutoscaleConfiguration
     private static function managerIdentitySource(): string
     {
         $parts = [];
+
+        // getenv(), not env(). These are process environment variables set by
+        // the container runtime, and they must be read from the live process
+        // rather than from configuration: an image built with `config:cache`
+        // would otherwise bake in whatever the build host had, and every
+        // container from that image would derive the same manager id — which
+        // is the one thing this function exists to prevent.
         $envCandidates = [
-            'k8s_pod_uid' => env('K8S_POD_UID'),
-            'pod_uid' => env('POD_UID'),
-            'ecs_task_arn' => env('ECS_TASK_ARN'),
-            'container_id' => env('CONTAINER_ID'),
-            'hostname_env' => env('HOSTNAME'),
+            'k8s_pod_uid' => getenv('K8S_POD_UID'),
+            'pod_uid' => getenv('POD_UID'),
+            'ecs_task_arn' => getenv('ECS_TASK_ARN'),
+            'container_id' => getenv('CONTAINER_ID'),
+            'hostname_env' => getenv('HOSTNAME'),
         ];
 
         foreach ($envCandidates as $label => $candidate) {
