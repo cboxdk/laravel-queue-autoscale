@@ -341,6 +341,19 @@ return [
 
         'cache_ttl' => env('QUEUE_AUTOSCALE_TELEMETRY_CACHE_TTL', 10),
 
+        /*
+         * Queue names appear as a metric label. Because queues are discovered
+         * rather than listed, an application that names them per tenant can
+         * present thousands — one time series per tenant per metric, which is
+         * how a Prometheus or OTel backend falls over or produces a very large
+         * bill. Queue names embedding tenant identifiers also land in a system
+         * with a different access-control model than the app.
+         *
+         * Above this many distinct queues, further ones share an "__other__"
+         * label rather than minting new series. Set to null for no cap.
+         */
+        'max_queue_labels' => env('QUEUE_AUTOSCALE_TELEMETRY_MAX_QUEUE_LABELS', 100),
+
         'gauges' => [
             'cluster' => true,
         ],

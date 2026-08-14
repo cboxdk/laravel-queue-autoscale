@@ -9,4 +9,10 @@ parameters:
     tmpDir: build/phpstan
     checkOctaneCompatibility: true
     checkModelProperties: true
+    # larastan's env() rule recognises the APPLICATION's config directory, not
+    # a package's, so it flags config/queue-autoscale.php — which is exactly
+    # where env() belongs. Kept for that reason alone: src/ contains no env()
+    # calls, and the container-identity lookups that used to use it now call
+    # getenv() directly, because they must read the live process rather than a
+    # cached config value.
     noEnvCallsOutsideOfConfig: false

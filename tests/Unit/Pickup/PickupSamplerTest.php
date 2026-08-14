@@ -26,11 +26,11 @@ test('records everything when sampling is disabled', function (): void {
     $kept = 0;
 
     for ($i = 0; $i < 500; $i++) {
-        $kept += $sampler->shouldRecord() ? 1 : 0;
+        $kept += $sampler->shouldRecord('redis', 'default') ? 1 : 0;
     }
 
     expect($kept)->toBe(500)
-        ->and($sampler->currentSampleRate())->toBe(1.0);
+        ->and($sampler->currentSampleRate('redis', 'default'))->toBe(1.0);
 });
 
 test('records everything while the rate stays under the budget', function (): void {
@@ -47,7 +47,7 @@ test('records everything while the rate stays under the budget', function (): vo
 
     for ($second = 0; $second < 10; $second++) {
         for ($i = 0; $i < 10; $i++) {
-            $kept += $sampler->shouldRecord() ? 1 : 0;
+            $kept += $sampler->shouldRecord('redis', 'default') ? 1 : 0;
         }
         $now += 1.0;
     }
@@ -69,7 +69,7 @@ test('the first window is never sampled, because no rate is known yet', function
     $kept = 0;
 
     for ($i = 0; $i < 1000; $i++) {
-        $kept += $sampler->shouldRecord() ? 1 : 0;
+        $kept += $sampler->shouldRecord('redis', 'default') ? 1 : 0;
     }
 
     expect($kept)->toBe(1000);
@@ -86,14 +86,14 @@ test('throttles to the budget once a busy window has been observed', function ()
 
     // Window one: 10,000 jobs, all recorded (no prior evidence).
     for ($i = 0; $i < 10000; $i++) {
-        $sampler->shouldRecord();
+        $sampler->shouldRecord('redis', 'default');
     }
 
     $now += 1.0;
-    $sampler->shouldRecord();
+    $sampler->shouldRecord('redis', 'default');
 
     // Window two now prices itself from window one: 100 / 10000.
-    expect($sampler->currentSampleRate())->toBe(0.01);
+    expect($sampler->currentSampleRate('redis', 'default'))->toBe(0.01);
 });
 
 test('the inclusion probability is constant across a window', function (): void {
@@ -109,7 +109,7 @@ test('the inclusion probability is constant across a window', function (): void 
     );
 
     for ($i = 0; $i < 1000; $i++) {
-        $sampler->shouldRecord();
+        $sampler->shouldRecord('redis', 'default');
     }
 
     $now += 1.0;
@@ -117,8 +117,8 @@ test('the inclusion probability is constant across a window', function (): void 
     $rates = [];
 
     for ($i = 0; $i < 1000; $i++) {
-        $sampler->shouldRecord();
-        $rates[] = $sampler->currentSampleRate();
+        $sampler->shouldRecord('redis', 'default');
+        $rates[] = $sampler->currentSampleRate('redis', 'default');
     }
 
     expect(array_unique($rates))->toHaveCount(1);
@@ -141,7 +141,7 @@ test('keeps approximately the budgeted number of samples from a burst', function
     );
 
     for ($i = 0; $i < 10000; $i++) {
-        $sampler->shouldRecord();
+        $sampler->shouldRecord('redis', 'default');
     }
 
     $now += 1.0;
@@ -149,7 +149,7 @@ test('keeps approximately the budgeted number of samples from a burst', function
     $kept = 0;
 
     for ($i = 0; $i < 10000; $i++) {
-        $kept += $sampler->shouldRecord() ? 1 : 0;
+        $kept += $sampler->shouldRecord('redis', 'default') ? 1 : 0;
     }
 
     // 1% of 10,000, within a tolerance that a real RNG would also satisfy.
@@ -168,13 +168,13 @@ test('an idle process does not carry a stale rate into the burst that wakes it',
     );
 
     for ($i = 0; $i < 10000; $i++) {
-        $sampler->shouldRecord();
+        $sampler->shouldRecord('redis', 'default');
     }
 
     $now += 60.0;
 
-    expect($sampler->shouldRecord())->toBeTrue()
-        ->and($sampler->currentSampleRate())->toBe(1.0);
+    expect($sampler->shouldRecord('redis', 'default'))->toBeTrue()
+        ->and($sampler->currentSampleRate('redis', 'default'))->toBe(1.0);
 });
 
 test('a non-positive budget disables sampling rather than discarding everything', function (): void {
@@ -193,9 +193,58 @@ test('a non-positive budget disables sampling rather than discarding everything'
         $kept = 0;
 
         for ($i = 0; $i < 100; $i++) {
-            $kept += $sampler->shouldRecord() ? 1 : 0;
+            $kept += $sampler->shouldRecord('redis', 'default') ? 1 : 0;
         }
 
         expect($kept)->toBe(100);
     }
+});
+
+test('a busy queue does not set the sampling rate for a quiet one', function (): void {
+    // A group worker polls several queues at once. With one shared counter, a
+    // queue at 5,000 jobs/s set the probability for the queue beside it at 2 —
+    // so the quiet queue contributed roughly one sample every 25 seconds,
+    // never reached sla.min_samples, and its p95 never existed. The strategy
+    // went blind on it for as long as the noisy neighbour stayed hot.
+    $now = 1000.0;
+    $sampler = new PickupSampler(
+        enabled: true,
+        maxPerSecond: 100,
+        clock: samplerClock($now),
+        randomizer: fn (): float => 0.99,
+    );
+
+    // Window one: the noisy queue floods, the quiet one barely appears.
+    for ($i = 0; $i < 5_000; $i++) {
+        $sampler->shouldRecord('redis', 'bulk-email');
+    }
+    $sampler->shouldRecord('redis', 'invoices');
+    $sampler->shouldRecord('redis', 'invoices');
+
+    $now += 1.0;
+
+    // Window two: the quiet queue is still recorded in full.
+    expect($sampler->currentSampleRate('redis', 'invoices'))->toBe(1.0)
+        ->and($sampler->shouldRecord('redis', 'invoices'))->toBeTrue();
+
+    // And the noisy one is still sampled hard.
+    expect($sampler->currentSampleRate('redis', 'bulk-email'))->toBeLessThan(0.1);
+});
+
+test('the same queue on two connections is counted separately', function (): void {
+    $now = 1000.0;
+    $sampler = new PickupSampler(
+        enabled: true,
+        maxPerSecond: 10,
+        clock: samplerClock($now),
+        randomizer: fn (): float => 0.99,
+    );
+
+    for ($i = 0; $i < 500; $i++) {
+        $sampler->shouldRecord('redis', 'default');
+    }
+    $now += 1.0;
+
+    expect($sampler->currentSampleRate('redis', 'default'))->toBeLessThan(1.0)
+        ->and($sampler->currentSampleRate('sqs', 'default'))->toBe(1.0);
 });
