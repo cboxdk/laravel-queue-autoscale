@@ -29,7 +29,7 @@ class SpawnLatencyRecorder
     public function handle(JobProcessing $event): void
     {
         $this->tracker->recordFirstPickup(
-            workerId: (string) getmypid(),
+            workerId: SpawnIdentity::forCurrentProcess(),
             pickupTimestamp: microtime(true),
         );
     }
