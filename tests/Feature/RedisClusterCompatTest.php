@@ -13,8 +13,7 @@ use Illuminate\Support\Facades\Redis;
  *
  * These run against whichever Redis the environment provides: a single node
  * normally, or a real cluster when REDIS_CLUSTER_HOSTS_AND_PORTS is set (see the
- * cluster CI job). The same assertions must hold in both modes — the single-node
- * run is the regression guard, the cluster run is the one that throws today.
+ * cluster CI job). The same assertions must hold in both modes.
  */
 beforeEach(function (): void {
     if (! getenv('REDIS_AVAILABLE')) {
@@ -29,14 +28,14 @@ beforeEach(function (): void {
     Redis::connection('default')->flushdb();
 });
 
-// A: ClusterStore::ping() must not throw and must return truthy on both modes.
+// A cluster client has no keyless PING, so the store must key-route it.
 it('pings the coordination connection', function (): void {
-    expect((new ClusterStore)->ping())->toBeTruthy();
+    expect((new ClusterStore())->ping())->toBeTruthy();
 })->group('redis');
 
-// B: the atomic EMA update spans three keys and must not raise CROSSSLOT.
+// The atomic EMA update spans three keys that must share a slot on a cluster.
 it('records spawn latency without crossslot', function (): void {
-    $tracker = new EmaSpawnLatencyTracker;
+    $tracker = new EmaSpawnLatencyTracker();
     $config = new SpawnCompensationConfiguration(
         enabled: true,
         fallbackSeconds: 2.5,
@@ -50,9 +49,9 @@ it('records spawn latency without crossslot', function (): void {
     expect($tracker->currentLatency('redis', 'default', $config))->toBeGreaterThan(0.0);
 })->group('redis');
 
-// C: the two-key fencing EVAL must write when the token holds and refuse it otherwise.
+// The two-key fencing EVAL must write when the token holds and refuse it otherwise.
 it('publishes a recommendation without crossslot and fences a stale token', function (): void {
-    $store = new ClusterStore;
+    $store = new ClusterStore();
 
     expect($store->isLeader('manager-a'))->toBeTrue();
 
