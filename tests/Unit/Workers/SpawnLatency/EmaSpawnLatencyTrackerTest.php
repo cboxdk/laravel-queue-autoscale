@@ -65,7 +65,7 @@ function mockAtomicSpawnLatencyUpdates(array &$store, int $times): void
 
 test('returns fallback when fewer than 5 samples recorded', function (): void {
     Redis::shouldReceive('get')
-        ->with('autoscale:spawn:count:redis:default')
+        ->with('{autoscale-spawn}:count:redis:default')
         ->once()
         ->andReturn(null);
 
@@ -91,7 +91,7 @@ test('converges toward true latency after multiple samples', function (): void {
     Redis::shouldReceive('get')
         ->andReturnUsing(function (string $key) use (&$store, $knownSpawnTs): mixed {
             // For pending keys, return a payload with our controlled timestamp and alpha.
-            if (str_starts_with($key, 'autoscale:spawn:pending:')) {
+            if (str_starts_with($key, '{autoscale-spawn}:pending:')) {
                 if (! array_key_exists($key, $store)) {
                     return null;
                 }
@@ -146,12 +146,12 @@ test('converges toward true latency after multiple samples', function (): void {
 
 test('ignores pickup for unknown worker id', function (): void {
     Redis::shouldReceive('get')
-        ->with('autoscale:spawn:pending:nonexistent-worker')
+        ->with('{autoscale-spawn}:pending:nonexistent-worker')
         ->once()
         ->andReturn(null);
 
     Redis::shouldReceive('get')
-        ->with('autoscale:spawn:count:redis:default')
+        ->with('{autoscale-spawn}:count:redis:default')
         ->once()
         ->andReturn(null);
 
@@ -173,7 +173,7 @@ test('updates ema through phpredis compatible eval arguments', function (): void
     ], JSON_THROW_ON_ERROR);
 
     Redis::shouldReceive('get')
-        ->with('autoscale:spawn:pending:worker-1')
+        ->with('{autoscale-spawn}:pending:worker-1')
         ->once()
         ->andReturn($payload);
 
@@ -188,9 +188,9 @@ test('updates ema through phpredis compatible eval arguments', function (): void
 
             expect($script)->toContain("redis.call('incr'");
             expect($arguments)->toHaveCount(5);
-            expect($arguments[0])->toBe('autoscale:spawn:pending:worker-1');
-            expect($arguments[1])->toBe('autoscale:spawn:ema:redis:default');
-            expect($arguments[2])->toBe('autoscale:spawn:count:redis:default');
+            expect($arguments[0])->toBe('{autoscale-spawn}:pending:worker-1');
+            expect($arguments[1])->toBe('{autoscale-spawn}:ema:redis:default');
+            expect($arguments[2])->toBe('{autoscale-spawn}:count:redis:default');
             expect($numberOfKeys)->toBe(3);
 
             return true;
@@ -220,7 +220,7 @@ test('clamps extreme latencies into safe bounds', function (): void {
 
     Redis::shouldReceive('get')
         ->andReturnUsing(function (string $key) use (&$store, $ancientSpawnTs): mixed {
-            if (str_starts_with($key, 'autoscale:spawn:pending:')) {
+            if (str_starts_with($key, '{autoscale-spawn}:pending:')) {
                 if (! array_key_exists($key, $store)) {
                     return null;
                 }
@@ -287,7 +287,7 @@ test('isolates queues from one another', function (): void {
 
     Redis::shouldReceive('get')
         ->andReturnUsing(function (string $key) use (&$store, $spawnTs): mixed {
-            if (str_starts_with($key, 'autoscale:spawn:pending:')) {
+            if (str_starts_with($key, '{autoscale-spawn}:pending:')) {
                 if (! array_key_exists($key, $store)) {
                     return null;
                 }
