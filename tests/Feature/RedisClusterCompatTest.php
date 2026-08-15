@@ -30,12 +30,12 @@ beforeEach(function (): void {
 
 // A cluster client has no keyless PING, so the store must key-route it.
 it('pings the coordination connection', function (): void {
-    expect((new ClusterStore())->ping())->toBeTruthy();
+    expect((new ClusterStore)->ping())->toBeTruthy();
 })->group('redis');
 
 // The atomic EMA update spans three keys that must share a slot on a cluster.
 it('records spawn latency without crossslot', function (): void {
-    $tracker = new EmaSpawnLatencyTracker();
+    $tracker = new EmaSpawnLatencyTracker;
     $config = new SpawnCompensationConfiguration(
         enabled: true,
         fallbackSeconds: 2.5,
@@ -51,7 +51,7 @@ it('records spawn latency without crossslot', function (): void {
 
 // The two-key fencing EVAL must write when the token holds and refuse it otherwise.
 it('publishes a recommendation without crossslot and fences a stale token', function (): void {
-    $store = new ClusterStore();
+    $store = new ClusterStore;
 
     expect($store->isLeader('manager-a'))->toBeTrue();
 
