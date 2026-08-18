@@ -5,6 +5,35 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **Redis Cluster support for cluster coordination.** The coordination and
+  spawn-latency paths assumed single-node phpredis: the leader-readiness check
+  called `RedisCluster::ping()` with no argument (a cluster has no keyless
+  PING), and the spawn-latency and recommendation-fencing scripts spanned keys
+  in different slots (`CROSSSLOT`). The `ping` is now key-routed on a
+  `\RedisCluster` client and the multi-key scripts share a hash tag, so cluster
+  mode works against a `\RedisCluster` connection. The single-node `\Redis`
+  path is unchanged. Covered by a cluster CI job that reruns the coordination
+  specs against a real three-master cluster.
+
+### Changed
+
+- **Coordination key format.** Cluster coordination keys move from
+  `queue-autoscale:cluster:<appid>:*` to `queue-autoscale:cluster:{<appid>}:*`
+  so every key shares one slot. During a rolling deploy the old and new
+  managers read different leader keys, so you can briefly have two leaders,
+  each scaling its half of the fleet up to `workers.max`. It resolves itself
+  once every manager is on the new version, and each recommendation is
+  `setex`'d so nothing is stranded — but expect the window before you deploy.
+- **Spawn-latency key format.** Spawn-latency keys move from `autoscale:spawn:*`
+  to `{autoscale-spawn}:*` so the atomic EMA update stays in one slot. Existing
+  latency history becomes unreachable on upgrade, so each tracker returns
+  `fallbackSeconds` until it has collected `minSamples` again — short-lived and
+  self-healing, not lost data.
+
 ## v4.0.1 - 2026-08-14
 
 **Upgrade promptly if you use queue groups: v4.0.0 could not start a group
