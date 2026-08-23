@@ -100,6 +100,22 @@ it('filters blank lines from both streams', function (): void {
         ->and($this->buffer->collectErrorOutput([$worker]))->toBe([]);
 });
 
+it('forgets every partial remainder when all buffers are cleared', function (): void {
+    $worker = bufferedOutputWorker(
+        101,
+        stdoutChunks: ['stale-out', "fresh out\n"],
+        stderrChunks: ['stale-err', "fresh err\n"],
+    );
+
+    $this->buffer->collectOutput([$worker]);
+    $this->buffer->collectErrorOutput([$worker]);
+
+    $this->buffer->clearAllBuffers();
+
+    expect($this->buffer->collectOutput([$worker]))->toBe([101 => ['fresh out']])
+        ->and($this->buffer->collectErrorOutput([$worker]))->toBe([101 => ['fresh err']]);
+});
+
 it('forgets partial remainders for both streams when a pid is cleared', function (): void {
     $worker = bufferedOutputWorker(
         101,
