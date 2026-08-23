@@ -251,3 +251,12 @@ test('the leader publishes the held target while an oscillating demand reverses 
 
     expect($store->publishedRecommendations()['mgr-1']->workloads['queue:redis:exports'] ?? null)->toBe($published);
 });
+
+test('a workload with no recorded scale time is never in cooldown', function (): void {
+    $manager = app(AutoscaleManager::class);
+
+    $inCooldown = (new ReflectionMethod($manager, 'inClusterCooldown'))
+        ->invoke($manager, 'queue:redis:never-seen', 60);
+
+    expect($inCooldown)->toBeFalse();
+});
