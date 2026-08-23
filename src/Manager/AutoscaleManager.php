@@ -522,6 +522,15 @@ class AutoscaleManager
         $workloadMeta = [];
 
         foreach ($metricsByKey as $queueKey => $metrics) {
+            // Discovered names reach a worker's command line on whichever host
+            // the target lands, so filter unsafe names here exactly as the
+            // single-host loop does. Without this, a recommendation for e.g.
+            // an empty-named queue is published every cycle and each host's
+            // spawn guard throws on it.
+            if (! $this->workloadNameIsSafe($metrics->connection, $metrics->queue)) {
+                continue;
+            }
+
             if (AutoscaleConfiguration::isExcluded($metrics->queue) || isset($groupedQueueKeys[$queueKey])) {
                 continue;
             }
@@ -771,6 +780,14 @@ class AutoscaleManager
 
             [, $connection, $queue] = $parts;
 
+            // The leader may be running an older package version that does
+            // not filter discovered names, so a recommendation cannot be
+            // trusted to contain only names that are safe to hand to a
+            // worker process.
+            if (! $this->workloadNameIsSafe($connection, $queue)) {
+                continue;
+            }
+
             if (isset($groupedQueueKeys["{$connection}:{$queue}"])) {
                 continue;
             }
@@ -779,17 +796,21 @@ class AutoscaleManager
                 continue;
             }
 
-            $config = QueueConfiguration::fromConfig($connection, $queue);
+            try {
+                $config = QueueConfiguration::fromConfig($connection, $queue);
 
-            if (! $config->workers->scalable) {
-                $rawMetrics = $this->getMetricsForQueue($connection, $queue);
-                $metrics = QueueMetricsData::fromArray($this->mapMetricsFields($rawMetrics));
-                $this->superviseQueue($config, $metrics, $target);
+                if (! $config->workers->scalable) {
+                    $rawMetrics = $this->getMetricsForQueue($connection, $queue);
+                    $metrics = QueueMetricsData::fromArray($this->mapMetricsFields($rawMetrics));
+                    $this->superviseQueue($config, $metrics, $target);
 
-                continue;
+                    continue;
+                }
+
+                $this->reconcileQueueTarget($config, $target);
+            } catch (\Throwable $e) {
+                $this->reportWorkloadFailure('queue', $connection, $queue, $e);
             }
-
-            $this->reconcileQueueTarget($config, $target);
         }
 
         foreach ($groups as $group) {
@@ -802,7 +823,11 @@ class AutoscaleManager
                 continue;
             }
 
-            $this->reconcileGroupTarget($group, $target);
+            try {
+                $this->reconcileGroupTarget($group, $target);
+            } catch (\Throwable $e) {
+                $this->reportWorkloadFailure('group', $group->connection, $group->name, $e);
+            }
         }
     }
 
@@ -1518,12 +1543,20 @@ class AutoscaleManager
                 continue;
             }
 
-            $this->evaluateQueue($metrics->connection, $metrics->queue, $metrics);
+            try {
+                $this->evaluateQueue($metrics->connection, $metrics->queue, $metrics);
+            } catch (\Throwable $e) {
+                $this->reportWorkloadFailure('queue', $metrics->connection, $metrics->queue, $e);
+            }
         }
 
         // Evaluate each group exactly once per cycle using aggregated metrics.
         foreach ($groups as $group) {
-            $this->evaluateGroup($group, $metricsByKey);
+            try {
+                $this->evaluateGroup($group, $metricsByKey);
+            } catch (\Throwable $e) {
+                $this->reportWorkloadFailure('group', $group->connection, $group->name, $e);
+            }
         }
     }
 
@@ -1587,6 +1620,29 @@ class AutoscaleManager
         }
 
         return false;
+    }
+
+    /**
+     * Log a workload-level failure without letting it abort the cycle.
+     *
+     * Before this guard existed, one queue that could not be reconciled
+     * (a malformed discovered name, a transient spawn failure) unwound to
+     * the run loop's catch-all and silently skipped every other workload
+     * in that cycle: nothing scaled up and exited workers were never
+     * respawned until the offending workload aged out of discovery.
+     */
+    private function reportWorkloadFailure(string $type, string $connection, string $name, \Throwable $e): void
+    {
+        Log::channel(AutoscaleConfiguration::logChannel())->error(
+            'Workload evaluation failed; continuing with remaining workloads',
+            [
+                'type' => $type,
+                'connection' => $connection,
+                'name' => $name,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]
+        );
     }
 
     private function announceExclusion(string $connection, string $queue): void

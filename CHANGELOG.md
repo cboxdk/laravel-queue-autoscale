@@ -5,6 +5,12 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- One invalid discovered queue can no longer abort the entire evaluation cycle. Unsafe workload names (for example an empty queue name recorded by the metrics layer) are now filtered from the cluster leader's evaluation and from applied cluster recommendations, matching the single-host loop, and each workload's reconciliation is isolated so an exception for one queue is logged and the remaining queues still scale. Previously a single phantom queue wedged scale-up and worker respawn for every queue on the manager until the bad metric expired.
+
 ## v4.0.1 - 2026-08-14
 
 **Upgrade promptly if you use queue groups: v4.0.0 could not start a group
