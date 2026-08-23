@@ -103,6 +103,11 @@ readonly class AutoscaleConfiguration
         return (bool) config('queue-autoscale.manager.honor_queue_restart', true);
     }
 
+    public static function reapOrphansOnStart(): bool
+    {
+        return (bool) config('queue-autoscale.manager.reap_orphans_on_start', true);
+    }
+
     public static function pickupTimeStore(): string
     {
         $configured = config('queue-autoscale.pickup_time.store', 'auto');

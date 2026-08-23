@@ -36,6 +36,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
 use Cbox\LaravelQueueAutoscale\Support\WorkloadName;
+use Cbox\LaravelQueueAutoscale\Workers\OrphanedWorkerReaper;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerOutputBuffer;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerPool;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerProcess;
@@ -133,6 +134,7 @@ class AutoscaleManager
         private readonly CapacityCalculator $capacity,
         private readonly ResourceEstimateResolver $resolver,
         private readonly AlertRateLimiter $alerts = new AlertRateLimiter,
+        private readonly OrphanedWorkerReaper $orphanReaper = new OrphanedWorkerReaper,
     ) {
         $this->pool = new WorkerPool;
         $this->outputBuffer = new WorkerOutputBuffer;
@@ -310,6 +312,8 @@ class AutoscaleManager
             packageVersion: $this->packageVersion(),
         ));
 
+        $this->reapOrphanedWorkers();
+
         $this->signals->register(function () {
             $this->stopReason = 'signal';
 
@@ -331,6 +335,22 @@ class AutoscaleManager
         }
 
         return 0;
+    }
+
+    /**
+     * Terminate workers a previous manager generation left running.
+     *
+     * Runs before the first spawn so a replacement manager does not
+     * double-provision on top of orphans it cannot see. The pool is empty at
+     * this point, so nothing this manager owns can match.
+     */
+    private function reapOrphanedWorkers(): void
+    {
+        if (! AutoscaleConfiguration::reapOrphansOnStart()) {
+            return;
+        }
+
+        $this->orphanReaper->reap(AutoscaleConfiguration::managerId());
     }
 
     private function runLoop(): void

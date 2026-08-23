@@ -5,6 +5,12 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- A manager that dies abruptly (for example SIGKILLed by the kernel OOM killer) no longer causes its replacement to double-provision. On startup the manager now scans procfs for workers stamped with this package's environment markers and its own manager id, SIGTERMs them, and logs a summary before the first spawn. Previously those orphans were invisible to the replacement (the worker pool is process-local), so it spawned a full new set on top of them and each doubled generation made the next OOM kill more likely. The reap is scoped to the same manager id (so deliberately co-hosted managers never touch each other's workers), skips on hosts without procfs, and can be disabled with `queue-autoscale.manager.reap_orphans_on_start`.
+
 ## v4.0.1 - 2026-08-14
 
 **Upgrade promptly if you use queue groups: v4.0.0 could not start a group
