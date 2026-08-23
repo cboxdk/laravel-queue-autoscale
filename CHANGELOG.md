@@ -5,6 +5,12 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- Worker stderr is now drained every cycle and forwarded to the manager's log channel tagged with the worker PID, so worker log lines (job exceptions, memory warnings, and for containerized apps typically the whole application log channel) reach the container's log stream instead of accumulating unread inside the manager. Both stream buffers are also cleared after each read, and draining no longer depends on a renderer being attached, so a long-lived worker's output history no longer lives on in the manager's memory.
+
 ## v4.0.1 - 2026-08-14
 
 **Upgrade promptly if you use queue groups: v4.0.0 could not start a group

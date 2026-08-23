@@ -103,4 +103,21 @@ class WorkerProcess
     {
         return $this->process->getIncrementalErrorOutput();
     }
+
+    /**
+     * Drop the process's retained stdout history.
+     *
+     * Symfony Process keeps everything a child ever wrote for the life of
+     * the process; clearing after each incremental read is what stops a
+     * long-lived worker's output living on inside the manager.
+     */
+    public function clearOutput(): void
+    {
+        $this->process->clearOutput();
+    }
+
+    public function clearErrorOutput(): void
+    {
+        $this->process->clearErrorOutput();
+    }
 }
