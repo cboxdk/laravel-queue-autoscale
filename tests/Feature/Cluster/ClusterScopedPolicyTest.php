@@ -199,6 +199,38 @@ test('a cluster-scope policy caps the cluster-wide target once, before distribut
         ->and(RecordingClusterScopedPolicy::$seen)->toContain('after:cluster:exports:3');
 });
 
+test('a cluster-scope policy caps a group workload the same way', function (): void {
+    config()->set('queue-autoscale.queues', []);
+    config()->set('queue-autoscale.groups.notifications', [
+        'queues' => ['email', 'sms'],
+        'connection' => 'redis',
+        'overrides' => ['workers' => ['min' => 6, 'max' => 20]],
+    ]);
+
+    rebuildPolicyChain([RecordingClusterScopedPolicy::class]);
+    scopedPolicyDiscovery([
+        'redis:email' => scopedPolicyRawMetrics('redis', 'email'),
+        'redis:sms' => scopedPolicyRawMetrics('redis', 'sms'),
+    ]);
+
+    $store = runLeaderEvaluation();
+
+    $recommendation = $store->publishedRecommendations()['mgr-1'] ?? null;
+
+    // The group's raw demand depends on strategy arithmetic over the
+    // aggregated metrics; what is deterministic is that it is at least the
+    // configured min of 6, well above the cap, so the cap is binding.
+    $consultations = array_filter(
+        RecordingClusterScopedPolicy::$seen,
+        fn (string $entry): bool => str_starts_with($entry, 'before:cluster:notifications:'),
+    );
+
+    expect($recommendation)->not->toBeNull()
+        ->and($recommendation->workloads['group:redis:notifications'] ?? null)->toBe(3)
+        ->and($consultations)->not->toBeEmpty()
+        ->and(RecordingClusterScopedPolicy::$seen)->toContain('after:cluster:notifications:3');
+});
+
 test('policies without the marker are never consulted by the leader', function (): void {
     rebuildPolicyChain([RecordingScalingPolicy::class]);
     scopedPolicyDiscovery(['redis:exports' => scopedPolicyRawMetrics('redis', 'exports')]);
