@@ -339,3 +339,45 @@ it('keeps every tenant within its own cap when many share the fleet', function (
         expect($total)->toBeLessThanOrEqual(60, "host {$managerId} oversubscribed");
     }
 });
+
+it('does not evict the cached distribution over capacity jitter between heartbeats', function () {
+    // Heartbeat capacity is derived from live CPU/memory, so maxWorkers
+    // jitters cycle to cycle. Host b reports 9 instead of 8: moving the
+    // worker would "improve" the utilization spread by ~0.04, which the old
+    // 0.000001 epsilon treated as a reason to reshuffle every cycle.
+    $a = makeManagerState('a', maxWorkers: 8);
+    $b = makeManagerState('b', maxWorkers: 9);
+    $managers = [$a, $b];
+
+    $assignedTotals = ['a' => 1, 'b' => 1];
+    $result = invokeDistributeClusterTargetWithCache(
+        managers: $managers,
+        workloadKey: 'queue:redis:fast',
+        targetWorkers: 1,
+        assignedTotals: $assignedTotals,
+        previousDistributions: [
+            'queue:redis:fast' => ['a' => 1, 'b' => 0],
+        ],
+    );
+
+    expect($result)->toBe(['a' => 1, 'b' => 0]);
+});
+
+it('still rebalances a cached distribution skewed by at least a full worker', function () {
+    $a = makeManagerState('a', maxWorkers: 8);
+    $b = makeManagerState('b', maxWorkers: 8);
+    $managers = [$a, $b];
+
+    $assignedTotals = ['a' => 0, 'b' => 0];
+    $result = invokeDistributeClusterTargetWithCache(
+        managers: $managers,
+        workloadKey: 'queue:redis:fast',
+        targetWorkers: 4,
+        assignedTotals: $assignedTotals,
+        previousDistributions: [
+            'queue:redis:fast' => ['a' => 3, 'b' => 1],
+        ],
+    );
+
+    expect($result)->toBe(['a' => 2, 'b' => 2]);
+});
