@@ -5,6 +5,12 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- The anti-flapping cooldown now applies in cluster mode. The single-host paths have always damped scaling direction reversals through `scaling.cooldown_seconds`, but the cluster leader recomputed and republished every workload's target each cycle with no equivalent guard, so a demand signal that oscillates cycle-to-cycle was executed as real spawns on one evaluation and kills on the next, cluster-wide, on the evaluation cadence. The leader now damps direction reversals before distribution using the same semantics as the single-host guard (only reversals are held, the last direction goes stale after the window, and a scale-up during an SLA breach always passes), holding the previously published target for the workload. The damping state is leader working memory and resets on leadership change, so a failover costs one undamped cycle.
+
 ## v4.0.1 - 2026-08-14
 
 **Upgrade promptly if you use queue groups: v4.0.0 could not start a group
