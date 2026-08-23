@@ -5,6 +5,12 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- Cluster-scoped scaling policies. A policy implementing the new opt-in `ClusterScopedPolicy` marker interface is additionally consulted by the cluster leader against a `ScalingDecision` carrying the workload's cluster-wide counts (`scope = ScalingScope::Cluster`), before the target is distributed across hosts. This is where a global budget belongs: a cap applied only per host multiplies the intended ceiling by the host count. `ScalingDecision` gained a `scope` field (default `Host`, so every existing decision reads exactly as before) and a `withTargetWorkers()` helper that preserves all other fields. Policies that do not opt in are never consulted by the leader, so existing behavior is unchanged.
+
 ## v4.0.1 - 2026-08-14
 
 **Upgrade promptly if you use queue groups: v4.0.0 could not start a group

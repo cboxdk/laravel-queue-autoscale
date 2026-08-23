@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingScope;
 
 test('creates instance with all properties', function () {
     $decision = new ScalingDecision(
@@ -226,4 +227,52 @@ test('accepts capacity calculation result', function () {
 
     expect($decision->capacity)->toBe($capacity)
         ->and($decision->capacity->finalMaxWorkers)->toBe(10);
+});
+
+test('scope defaults to Host', function () {
+    $decision = new ScalingDecision(
+        connection: 'redis',
+        queue: 'default',
+        currentWorkers: 5,
+        targetWorkers: 10,
+        reason: 'Scale up',
+    );
+
+    expect($decision->scope)->toBe(ScalingScope::Host);
+});
+
+test('withTargetWorkers copies everything else including the scope', function () {
+    $decision = new ScalingDecision(
+        connection: 'redis',
+        queue: 'exports',
+        currentWorkers: 5,
+        targetWorkers: 10,
+        reason: 'cluster:demand',
+        predictedPickupTime: 12.5,
+        slaTarget: 45,
+        scope: ScalingScope::Cluster,
+    );
+
+    $capped = $decision->withTargetWorkers(3, 'policy:cluster-capped');
+
+    expect($capped->targetWorkers)->toBe(3)
+        ->and($capped->reason)->toBe('policy:cluster-capped')
+        ->and($capped->scope)->toBe(ScalingScope::Cluster)
+        ->and($capped->connection)->toBe('redis')
+        ->and($capped->queue)->toBe('exports')
+        ->and($capped->currentWorkers)->toBe(5)
+        ->and($capped->predictedPickupTime)->toBe(12.5)
+        ->and($capped->slaTarget)->toBe(45);
+});
+
+test('withTargetWorkers keeps the reason when none is given', function () {
+    $decision = new ScalingDecision(
+        connection: 'redis',
+        queue: 'exports',
+        currentWorkers: 5,
+        targetWorkers: 10,
+        reason: 'original',
+    );
+
+    expect($decision->withTargetWorkers(7)->reason)->toBe('original');
 });

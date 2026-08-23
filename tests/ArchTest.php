@@ -39,6 +39,7 @@ arch('package classes are not sealed against consumers')
         'Cbox\LaravelQueueAutoscale\Fuse\FuseState',
         'Cbox\LaravelQueueAutoscale\Scaling\DTOs\EstimateSource',
         'Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor',
+        'Cbox\LaravelQueueAutoscale\Scaling\ScalingScope',
         'Cbox\LaravelQueueAutoscale\Diagnostics\Severity',
     ]);
 

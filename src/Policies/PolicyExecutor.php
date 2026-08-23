@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Policies;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\ClusterScopedPolicy;
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Illuminate\Support\Facades\Log;
@@ -14,9 +15,16 @@ readonly class PolicyExecutor
     /** @var array<int, ScalingPolicy> */
     private array $policies;
 
+    /** @var array<int, ClusterScopedPolicy> */
+    private array $clusterScopedPolicies;
+
     public function __construct()
     {
         $this->policies = $this->loadPolicies();
+        $this->clusterScopedPolicies = array_values(array_filter(
+            $this->policies,
+            static fn (ScalingPolicy $policy): bool => $policy instanceof ClusterScopedPolicy,
+        ));
     }
 
     /**
@@ -29,9 +37,45 @@ readonly class PolicyExecutor
      */
     public function beforeScaling(ScalingDecision $decision): ScalingDecision
     {
+        return $this->runBeforeChain($this->policies, $decision);
+    }
+
+    public function afterScaling(ScalingDecision $decision): void
+    {
+        $this->runAfterChain($this->policies, $decision);
+    }
+
+    /**
+     * Consult only the policies that opted into cluster scope.
+     *
+     * The leader runs this against a Cluster-scoped decision carrying a
+     * workload's cluster-wide counts. Policies without the marker interface
+     * are deliberately absent: running every policy here would silently make
+     * an existing per-host cap also clamp the cluster total.
+     */
+    public function beforeScalingClusterScoped(ScalingDecision $decision): ScalingDecision
+    {
+        return $this->runBeforeChain($this->clusterScopedPolicies, $decision);
+    }
+
+    public function afterScalingClusterScoped(ScalingDecision $decision): void
+    {
+        $this->runAfterChain($this->clusterScopedPolicies, $decision);
+    }
+
+    public function hasClusterScopedPolicies(): bool
+    {
+        return $this->clusterScopedPolicies !== [];
+    }
+
+    /**
+     * @param  array<int, ScalingPolicy>  $policies
+     */
+    private function runBeforeChain(array $policies, ScalingDecision $decision): ScalingDecision
+    {
         $currentDecision = $decision;
 
-        foreach ($this->policies as $policy) {
+        foreach ($policies as $policy) {
             try {
                 $modifiedDecision = $policy->beforeScaling($currentDecision);
 
@@ -53,9 +97,12 @@ readonly class PolicyExecutor
         return $currentDecision;
     }
 
-    public function afterScaling(ScalingDecision $decision): void
+    /**
+     * @param  array<int, ScalingPolicy>  $policies
+     */
+    private function runAfterChain(array $policies, ScalingDecision $decision): void
     {
-        foreach ($this->policies as $policy) {
+        foreach ($policies as $policy) {
             try {
                 $policy->afterScaling($decision);
             } catch (\Throwable $e) {
