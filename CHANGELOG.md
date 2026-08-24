@@ -48,6 +48,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fallbackSeconds` until it has collected `minSamples` again — short-lived and
   self-healing, not lost data.
 
+### Removed
+
+- The `test-autoscale/` directory, an abandoned `laravel new` skeleton (54 files)
+  that was committed to the repository and, because it was never listed in
+  `.gitattributes` as `export-ignore`, shipped inside every dist archive. It did
+  not require this package, declared no `queue-autoscale` config, and contained no
+  reference to the package at all, so it exercised nothing — the real integration
+  coverage lives in `tests/Integration`, `tests/Simulation` and the Redis Cluster
+  CI job. Also dropped two dangling skeleton leftovers: the `Workbench\App\`
+  autoload-dev entry pointing at a `workbench/app/` directory that does not exist,
+  and a `Factory::guessFactoryNamesUsing()` call in the base `TestCase` naming a
+  `Database\Factories` namespace this package does not have.
+
 ### Fixed
 - A manager that dies abruptly (for example SIGKILLed by the kernel OOM killer) no longer causes its replacement to double-provision. On startup the manager now scans procfs for workers stamped with this package's environment markers and its own manager id, SIGTERMs them, and logs a summary before the first spawn. Previously those orphans were invisible to the replacement (the worker pool is process-local), so it spawned a full new set on top of them and each doubled generation made the next OOM kill more likely. The reap is scoped to the same manager id (so deliberately co-hosted managers never touch each other's workers), skips on hosts without procfs, and can be disabled with `queue-autoscale.manager.reap_orphans_on_start`.
 

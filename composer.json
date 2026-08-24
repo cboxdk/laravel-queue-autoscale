@@ -54,8 +54,7 @@
     },
     "autoload-dev": {
         "psr-4": {
-            "Cbox\\LaravelQueueAutoscale\\Tests\\": "tests/",
-            "Workbench\\App\\": "workbench/app/"
+            "Cbox\\LaravelQueueAutoscale\\Tests\\": "tests/"
         }
     },
     "scripts": {
