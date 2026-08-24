@@ -31,12 +31,16 @@ use Cbox\LaravelQueueAutoscale\Output\DataTransferObjects\WorkerStatus;
 use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
 use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\MeasuredResourceSample;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\ResourceEstimate;
 use Cbox\LaravelQueueAutoscale\Scaling\FairShareAllocator;
+use Cbox\LaravelQueueAutoscale\Scaling\MeasuredResourceCollector;
+use Cbox\LaravelQueueAutoscale\Scaling\QueueMetricsAdapter;
 use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingScope;
+use Cbox\LaravelQueueAutoscale\Support\Coerce;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
 use Cbox\LaravelQueueAutoscale\Support\WorkloadName;
 use Cbox\LaravelQueueAutoscale\Workers\OrphanedWorkerReaper;
@@ -115,6 +119,8 @@ class AutoscaleManager
     /** @var list<string> */
     private array $lastObservedManagerIds = [];
 
+    private readonly MeasuredResourceCollector $resourceCollector;
+
     /** Whether this manager held the lease on the previous cycle. */
     private bool $wasLeader = false;
 
@@ -132,7 +138,11 @@ class AutoscaleManager
         private readonly OrphanedWorkerReaper $orphanReaper = new OrphanedWorkerReaper,
         private readonly WorkerDistributor $distributor = new WorkerDistributor,
         private readonly ClusterCooldown $cooldown = new ClusterCooldown,
+        private readonly QueueMetricsAdapter $metricsAdapter = new QueueMetricsAdapter,
+        ?MeasuredResourceCollector $resourceCollector = null,
     ) {
+        $this->resourceCollector = $resourceCollector ?? new MeasuredResourceCollector($resolver);
+
         $this->pool = new WorkerPool;
         $this->outputBuffer = new WorkerOutputBuffer;
     }
@@ -414,8 +424,8 @@ class AutoscaleManager
         $capacityDetails = $capacity->details;
         $cpuDetails = is_array($capacityDetails['cpu_details'] ?? null) ? $capacityDetails['cpu_details'] : [];
         $memoryDetails = is_array($capacityDetails['memory_details'] ?? null) ? $capacityDetails['memory_details'] : [];
-        $memoryTotalMb = $this->clusterFloat($memoryDetails['total_memory_mb'] ?? 0.0);
-        $memoryUsedMb = round($memoryTotalMb * ($this->clusterFloat($memoryDetails['current_memory_percent'] ?? 0.0) / 100), 1);
+        $memoryTotalMb = Coerce::toFloat($memoryDetails['total_memory_mb'] ?? 0.0);
+        $memoryUsedMb = round($memoryTotalMb * (Coerce::toFloat($memoryDetails['current_memory_percent'] ?? 0.0) / 100), 1);
         $memoryFreeMb = round(max($memoryTotalMb - $memoryUsedMb, 0.0), 1);
         $queueCounts = $this->pool->queueCounts();
         $groupCounts = $this->pool->groupCounts();
@@ -427,11 +437,11 @@ class AutoscaleManager
             maxWorkers: $capacity->finalMaxWorkers,
             availableWorkerCapacity: max($capacity->finalMaxWorkers - $this->pool->totalCount(), 0),
             capacityLimiter: $capacity->limitingFactor->value,
-            cpuPercent: $this->clusterFloat($cpuDetails['current_cpu_percent'] ?? 0.0),
+            cpuPercent: Coerce::toFloat($cpuDetails['current_cpu_percent'] ?? 0.0),
             cpuCores: is_numeric($cpuDetails['total_cores'] ?? null) ? (float) $cpuDetails['total_cores'] : 0.0,
             cpuUsableCores: is_numeric($cpuDetails['usable_cores'] ?? null) ? (float) $cpuDetails['usable_cores'] : 0.0,
             cpuReservedCores: is_numeric($cpuDetails['reserve_cores'] ?? null) ? (float) $cpuDetails['reserve_cores'] : 0.0,
-            memoryPercent: $this->clusterFloat($memoryDetails['current_memory_percent'] ?? 0.0),
+            memoryPercent: Coerce::toFloat($memoryDetails['current_memory_percent'] ?? 0.0),
             memoryTotalMb: $memoryTotalMb,
             memoryUsedMb: $memoryUsedMb,
             memoryFreeMb: $memoryFreeMb,
@@ -476,14 +486,14 @@ class AutoscaleManager
     {
         app(CalculateQueueMetricsAction::class)->executeForAllQueues();
 
-        $this->updateMeasuredResourceEstimates();
+        $this->reportMeasuredResources($this->resourceCollector->collect());
 
         $allQueues = QueueMetrics::getAllQueuesWithMetrics();
 
         $configuredQueues = AutoscaleConfiguration::configuredQueues();
         foreach ($configuredQueues as $queueKey => $queueInfo) {
             if (! isset($allQueues[$queueKey])) {
-                $allQueues[$queueKey] = $this->getMetricsForQueue($queueInfo['connection'], $queueInfo['queue']);
+                $allQueues[$queueKey] = $this->metricsAdapter->forQueue($queueInfo['connection'], $queueInfo['queue']);
             }
         }
 
@@ -494,7 +504,7 @@ class AutoscaleManager
                 $queueKey = "{$group->connection}:{$memberQueue}";
 
                 if (! isset($allQueues[$queueKey])) {
-                    $allQueues[$queueKey] = $this->getMetricsForQueue($group->connection, $memberQueue);
+                    $allQueues[$queueKey] = $this->metricsAdapter->forQueue($group->connection, $memberQueue);
                 }
             }
         }
@@ -520,7 +530,7 @@ class AutoscaleManager
         $metricsByKey = [];
 
         foreach ($allQueues as $metricsArray) {
-            $mappedData = $this->mapMetricsFields($metricsArray);
+            $mappedData = $this->metricsAdapter->mapFields($metricsArray);
             $metrics = QueueMetricsData::fromArray($mappedData);
             $metricsByKey["{$metrics->connection}:{$metrics->queue}"] = $metrics;
         }
@@ -574,7 +584,7 @@ class AutoscaleManager
         }
 
         foreach ($groups as $group) {
-            $aggregated = $this->aggregateGroupMetrics($group, $metricsByKey);
+            $aggregated = $this->metricsAdapter->aggregateGroup($group, $metricsByKey);
             $config = $group->toScalingConfiguration();
             $workloadKey = ClusterRecommendation::groupWorkloadKey($group->connection, $group->name);
             $currentWorkers = $this->clusterCurrentWorkers($activeManagers, $workloadKey);
@@ -632,7 +642,7 @@ class AutoscaleManager
             $currentWorkers = $meta['current_workers'];
             $slaTarget = $meta['config']->sla->targetSeconds;
             $isBreaching = $meta['metrics']->oldestJobAge > 0 && $meta['metrics']->oldestJobAge >= $slaTarget;
-            $cooldownSeconds = $this->clusterInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
+            $cooldownSeconds = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
             $damped = $this->cooldown->apply($workloadKey, $currentWorkers, $targetWorkers, $isBreaching, $cooldownSeconds);
 
             if ($damped->wasHeld) {
@@ -765,22 +775,22 @@ class AutoscaleManager
         $summary = $this->buildClusterSummary($activeManagers, $workloads, $recentDecisions);
         $this->clusterStore->publishSummary($summary);
         event(new ClusterSummaryPublished(
-            clusterId: $this->clusterString($summary['cluster_id'] ?? null),
-            leaderId: $this->clusterString($summary['leader_id'] ?? null),
+            clusterId: Coerce::toString($summary['cluster_id'] ?? null),
+            leaderId: Coerce::toString($summary['leader_id'] ?? null),
             summary: $summary,
             publishedAt: $this->currentTimestamp(),
         ));
         $scaleSignal = is_array($summary['scale_signal'] ?? null) ? $summary['scale_signal'] : [];
 
         event(new ClusterScalingSignalUpdated(
-            clusterId: $this->clusterString($summary['cluster_id'] ?? null),
-            leaderId: $this->clusterString($summary['leader_id'] ?? null),
-            currentHosts: $this->clusterInt($scaleSignal['current_hosts'] ?? 0),
-            recommendedHosts: $this->clusterInt($scaleSignal['recommended_hosts'] ?? 0),
-            currentCapacity: $this->clusterInt($summary['total_worker_capacity'] ?? 0),
-            requiredWorkers: $this->clusterInt($summary['required_workers'] ?? 0),
-            action: $this->clusterString($scaleSignal['action'] ?? null, 'hold'),
-            reason: $this->clusterString($scaleSignal['reason'] ?? null),
+            clusterId: Coerce::toString($summary['cluster_id'] ?? null),
+            leaderId: Coerce::toString($summary['leader_id'] ?? null),
+            currentHosts: Coerce::toInt($scaleSignal['current_hosts'] ?? 0),
+            recommendedHosts: Coerce::toInt($scaleSignal['recommended_hosts'] ?? 0),
+            currentCapacity: Coerce::toInt($summary['total_worker_capacity'] ?? 0),
+            requiredWorkers: Coerce::toInt($summary['required_workers'] ?? 0),
+            action: Coerce::toString($scaleSignal['action'] ?? null, 'hold'),
+            reason: Coerce::toString($scaleSignal['reason'] ?? null),
         ));
     }
 
@@ -839,8 +849,8 @@ class AutoscaleManager
                 $config = QueueConfiguration::fromConfig($connection, $queue);
 
                 if (! $config->workers->scalable) {
-                    $rawMetrics = $this->getMetricsForQueue($connection, $queue);
-                    $metrics = QueueMetricsData::fromArray($this->mapMetricsFields($rawMetrics));
+                    $rawMetrics = $this->metricsAdapter->forQueue($connection, $queue);
+                    $metrics = QueueMetricsData::fromArray($this->metricsAdapter->mapFields($rawMetrics));
                     $this->superviseQueue($config, $metrics, $target);
 
                     continue;
@@ -1276,29 +1286,6 @@ class AutoscaleManager
         ];
     }
 
-    private function clusterFloat(mixed $value): float
-    {
-        return is_numeric($value) ? (float) $value : 0.0;
-    }
-
-    private function clusterInt(mixed $value): int
-    {
-        return is_numeric($value) ? (int) $value : 0;
-    }
-
-    private function clusterString(mixed $value, string $default = ''): string
-    {
-        if (is_string($value)) {
-            return $value;
-        }
-
-        if (is_numeric($value) || is_bool($value)) {
-            return (string) $value;
-        }
-
-        return $default;
-    }
-
     private function packageVersion(): string
     {
         if (! class_exists(InstalledVersions::class)) {
@@ -1310,6 +1297,23 @@ class AutoscaleManager
         }
 
         return InstalledVersions::getPrettyVersion('cboxdk/laravel-queue-autoscale') ?? 'unknown';
+    }
+
+    /**
+     * @param  list<MeasuredResourceSample>  $samples
+     */
+    private function reportMeasuredResources(array $samples): void
+    {
+        foreach ($samples as $sample) {
+            $this->verbose(sprintf(
+                '  Measured resources [%s]: cpu=%.3f cores (%d samples), mem=%.1f MB (%d samples)',
+                $sample->workloadKey(),
+                $sample->cpuCores,
+                $sample->cpuSamples,
+                $sample->memoryMb,
+                $sample->memorySamples,
+            ), 'debug');
+        }
     }
 
     private function beginEvaluationCycle(): void
@@ -1359,7 +1363,7 @@ class AutoscaleManager
         // Recalculate metrics first to ensure throughput uses current sliding window
         app(CalculateQueueMetricsAction::class)->executeForAllQueues();
 
-        $this->updateMeasuredResourceEstimates();
+        $this->reportMeasuredResources($this->resourceCollector->collect());
 
         // Get ALL queues with metrics from laravel-queue-metrics
         // Returns: ['redis:default' => [...metrics array...], ...]
@@ -1371,7 +1375,7 @@ class AutoscaleManager
         foreach ($configuredQueues as $queueKey => $queueInfo) {
             if (! isset($allQueues[$queueKey])) {
                 // Fetch fresh metrics for this queue directly
-                $allQueues[$queueKey] = $this->getMetricsForQueue($queueInfo['connection'], $queueInfo['queue']);
+                $allQueues[$queueKey] = $this->metricsAdapter->forQueue($queueInfo['connection'], $queueInfo['queue']);
             }
         }
 
@@ -1387,7 +1391,7 @@ class AutoscaleManager
                 $k = "{$group->connection}:{$memberQueue}";
 
                 if (! isset($allQueues[$k])) {
-                    $allQueues[$k] = $this->getMetricsForQueue($group->connection, $memberQueue);
+                    $allQueues[$k] = $this->metricsAdapter->forQueue($group->connection, $memberQueue);
                 }
             }
         }
@@ -1424,7 +1428,7 @@ class AutoscaleManager
 
         foreach ($allQueues as $queueKey => $metricsArray) {
             // Map field names from API response to DTO format
-            $mappedData = $this->mapMetricsFields($metricsArray);
+            $mappedData = $this->metricsAdapter->mapFields($metricsArray);
 
             // Convert array to QueueMetricsData DTO
             $metrics = QueueMetricsData::fromArray($mappedData);
@@ -1568,219 +1572,6 @@ class AutoscaleManager
         );
     }
 
-    /**
-     * Compute per-queue measured CPU and memory estimates from actual job metrics.
-     *
-     * Walks QueueMetrics::getAllJobsWithMetrics() and groups results by
-     * connection:queue. For each queue, calculates weighted average CPU cores
-     * (cpuTimeMs / durationMs) and weighted average memory. Results are pushed
-     * into the ResourceEstimateResolver for use by ScalingEngine.
-     */
-    private function updateMeasuredResourceEstimates(): void
-    {
-        try {
-            $allJobs = QueueMetrics::getAllJobsWithMetrics();
-        } catch (\Throwable) {
-            return;
-        }
-
-        /** @var array<string, array{cpu_weighted: float, mem_weighted: float, cpu_processed: int, mem_processed: int}> $perQueue */
-        $perQueue = [];
-
-        foreach ($allJobs as $jobData) {
-            $connection = is_string($jobData['connection'] ?? null) ? $jobData['connection'] : 'default';
-            $queue = is_string($jobData['queue'] ?? null) ? $jobData['queue'] : 'default';
-            $key = "{$connection}:{$queue}";
-
-            $cpu = is_array($jobData['cpu'] ?? null) ? $jobData['cpu'] : [];
-            $duration = is_array($jobData['duration'] ?? null) ? $jobData['duration'] : [];
-            $memory = is_array($jobData['memory'] ?? null) ? $jobData['memory'] : [];
-            $execution = is_array($jobData['execution'] ?? null) ? $jobData['execution'] : [];
-
-            $cpuAvgMs = is_numeric($cpu['avg'] ?? null) ? (float) $cpu['avg'] : 0.0;
-            $durationAvgMs = is_numeric($duration['avg'] ?? null) ? (float) $duration['avg'] : 0.0;
-            $memAvgMb = is_numeric($memory['avg'] ?? null) ? (float) $memory['avg'] : 0.0;
-            $processed = is_numeric($execution['total_processed'] ?? null) ? (int) $execution['total_processed'] : 0;
-
-            if ($processed <= 0) {
-                continue;
-            }
-
-            if (! isset($perQueue[$key])) {
-                $perQueue[$key] = ['cpu_weighted' => 0.0, 'mem_weighted' => 0.0, 'cpu_processed' => 0, 'mem_processed' => 0];
-            }
-
-            if ($durationAvgMs > 0 && $cpuAvgMs > 0) {
-                $coresPerWorker = $cpuAvgMs / $durationAvgMs;
-                $perQueue[$key]['cpu_weighted'] += $coresPerWorker * $processed;
-                $perQueue[$key]['cpu_processed'] += $processed;
-            }
-
-            if ($memAvgMb > 0) {
-                $perQueue[$key]['mem_weighted'] += $memAvgMb * $processed;
-                $perQueue[$key]['mem_processed'] += $processed;
-            }
-        }
-
-        foreach ($perQueue as $key => $data) {
-            [$connection, $queue] = explode(':', $key, 2);
-
-            $hasCpu = $data['cpu_processed'] > 0;
-            $hasMemory = $data['mem_processed'] > 0;
-
-            if ($hasCpu && $hasMemory) {
-                $this->resolver->setMeasured(
-                    $connection,
-                    $queue,
-                    $data['cpu_weighted'] / $data['cpu_processed'],
-                    $data['mem_weighted'] / $data['mem_processed'],
-                    $data['cpu_processed'],
-                    $data['mem_processed'],
-                );
-            } elseif ($hasCpu) {
-                $this->resolver->setMeasuredCpu(
-                    $connection,
-                    $queue,
-                    $data['cpu_weighted'] / $data['cpu_processed'],
-                    $data['cpu_processed'],
-                );
-            } elseif ($hasMemory) {
-                $this->resolver->setMeasuredMemory(
-                    $connection,
-                    $queue,
-                    $data['mem_weighted'] / $data['mem_processed'],
-                    $data['mem_processed'],
-                );
-            }
-
-            $this->verbose(sprintf(
-                '  Measured resources [%s]: cpu=%.3f cores (%d samples), mem=%.1f MB (%d samples)',
-                $key,
-                $hasCpu ? $data['cpu_weighted'] / $data['cpu_processed'] : 0.0,
-                $data['cpu_processed'],
-                $hasMemory ? $data['mem_weighted'] / $data['mem_processed'] : 0.0,
-                $data['mem_processed'],
-            ), 'debug');
-        }
-    }
-
-    /**
-     * Get metrics for a specific queue directly (bypasses discovery).
-     *
-     * @return array<string, mixed>
-     */
-    private function getMetricsForQueue(string $connection, string $queue): array
-    {
-        // Get queue depth directly from the queue inspector
-        $depth = QueueMetrics::getQueueDepth($connection, $queue);
-        $queueMetrics = QueueMetrics::getQueueMetrics($connection, $queue);
-
-        // Calculate oldest job age in seconds from Carbon instance
-        $oldestJobAgeSeconds = 0;
-        if ($depth->oldestPendingJobAge !== null) {
-            $oldestJobAgeSeconds = (int) $depth->oldestPendingJobAge->diffInSeconds(now());
-        }
-
-        $total = $depth->pendingJobs + $depth->delayedJobs + $depth->reservedJobs;
-
-        return [
-            'connection' => $connection,
-            'queue' => $queue,
-            'driver' => $this->clusterString(config("queue.connections.{$connection}.driver", 'unknown'), 'unknown'),
-            'depth' => [
-                'total' => $total,
-                'pending' => $depth->pendingJobs,
-                'scheduled' => $depth->delayedJobs,
-                'reserved' => $depth->reservedJobs,
-                'oldest_job_age_seconds' => $oldestJobAgeSeconds,
-                'oldest_job_age_status' => $queueMetrics->ageStatus,
-            ],
-            'performance_60s' => [
-                'throughput_per_minute' => $queueMetrics->throughputPerMinute,
-                'avg_duration_ms' => $queueMetrics->avgDuration, // Already in ms from metrics package
-                'window_seconds' => 60,
-            ],
-            'lifetime' => [
-                'failure_rate_percent' => $queueMetrics->failureRate,
-            ],
-            'workers' => [
-                'active_count' => $queueMetrics->activeWorkers,
-                'current_busy_percent' => $queueMetrics->utilizationRate,
-                'lifetime_busy_percent' => 0,
-            ],
-            'baseline' => null,
-            'trends' => [],
-            'timestamp' => now()->toIso8601String(),
-        ];
-    }
-
-    /**
-     * Map field names from getAllQueuesWithMetrics() to QueueMetricsData::fromArray() format
-     *
-     * @param  array<string, mixed>  $data
-     * @return array<string, mixed>
-     */
-    private function mapMetricsFields(array $data): array
-    {
-        // Merge baseline and trends data into health array
-        // These will be passed through to HealthStats::fromArray() but ignored by it
-        // We'll access them as raw array data in the strategy
-        $healthBase = $data['health'] ?? [];
-        $healthData = array_merge(
-            is_array($healthBase) ? $healthBase : [],
-            [
-                'baseline' => $data['baseline'] ?? null,
-                'trend' => $data['trends'] ?? null,
-                'percentiles' => $data['percentiles'] ?? null,
-            ]
-        );
-
-        // Extract nested depth data
-        /** @var array<string, mixed>|int $depthData */
-        $depthData = $data['depth'] ?? [];
-        $depth = is_array($depthData) ? $this->clusterInt($depthData['total'] ?? 0) : $this->clusterInt($depthData);
-        $pending = is_array($depthData) ? $this->clusterInt($depthData['pending'] ?? 0) : 0;
-        $scheduled = is_array($depthData) ? $this->clusterInt($depthData['scheduled'] ?? 0) : 0;
-        $reserved = is_array($depthData) ? $this->clusterInt($depthData['reserved'] ?? 0) : 0;
-        $oldestJobAge = is_array($depthData) ? $this->clusterInt($depthData['oldest_job_age_seconds'] ?? 0) : 0;
-
-        // Extract nested performance data
-        /** @var array<string, mixed> $perfData */
-        $perfData = is_array($data['performance_60s'] ?? null) ? $data['performance_60s'] : [];
-        $throughput = $this->clusterFloat($perfData['throughput_per_minute'] ?? 0.0);
-        $avgDurationMs = $this->clusterFloat($perfData['avg_duration_ms'] ?? 0.0);
-
-        // Extract nested lifetime data
-        /** @var array<string, mixed> $lifetimeData */
-        $lifetimeData = is_array($data['lifetime'] ?? null) ? $data['lifetime'] : [];
-        $failureRate = $this->clusterFloat($lifetimeData['failure_rate_percent'] ?? 0.0);
-
-        // Extract nested workers data
-        /** @var array<string, mixed> $workersData */
-        $workersData = is_array($data['workers'] ?? null) ? $data['workers'] : [];
-        $activeWorkers = $this->clusterInt($workersData['active_count'] ?? 0);
-        $utilizationRate = $this->clusterFloat($workersData['current_busy_percent'] ?? 0.0);
-
-        return [
-            'connection' => $this->clusterString($data['connection'] ?? null, 'default'),
-            'queue' => $this->clusterString($data['queue'] ?? null, 'default'),
-            'depth' => $depth,
-            'pending' => $pending,
-            'scheduled' => $scheduled,
-            'reserved' => $reserved,
-            'oldest_job_age' => $oldestJobAge,
-            'age_status' => $this->clusterString($depthData['oldest_job_age_status'] ?? null, 'normal'),
-            'throughput_per_minute' => $throughput,
-            'avg_duration' => $avgDurationMs / 1000.0, // Convert ms to seconds
-            'failure_rate' => $failureRate,
-            'utilization_rate' => $utilizationRate,
-            'active_workers' => $activeWorkers,
-            'driver' => $this->clusterString($data['driver'] ?? null, 'unknown'),
-            'health' => $healthData,
-            'calculated_at' => $data['timestamp'] ?? now()->toIso8601String(),
-        ];
-    }
-
     private function evaluateQueue(string $connection, string $queue, QueueMetricsData $metrics): void
     {
         $this->verbose("Evaluating queue: {$connection}:{$queue}", 'debug');
@@ -1827,7 +1618,7 @@ class AutoscaleManager
         // Clear stale direction: once cooldown has fully elapsed, the last direction
         // is no longer relevant. This prevents HOLD→HOLD→...→DOWN from being blocked
         // by an UP that happened minutes ago.
-        $scaleCooldownSeconds = $this->clusterInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
+        $scaleCooldownSeconds = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
         if ($lastDirection !== null && ! $this->inCooldown($key, $scaleCooldownSeconds)) {
             unset($this->lastScaleDirection[$key]);
             $lastDirection = null;
@@ -1974,7 +1765,7 @@ class AutoscaleManager
         $key = "group:{$group->connection}:{$group->name}";
         $this->verbose("Evaluating group: {$group->name} [{$group->queueArgument()}]", 'debug');
 
-        $aggregated = $this->aggregateGroupMetrics($group, $metricsByKey);
+        $aggregated = $this->metricsAdapter->aggregateGroup($group, $metricsByKey);
 
         $currentWorkers = $this->pool->countGroup($group->connection, $group->name);
         $totalPoolWorkers = $this->pool->totalCount();
@@ -1992,7 +1783,7 @@ class AutoscaleManager
         // Anti-flapping check (same semantics as per-queue).
         $currentDirection = $decision->shouldScaleUp() ? 'up' : ($decision->shouldScaleDown() ? 'down' : 'hold');
         $lastDirection = $this->lastScaleDirection[$key] ?? null;
-        $scaleCooldownSeconds = $this->clusterInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
+        $scaleCooldownSeconds = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
 
         if ($lastDirection !== null && ! $this->inCooldown($key, $scaleCooldownSeconds)) {
             unset($this->lastScaleDirection[$key]);
@@ -2071,99 +1862,6 @@ class AutoscaleManager
             $this->lastScaleTime[$key] = now();
             $this->lastScaleDirection[$key] = $currentDirection;
         }
-    }
-
-    /**
-     * Combine per-member metrics into a single synthetic QueueMetricsData for
-     * the group.
-     *
-     * Aggregation rules (conservative — members must not starve):
-     * - pending/scheduled/reserved/throughput: SUM across members
-     * - oldestJobAge: MAX across members (worst case drives SLA)
-     * - avgDuration: throughput-weighted mean (falls back to simple mean)
-     * - utilizationRate: MAX across members
-     * - activeWorkers: SUM (informational — ours is derived from pool count)
-     * - failureRate: MAX across members
-     *
-     * @param  array<string, QueueMetricsData>  $metricsByKey
-     */
-    private function aggregateGroupMetrics(GroupConfiguration $group, array $metricsByKey): QueueMetricsData
-    {
-        $pending = 0;
-        $scheduled = 0;
-        $reserved = 0;
-        $oldestJobAge = 0;
-        $throughput = 0.0;
-        $weightedDurationNumer = 0.0;
-        $weightedDurationDenom = 0.0;
-        $rawDurations = [];
-        $utilization = 0.0;
-        $activeWorkers = 0;
-        $failureRate = 0.0;
-        $driver = 'unknown';
-
-        foreach ($group->queues as $queue) {
-            $k = "{$group->connection}:{$queue}";
-
-            if (! isset($metricsByKey[$k])) {
-                continue;
-            }
-
-            $m = $metricsByKey[$k];
-
-            $pending += $m->pending;
-            $scheduled += $m->scheduled;
-            $reserved += $m->reserved;
-            $oldestJobAge = max($oldestJobAge, $m->oldestJobAge);
-            $throughput += $m->throughputPerMinute;
-            $utilization = max($utilization, $m->utilizationRate);
-            $activeWorkers += $m->activeWorkers;
-            $failureRate = max($failureRate, $m->failureRate);
-
-            if ($driver === 'unknown') {
-                $driver = $m->driver;
-            }
-
-            if ($m->avgDuration > 0.0) {
-                $rawDurations[] = $m->avgDuration;
-
-                if ($m->throughputPerMinute > 0.0) {
-                    $weightedDurationNumer += $m->avgDuration * $m->throughputPerMinute;
-                    $weightedDurationDenom += $m->throughputPerMinute;
-                }
-            }
-        }
-
-        $avgDuration = 0.0;
-
-        if ($weightedDurationDenom > 0.0) {
-            $avgDuration = $weightedDurationNumer / $weightedDurationDenom;
-        } elseif ($rawDurations !== []) {
-            $avgDuration = array_sum($rawDurations) / count($rawDurations);
-        }
-
-        $depth = $pending + $scheduled + $reserved;
-        $ageStatus = $oldestJobAge > $group->sla->targetSeconds ? 'breached'
-            : ($oldestJobAge > $group->sla->targetSeconds * 0.8 ? 'warning' : 'normal');
-
-        return QueueMetricsData::fromArray([
-            'connection' => $group->connection,
-            'queue' => $group->name,
-            'depth' => $depth,
-            'pending' => $pending,
-            'scheduled' => $scheduled,
-            'reserved' => $reserved,
-            'oldest_job_age' => $oldestJobAge,
-            'age_status' => $ageStatus,
-            'throughput_per_minute' => $throughput,
-            'avg_duration' => $avgDuration,
-            'failure_rate' => $failureRate,
-            'utilization_rate' => $utilization,
-            'active_workers' => $activeWorkers,
-            'driver' => $driver,
-            'health' => [],
-            'calculated_at' => now()->toIso8601String(),
-        ]);
     }
 
     private function scaleUpGroup(GroupConfiguration $group, ScalingDecision $decision): void
