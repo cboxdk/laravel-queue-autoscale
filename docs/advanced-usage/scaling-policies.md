@@ -78,6 +78,57 @@ Two consequences worth internalising:
 - **`ScalingDecisionMade` and `SlaBreachPredicted` carry the post-policy decision.** They are
   dispatched after `afterScaling()`, so listeners see what a policy actually produced.
 
+## Cluster scope: constraints that mean the whole fleet
+
+Every decision described above is **host-scoped**: its worker counts are one manager's share, and
+`$decision->scope` is `ScalingScope::Host`. In cluster mode that has a sharp consequence for a
+policy expressing a global budget (an external API's concurrency ceiling, license seats, a provider
+rate limit): the leader distributes the cluster-wide target across hosts first, and each host then
+runs the policy chain on its own share. A cap of `N` applied per host allows `N x host_count`
+workers across the cluster.
+
+A policy that needs to clamp the cluster total implements the opt-in marker interface:
+
+```php
+use Cbox\LaravelQueueAutoscale\Contracts\ClusterScopedPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingScope;
+
+class ExternalApiBudgetPolicy implements ClusterScopedPolicy
+{
+    public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
+    {
+        // Runs on the leader with cluster-wide counts, and on every host
+        // with that host's share. Cap once, where the cap means the fleet.
+        if ($decision->scope !== ScalingScope::Cluster) {
+            return null;
+        }
+
+        return $decision->withTargetWorkers(min($decision->targetWorkers, 30));
+    }
+
+    public function afterScaling(ScalingDecision $decision): void {}
+}
+```
+
+Mechanics:
+
+- The leader consults **only** policies implementing `ClusterScopedPolicy`, against a decision with
+  `scope = ScalingScope::Cluster`, `reason = 'cluster:demand'`, and the workload's cluster-wide
+  current and target counts, after demand evaluation and before fair-share allocation and
+  distribution. Policies without the marker are never consulted there, so nothing changes for
+  existing policies unless one explicitly opts in.
+- A cluster-scoped policy still runs on every host's apply path like any other policy, where the
+  scope is `Host`. Check `$decision->scope` and return `null` for the scope you do not constrain,
+  as above.
+- Use `withTargetWorkers()` to adjust a target: it copies every other field, including the scope,
+  so the next policy in the chain still sees a cluster decision.
+- Under capacity contention the fair-share allocator still guarantees each workload's
+  `workers.min` floor, so a cluster cap below a workload's configured minimum is raised back to
+  that minimum, the same arbitration every workload gets when capacity does not fit.
+- Single-host mode is unaffected: no cluster decisions exist there, and a cluster-scoped policy
+  simply sees the same host-scoped decisions as any other policy.
+
 ## Registration and resolution
 
 Policies are configured as a list of **class strings** in `config/queue-autoscale.php`:

@@ -19,7 +19,30 @@ readonly class ScalingDecision
         public int $slaTarget = 30,
         public ?CapacityCalculationResult $capacity = null,
         public ?SpawnCompensationConfiguration $spawnCompensation = null,
+        public ScalingScope $scope = ScalingScope::Host,
     ) {}
+
+    /**
+     * A copy of this decision with a different worker target.
+     *
+     * The safe way for a policy to adjust a target: everything else,
+     * including the scope, carries over unchanged.
+     */
+    public function withTargetWorkers(int $targetWorkers, ?string $reason = null): self
+    {
+        return new self(
+            connection: $this->connection,
+            queue: $this->queue,
+            currentWorkers: $this->currentWorkers,
+            targetWorkers: $targetWorkers,
+            reason: $reason ?? $this->reason,
+            predictedPickupTime: $this->predictedPickupTime,
+            slaTarget: $this->slaTarget,
+            capacity: $this->capacity,
+            spawnCompensation: $this->spawnCompensation,
+            scope: $this->scope,
+        );
+    }
 
     public function shouldScaleUp(): bool
     {

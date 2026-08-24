@@ -34,6 +34,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\FairShareAllocator;
 use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingScope;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
 use Cbox\LaravelQueueAutoscale\Support\WorkloadName;
 use Cbox\LaravelQueueAutoscale\Workers\OrphanedWorkerReaper;
@@ -574,6 +575,7 @@ class AutoscaleManager
             $workloadKey = ClusterRecommendation::queueWorkloadKey($metrics->connection, $metrics->queue);
             $currentWorkers = $this->clusterCurrentWorkers($activeManagers, $workloadKey);
             $targetWorkers = $this->clusterTargetWorkers($config, $metrics, $currentWorkers, $clusterTotalWorkers);
+            $targetWorkers = $this->applyClusterScopedPolicies($metrics->connection, $metrics->queue, $currentWorkers, $targetWorkers, $config);
 
             $demands[$workloadKey] = $targetWorkers;
             $workerConfigs[$workloadKey] = ['min' => $config->workers->min, 'max' => $config->workers->max];
@@ -596,6 +598,7 @@ class AutoscaleManager
             $workloadKey = ClusterRecommendation::groupWorkloadKey($group->connection, $group->name);
             $currentWorkers = $this->clusterCurrentWorkers($activeManagers, $workloadKey);
             $targetWorkers = $this->clusterTargetWorkers($config, $aggregated, $currentWorkers, $clusterTotalWorkers);
+            $targetWorkers = $this->applyClusterScopedPolicies($group->connection, $group->name, $currentWorkers, $targetWorkers, $config);
 
             $demands[$workloadKey] = $targetWorkers;
             $workerConfigs[$workloadKey] = ['min' => $config->workers->min, 'max' => $config->workers->max];
@@ -686,6 +689,7 @@ class AutoscaleManager
                 targetWorkers: $targetWorkers,
                 reason: $reason,
                 slaTarget: $meta['config']->sla->targetSeconds,
+                scope: ScalingScope::Cluster,
             );
 
             if (! $decision->shouldHold()) {
@@ -895,6 +899,46 @@ class AutoscaleManager
         // managers. Per-host capacity enforcement happens during distribution
         // (distributeClusterTarget respects each manager's maxWorkers).
         return $this->engine->evaluateDemand($metrics, $config);
+    }
+
+    /**
+     * Consult cluster-scope policies against a workload's cluster-wide demand.
+     *
+     * The leader's evaluation is deliberately unconstrained by host capacity,
+     * but the constraints operators express through policies are often global
+     * by nature: an external API's concurrency ceiling, license seats, a
+     * provider rate limit. Those must clamp the cluster total once, here,
+     * before distribution: applied only on each host's apply path, a cap of
+     * N produces N workers per host instead of N across the cluster.
+     *
+     * Only policies that implement ClusterScopedPolicy are consulted, so
+     * existing policies keep their per-host semantics untouched.
+     */
+    private function applyClusterScopedPolicies(
+        string $connection,
+        string $name,
+        int $currentWorkers,
+        int $targetWorkers,
+        QueueConfiguration $config,
+    ): int {
+        if (! $this->policies->hasClusterScopedPolicies()) {
+            return $targetWorkers;
+        }
+
+        $decision = $this->policies->beforeScalingClusterScoped(new ScalingDecision(
+            connection: $connection,
+            queue: $name,
+            currentWorkers: $currentWorkers,
+            targetWorkers: $targetWorkers,
+            reason: 'cluster:demand',
+            slaTarget: $config->sla->targetSeconds,
+            spawnCompensation: $config->spawnCompensation,
+            scope: ScalingScope::Cluster,
+        ));
+
+        $this->policies->afterScalingClusterScoped($decision);
+
+        return max(0, $decision->targetWorkers);
     }
 
     /**

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+
 - **Redis Cluster support for cluster coordination.** The coordination and
   spawn-latency paths assumed single-node phpredis: the leader-readiness check
   called `RedisCluster::ping()` with no argument (a cluster has no keyless
@@ -17,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mode works against a `\RedisCluster` connection. The single-node `\Redis`
   path is unchanged. Covered by a cluster CI job that reruns the coordination
   specs against a real three-master cluster.
+- Cluster-scoped scaling policies. A policy implementing the new opt-in `ClusterScopedPolicy` marker interface is additionally consulted by the cluster leader against a `ScalingDecision` carrying the workload's cluster-wide counts (`scope = ScalingScope::Cluster`), before the target is distributed across hosts. This is where a global budget belongs: a cap applied only per host multiplies the intended ceiling by the host count. `ScalingDecision` gained a `scope` field (default `Host`, so every existing decision reads exactly as before) and a `withTargetWorkers()` helper that preserves all other fields. Policies that do not opt in are never consulted by the leader, so existing behavior is unchanged.
 
 ### Changed
 - **Requires `cboxdk/laravel-queue-metrics` `^3.3`** (was `^3.0`). v3.3.0 fixes
