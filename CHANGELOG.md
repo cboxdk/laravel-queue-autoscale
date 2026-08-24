@@ -5,6 +5,20 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- **Requires `cboxdk/laravel-queue-metrics` `^3.3`** (was `^3.0`). v3.3.0 fixes
+  several defects in exactly the readings the autoscaler makes its decisions
+  from, so the older floor let the manager scale on numbers that were wrong:
+  a recorded snapshot zeroed `pending`, `depth`, `oldest_job_age`, `scheduled`
+  and `reserved` in `getQueueMetrics()`, and the Redis fallback depth path
+  always reported zero on Laravel versions without the native queue size
+  methods. It also eliminates the phantom `default` queue that discovery used
+  to surface, and lets `getQueueDepth()` tolerate a queue the driver cannot
+  read yet instead of throwing every cycle.
+
 ## v4.0.1 - 2026-08-14
 
 **Upgrade promptly if you use queue groups: v4.0.0 could not start a group
