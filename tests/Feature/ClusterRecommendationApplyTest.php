@@ -195,3 +195,49 @@ it('ignores stale recommendations from a previous lease held by the same leader 
 
     Event::assertNotDispatched(WorkersScaled::class);
 });
+
+/*
+ * A follower applies whatever integer the leader published. That is fine while
+ * the leader is correct — it already applied workers.max and fair-share — and
+ * stops being fine the moment it is not: a bug, a version mismatch during a
+ * rolling deploy, or anything with write access to the coordination key. The
+ * host's own configuration is the last thing that should be overridable from
+ * outside the process.
+ */
+it('clamps a recommendation above this host configured maximum', function () {
+    config()->set('queue-autoscale.queues', ['exports' => ['workers' => ['min' => 0, 'max' => 10]]]);
+    config()->set('queue-autoscale.groups', []);
+
+    fakeSpawner();
+    Event::fake([WorkersScaled::class]);
+
+    $recommendation = new ClusterRecommendation(
+        managerId: 'test-mgr',
+        issuedAt: now()->timestamp,
+        workloads: ['queue:redis:exports' => 5000],
+    );
+
+    $manager = app(AutoscaleManager::class);
+    (new ReflectionMethod($manager, 'applyClusterRecommendation'))->invoke($manager, $recommendation);
+
+    Event::assertDispatched(WorkersScaled::class, fn (WorkersScaled $e): bool => $e->queue === 'exports' && $e->to === 10);
+});
+
+it('applies a recommendation within the configured maximum untouched', function () {
+    config()->set('queue-autoscale.queues', ['exports' => ['workers' => ['min' => 0, 'max' => 10]]]);
+    config()->set('queue-autoscale.groups', []);
+
+    fakeSpawner();
+    Event::fake([WorkersScaled::class]);
+
+    $recommendation = new ClusterRecommendation(
+        managerId: 'test-mgr',
+        issuedAt: now()->timestamp,
+        workloads: ['queue:redis:exports' => 4],
+    );
+
+    $manager = app(AutoscaleManager::class);
+    (new ReflectionMethod($manager, 'applyClusterRecommendation'))->invoke($manager, $recommendation);
+
+    Event::assertDispatched(WorkersScaled::class, fn (WorkersScaled $e): bool => $e->queue === 'exports' && $e->to === 4);
+});

@@ -860,10 +860,45 @@ class AutoscaleManager
         return $total;
     }
 
+    /**
+     * Bound a leader-supplied target by this host's own configured maximum.
+     *
+     * Logged once per workload per breach through the rate limiter rather than
+     * every cycle: a leader publishing an impossible number will publish it
+     * again next cycle, and the operator needs to see it, not drown in it.
+     */
+    private function clampToLocalMax(int $targetWorkers, int $localMax): int
+    {
+        $target = max(0, $targetWorkers);
+
+        if ($target <= $localMax) {
+            return $target;
+        }
+
+        if ($this->alerts->allow('cluster_target_above_local_max')) {
+            Log::channel(AutoscaleConfiguration::logChannel())->warning(
+                'Cluster recommendation exceeded this host\'s configured maximum; clamped',
+                ['recommended' => $target, 'local_max' => $localMax]
+            );
+        }
+
+        return $localMax;
+    }
+
     private function reconcileQueueTarget(QueueConfiguration $config, int $targetWorkers): void
     {
         $currentWorkers = $this->pool->count($config->connection, $config->queue);
-        $targetWorkers = max(0, $targetWorkers);
+
+        // Clamp a remote instruction to this host's own configuration.
+        //
+        // Redundant while the leader is correct — it already applied
+        // workers.max and fair-share. It stops being redundant the moment the
+        // leader is not: a bug, a version mismatch mid-rolling-deploy, or
+        // anything with write access to the coordination key. The difference
+        // is a blast radius of workers.max instead of whatever integer arrived
+        // over the wire, and a follower's own config is the last thing that
+        // should be overridable from outside the process.
+        $targetWorkers = $this->clampToLocalMax($targetWorkers, $config->workers->max);
 
         // No early return when the target already matches. A single host runs
         // the policy chain on every cycle including holds, so a policy there
@@ -890,7 +925,7 @@ class AutoscaleManager
     private function reconcileGroupTarget(GroupConfiguration $group, int $targetWorkers): void
     {
         $currentWorkers = $this->pool->countGroup($group->connection, $group->name);
-        $targetWorkers = max(0, $targetWorkers);
+        $targetWorkers = $this->clampToLocalMax($targetWorkers, $group->workers->max);
 
         $decision = new ScalingDecision(
             connection: $group->connection,
