@@ -75,7 +75,7 @@ class WorkerDistributor
         }
 
         if ($targetWorkers <= 0 || $activeManagers === []) {
-            $this->previousDistributions[$workloadKey] = $targets;
+            $this->rememberPlacement($workloadKey, $targets);
 
             return $targets;
         }
@@ -160,9 +160,29 @@ class WorkerDistributor
             $assignedTotals[$managerId] += $target;
         }
 
-        $this->previousDistributions[$workloadKey] = $targets;
+        $this->rememberPlacement($workloadKey, $targets);
 
         return $targets;
+    }
+
+    /**
+     * Store a freshly computed placement and forget any confirmations counted
+     * against the one it replaces.
+     *
+     * The counter describes a specific cached placement. A cache can be
+     * bypassed for reasons the gate never sees — the target changed, the
+     * manager set changed, the cached split no longer fits — and carrying
+     * confirmations across that defeats the window entirely: after four
+     * confirmations against an old placement, the first imbalanced reading of
+     * a brand-new one would abandon it immediately.
+     *
+     * @param  array<string, int>  $targets
+     */
+    private function rememberPlacement(string $workloadKey, array $targets): void
+    {
+        $this->previousDistributions[$workloadKey] = $targets;
+
+        unset($this->consecutiveImbalance[$workloadKey]);
     }
 
     /**

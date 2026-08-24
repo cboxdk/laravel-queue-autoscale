@@ -523,3 +523,38 @@ test('the confirmation counter is dropped with the workload it belongs to', func
 
     expect($distributor->cachedPlacements())->toBe([]);
 });
+
+/*
+ * The confirmation counter describes one specific cached placement. A cache is
+ * bypassed for reasons the gate never sees — the target changed, the manager
+ * set changed, the cached split stopped fitting — and carrying confirmations
+ * across that defeats the window: after four against the old placement, the
+ * first imbalanced reading of a brand-new one abandons it immediately.
+ */
+test('confirmations do not carry across a target change', function () {
+    $distributor = new WorkerDistributor;
+    $ids = ['a', 'b'];
+    $mk = static fn (int $x, int $y): array => [
+        makeManagerState('a', maxWorkers: $x),
+        makeManagerState('b', maxWorkers: $y),
+    ];
+
+    $totals = array_fill_keys($ids, 0);
+    $distributor->distribute($mk(40, 40), 'queue:redis:x', 20, $totals);
+
+    // Four cycles of a sustained imbalance — one short of acting.
+    for ($beat = 0; $beat < 4; $beat++) {
+        $totals = array_fill_keys($ids, 0);
+        $distributor->distribute($mk(40, 12), 'queue:redis:x', 20, $totals);
+    }
+
+    // The target moves, so a fresh placement is computed and stored.
+    $totals = array_fill_keys($ids, 0);
+    $fresh = $distributor->distribute($mk(40, 40), 'queue:redis:x', 30, $totals);
+
+    // One imbalanced reading against the NEW placement must not be enough.
+    $totals = array_fill_keys($ids, 0);
+    $afterOne = $distributor->distribute($mk(40, 30), 'queue:redis:x', 30, $totals);
+
+    expect($afterOne)->toBe($fresh);
+});
