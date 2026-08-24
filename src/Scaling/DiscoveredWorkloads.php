@@ -12,6 +12,10 @@ use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
  *
  * `groups` is empty when the group configuration failed validation, so a caller
  * cannot accidentally act on a config that was rejected.
+ *
+ * Both fields default to empty, so `new DiscoveredWorkloads` is a valid "nothing
+ * discovered" instance — readonly means it cannot be mocked, and it is returned
+ * by a public method a consumer may want to stub.
  */
 readonly class DiscoveredWorkloads
 {
@@ -20,7 +24,7 @@ readonly class DiscoveredWorkloads
      * @param  array<string, GroupConfiguration>  $groups
      */
     public function __construct(
-        public array $queues,
-        public array $groups,
+        public array $queues = [],
+        public array $groups = [],
     ) {}
 }

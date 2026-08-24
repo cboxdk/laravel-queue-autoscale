@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+**Read this before deploying to a cluster.** The Redis coordination keys change
+format in this release, so during a rolling deploy the managers still on the old
+version and the ones on the new version read *different* leader keys. For that
+window you have two leaders, each scaling its own half of the fleet toward
+`workers.max` independently — a fleet sized for N can briefly run at up to 2N.
+It resolves itself the moment every manager is on the new version, and nothing is
+stranded because each recommendation is `setex`'d. Deploy all managers together, or
+accept the overlap knowingly. Single-host installations are unaffected.
+
 ### Added
 
 - **Redis Cluster support for cluster coordination.** The coordination and

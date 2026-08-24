@@ -44,8 +44,12 @@ readonly class EvaluatedWorkload
 
     /**
      * Whether the strategy is allowed to move this workload's worker count.
-     * A pinned workload (min == max) is still supervised and still consults
-     * policies; it just has nothing to solve for.
+     *
+     * This is the configured `workers.scalable` flag, not an inference from the
+     * bounds: an equal min and max leaves a queue scalable, while setting the
+     * flag false additionally requires them to be equal. A supervised workload
+     * is still evaluated and still consults policies; it just has nothing to
+     * solve for.
      */
     public function isScalable(): bool
     {

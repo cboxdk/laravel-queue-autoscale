@@ -1,5 +1,11 @@
 <?php
 
+use Cbox\LaravelQueueAutoscale\Cluster\CooldownDecision;
+use Cbox\LaravelQueueAutoscale\Scaling\DiscoveredWorkloads;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CpuBreakdown;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\MeasuredResourceSample;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\MemoryBreakdown;
+
 arch('it will not use debugging functions')
     ->expect(['dd', 'dump', 'ray'])
     ->each->not->toBeUsed();
@@ -46,3 +52,26 @@ arch('package classes are not sealed against consumers')
 arch('profiles implement ProfileContract')
     ->expect('Cbox\LaravelQueueAutoscale\Configuration\Profiles')
     ->toImplement('Cbox\LaravelQueueAutoscale\Contracts\ProfileContract');
+
+/*
+ * A readonly value object cannot be mocked — Mockery cannot generate a
+ * non-readonly subclass — so when one is the declared return type of a public
+ * method, a consumer stubbing that method has to build it by hand. Keeping the
+ * zero-argument form valid is what makes that possible without reflection.
+ */
+test('readonly value objects returned by public methods can be constructed with no arguments', function (): void {
+    $returned = [
+        CpuBreakdown::class,
+        MemoryBreakdown::class,
+        MeasuredResourceSample::class,
+        CooldownDecision::class,
+        DiscoveredWorkloads::class,
+    ];
+
+    foreach ($returned as $class) {
+        $constructor = (new ReflectionClass($class))->getConstructor();
+
+        expect($constructor?->getNumberOfRequiredParameters() ?? 0)
+            ->toBe(0, "{$class} is a public return type but needs constructor arguments");
+    }
+});

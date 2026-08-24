@@ -12,18 +12,23 @@ use Cbox\LaravelQueueAutoscale\Support\Coerce;
  * `CapacityCalculationResult::$details` stays an array because its keys are
  * documented public API; this is the same data with names the compiler can
  * check, for callers inside the package.
+ *
+ * Every field defaults, so `new CpuBreakdown` is a valid "nothing measured"
+ * instance. This class is readonly and therefore cannot be mocked, and it is the
+ * declared return type of a public method — a consumer stubbing that method must
+ * be able to build one without reflection.
  */
 readonly class CpuBreakdown
 {
     public function __construct(
-        public float $maxCpuPercent,
-        public float $currentCpuPercent,
-        public float $availableCpuPercent,
-        public float $totalCores,
-        public float $reserveCores,
-        public float $usableCores,
-        public float $workerCpuCoreEstimate,
-        public string $estimateSource,
+        public float $maxCpuPercent = 0.0,
+        public float $currentCpuPercent = 0.0,
+        public float $availableCpuPercent = 0.0,
+        public float $totalCores = 0.0,
+        public float $reserveCores = 0.0,
+        public float $usableCores = 0.0,
+        public float $workerCpuCoreEstimate = 0.0,
+        public string $estimateSource = 'unknown',
     ) {}
 
     /**

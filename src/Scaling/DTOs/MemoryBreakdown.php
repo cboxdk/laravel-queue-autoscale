@@ -12,16 +12,21 @@ use Cbox\LaravelQueueAutoscale\Support\Coerce;
  * `CapacityCalculationResult::$details` stays an array because its keys are
  * documented public API; this is the same data with names the compiler can
  * check, for callers inside the package.
+ *
+ * Every field defaults, so `new MemoryBreakdown` is a valid "nothing measured"
+ * instance. This class is readonly and therefore cannot be mocked, and it is the
+ * declared return type of a public method — a consumer stubbing that method must
+ * be able to build one without reflection.
  */
 readonly class MemoryBreakdown
 {
     public function __construct(
-        public float $maxMemoryPercent,
-        public float $currentMemoryPercent,
-        public float $availableMemoryPercent,
-        public float $totalMemoryMb,
-        public float $workerMemoryMb,
-        public string $estimateSource,
+        public float $maxMemoryPercent = 0.0,
+        public float $currentMemoryPercent = 0.0,
+        public float $availableMemoryPercent = 0.0,
+        public float $totalMemoryMb = 0.0,
+        public float $workerMemoryMb = 0.0,
+        public string $estimateSource = 'unknown',
     ) {}
 
     /**
