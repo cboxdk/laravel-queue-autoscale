@@ -55,12 +55,30 @@ readonly class CapacityCalculationResult
         public array $details = [],
     ) {}
 
+    public function cpuBreakdown(): CpuBreakdown;
+    public function memoryBreakdown(): MemoryBreakdown;
+
     public function isCpuLimited(): bool;
     public function isMemoryLimited(): bool;
     public function isConfigLimited(): bool;
     public function getSummary(): string;
     public function getFormattedDetails(): array;
 }
+```
+
+`cpuBreakdown()` and `memoryBreakdown()` return the same numbers as the nested
+`cpu_details` / `memory_details` entries of `$details`, as typed readonly objects —
+prefer them over indexing into the array. `MemoryBreakdown` also derives `usedMb()`
+and `freeMb()` from the percentage and total.
+
+```php
+$cpu = $decision->capacity->cpuBreakdown();
+
+$cpu->totalCores;             // float
+$cpu->usableCores;            // float, total minus the reserve
+$cpu->currentCpuPercent;      // float
+$cpu->workerCpuCoreEstimate;  // float, cores one worker is assumed to occupy
+$cpu->estimateSource;         // 'measured', 'config' or 'default'
 ```
 
 `limitingFactor` values seen on a decision: `cpu`, `memory`, `balanced`, `config`, `strategy`, `fuse`, `system_metrics_unavailable`.

@@ -165,7 +165,7 @@ manager executes.
 | `maxWorkersByConfig` | `PHP_INT_MAX` from the calculator; overwritten with `workers.max` by the engine |
 | `finalMaxWorkers` | From the calculator, the min of CPU and memory; on the engine's copy, the final target |
 | `limitingFactor` | `'cpu'`, `'memory'`, `'balanced'`, `'system_metrics_unavailable'`, or after the engine `'config'`, `'strategy'`, `'fuse'` |
-| `details` | `cpu_explanation`, `memory_explanation`, and nested `cpu_details` / `memory_details` including the estimate sources |
+| `details` | `cpu_explanation`, `memory_explanation`, and nested `cpu_details` / `memory_details` including the estimate sources. Prefer the typed `cpuBreakdown()` / `memoryBreakdown()` accessors over indexing into it |
 
 Helpers: `isCpuLimited()`, `isMemoryLimited()`, `isConfigLimited()`, `getSummary()`,
 `getFormattedDetails()`. The `-vvv` output of `queue:autoscale` prints `getFormattedDetails()`

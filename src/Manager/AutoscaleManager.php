@@ -9,6 +9,7 @@ use Cbox\LaravelQueueAutoscale\Cluster\ClusterCooldown;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterRecommendation;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterSummaryBuilder;
+use Cbox\LaravelQueueAutoscale\Cluster\EvaluatedWorkload;
 use Cbox\LaravelQueueAutoscale\Cluster\WorkerDistributor;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
@@ -341,12 +342,8 @@ class AutoscaleManager
             $this->pool->totalCount(),
             ResourceEstimate::globalDefault(),
         );
-        $capacityDetails = $capacity->details;
-        $cpuDetails = is_array($capacityDetails['cpu_details'] ?? null) ? $capacityDetails['cpu_details'] : [];
-        $memoryDetails = is_array($capacityDetails['memory_details'] ?? null) ? $capacityDetails['memory_details'] : [];
-        $memoryTotalMb = Coerce::toFloat($memoryDetails['total_memory_mb'] ?? 0.0);
-        $memoryUsedMb = round($memoryTotalMb * (Coerce::toFloat($memoryDetails['current_memory_percent'] ?? 0.0) / 100), 1);
-        $memoryFreeMb = round(max($memoryTotalMb - $memoryUsedMb, 0.0), 1);
+        $cpu = $capacity->cpuBreakdown();
+        $memory = $capacity->memoryBreakdown();
         $queueCounts = $this->pool->queueCounts();
         $groupCounts = $this->pool->groupCounts();
         $state = new ClusterManagerState(
@@ -357,14 +354,14 @@ class AutoscaleManager
             maxWorkers: $capacity->finalMaxWorkers,
             availableWorkerCapacity: max($capacity->finalMaxWorkers - $this->pool->totalCount(), 0),
             capacityLimiter: $capacity->limitingFactor->value,
-            cpuPercent: Coerce::toFloat($cpuDetails['current_cpu_percent'] ?? 0.0),
-            cpuCores: is_numeric($cpuDetails['total_cores'] ?? null) ? (float) $cpuDetails['total_cores'] : 0.0,
-            cpuUsableCores: is_numeric($cpuDetails['usable_cores'] ?? null) ? (float) $cpuDetails['usable_cores'] : 0.0,
-            cpuReservedCores: is_numeric($cpuDetails['reserve_cores'] ?? null) ? (float) $cpuDetails['reserve_cores'] : 0.0,
-            memoryPercent: Coerce::toFloat($memoryDetails['current_memory_percent'] ?? 0.0),
-            memoryTotalMb: $memoryTotalMb,
-            memoryUsedMb: $memoryUsedMb,
-            memoryFreeMb: $memoryFreeMb,
+            cpuPercent: $cpu->currentCpuPercent,
+            cpuCores: $cpu->totalCores,
+            cpuUsableCores: $cpu->usableCores,
+            cpuReservedCores: $cpu->reserveCores,
+            memoryPercent: $memory->currentMemoryPercent,
+            memoryTotalMb: $memory->totalMemoryMb,
+            memoryUsedMb: $memory->usedMb(),
+            memoryFreeMb: $memory->freeMb(),
             queueCount: count($queueCounts),
             groupCount: count($groupCounts),
             packageVersion: $this->packageVersion(),
@@ -430,6 +427,8 @@ class AutoscaleManager
         // Phase A: Collect demands for all workloads
         $demands = [];
         $workerConfigs = [];
+
+        /** @var array<string, EvaluatedWorkload> $workloadMeta */
         $workloadMeta = [];
 
         foreach ($metricsByKey as $queueKey => $metrics) {
@@ -454,17 +453,16 @@ class AutoscaleManager
 
             $demands[$workloadKey] = $targetWorkers;
             $workerConfigs[$workloadKey] = ['min' => $config->workers->min, 'max' => $config->workers->max];
-            $workloadMeta[$workloadKey] = [
-                'type' => 'queue',
-                'connection' => $metrics->connection,
-                'name' => $metrics->queue,
-                'driver' => $metrics->driver,
-                'config' => $config,
-                'current_workers' => $currentWorkers,
-                'metrics' => $metrics,
-                'scalable' => $config->workers->scalable,
-                'member_queues' => [$metrics->queue],
-            ];
+            $workloadMeta[$workloadKey] = new EvaluatedWorkload(
+                isGroup: false,
+                connection: $metrics->connection,
+                name: $metrics->queue,
+                driver: $metrics->driver,
+                config: $config,
+                currentWorkers: $currentWorkers,
+                metrics: $metrics,
+                memberQueues: [$metrics->queue],
+            );
         }
 
         foreach ($groups as $group) {
@@ -477,17 +475,16 @@ class AutoscaleManager
 
             $demands[$workloadKey] = $targetWorkers;
             $workerConfigs[$workloadKey] = ['min' => $config->workers->min, 'max' => $config->workers->max];
-            $workloadMeta[$workloadKey] = [
-                'type' => 'group',
-                'connection' => $group->connection,
-                'name' => $group->name,
-                'driver' => $aggregated->driver,
-                'config' => $config,
-                'current_workers' => $currentWorkers,
-                'metrics' => $aggregated,
-                'scalable' => $config->workers->scalable,
-                'member_queues' => array_values($group->queues),
-            ];
+            $workloadMeta[$workloadKey] = new EvaluatedWorkload(
+                isGroup: true,
+                connection: $group->connection,
+                name: $group->name,
+                driver: $aggregated->driver,
+                config: $config,
+                currentWorkers: $currentWorkers,
+                metrics: $aggregated,
+                memberQueues: array_values($group->queues),
+            );
         }
 
         // Phase B: Fair-share allocation
@@ -496,7 +493,7 @@ class AutoscaleManager
         $scalableConfigs = [];
 
         foreach ($demands as $workloadKey => $demand) {
-            if (! $workloadMeta[$workloadKey]['scalable']) {
+            if (! $workloadMeta[$workloadKey]->isScalable()) {
                 $pinnedDemands[$workloadKey] = $demand;
             } else {
                 $scalableDemands[$workloadKey] = $demand;
@@ -523,9 +520,9 @@ class AutoscaleManager
 
         foreach ($adjustedTargets as $workloadKey => $targetWorkers) {
             $meta = $workloadMeta[$workloadKey];
-            $currentWorkers = $meta['current_workers'];
-            $slaTarget = $meta['config']->sla->targetSeconds;
-            $isBreaching = $meta['metrics']->oldestJobAge > 0 && $meta['metrics']->oldestJobAge >= $slaTarget;
+            $currentWorkers = $meta->currentWorkers;
+            $slaTarget = $meta->config->sla->targetSeconds;
+            $isBreaching = $meta->isBreaching();
             $cooldownSeconds = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
             $damped = $this->cooldown->apply($workloadKey, $currentWorkers, $targetWorkers, $isBreaching, $cooldownSeconds);
 
@@ -545,23 +542,23 @@ class AutoscaleManager
             }
 
             $workloads[] = [
-                'type' => $meta['type'],
-                'connection' => $meta['connection'],
-                'name' => $meta['name'],
-                'driver' => $meta['driver'],
+                'type' => $meta->type(),
+                'connection' => $meta->connection,
+                'name' => $meta->name,
+                'driver' => $meta->driver,
                 'current_workers' => $currentWorkers,
                 'demand' => $demands[$workloadKey],
                 'target_workers' => $targetWorkers,
-                'worker_min' => $meta['config']->workers->min,
-                'worker_max' => $meta['config']->workers->max,
-                'sla_target_seconds' => $meta['config']->sla->targetSeconds,
-                'pending' => $meta['metrics']->pending,
-                'oldest_job_age' => $meta['metrics']->oldestJobAge,
-                'oldest_job_age_status' => $meta['metrics']->ageStatus,
-                'throughput_per_minute' => $meta['metrics']->throughputPerMinute,
-                'active_workers' => $meta['metrics']->activeWorkers,
-                'utilization_percent' => round($meta['metrics']->utilizationRate, 1),
-                'member_queues' => $meta['member_queues'],
+                'worker_min' => $meta->config->workers->min,
+                'worker_max' => $meta->config->workers->max,
+                'sla_target_seconds' => $meta->config->sla->targetSeconds,
+                'pending' => $meta->metrics->pending,
+                'oldest_job_age' => $meta->metrics->oldestJobAge,
+                'oldest_job_age_status' => $meta->metrics->ageStatus,
+                'throughput_per_minute' => $meta->metrics->throughputPerMinute,
+                'active_workers' => $meta->metrics->activeWorkers,
+                'utilization_percent' => round($meta->metrics->utilizationRate, 1),
+                'member_queues' => $meta->memberQueues,
                 'action' => $targetWorkers <=> $currentWorkers,
             ];
 
@@ -569,21 +566,21 @@ class AutoscaleManager
             $reason = $targetWorkers > $currentWorkers ? 'cluster:scale_up' : ($targetWorkers < $currentWorkers ? 'cluster:scale_down' : 'cluster:hold');
 
             $decision = new ScalingDecision(
-                connection: $meta['connection'],
-                queue: $meta['name'],
+                connection: $meta->connection,
+                queue: $meta->name,
                 currentWorkers: $currentWorkers,
                 targetWorkers: $targetWorkers,
                 reason: $reason,
-                slaTarget: $meta['config']->sla->targetSeconds,
+                slaTarget: $meta->config->sla->targetSeconds,
                 scope: ScalingScope::Cluster,
             );
 
             if (! $decision->shouldHold()) {
                 $decisionEntry = [
                     'workload_key' => $workloadKey,
-                    'type' => $meta['type'],
-                    'connection' => $meta['connection'],
-                    'name' => $meta['name'],
+                    'type' => $meta->type(),
+                    'connection' => $meta->connection,
+                    'name' => $meta->name,
                     'from' => $currentWorkers,
                     'to' => $targetWorkers,
                     'action' => $decision->action(),
@@ -603,26 +600,26 @@ class AutoscaleManager
             // as it acts.
 
             // SLA breach/recovery tracking
-            $breachKey = ($meta['type'] === 'group' ? 'group:' : '')."{$meta['connection']}:{$meta['name']}";
+            $breachKey = $meta->breachKey();
             $wasBreaching = $this->workloadState->wasBreaching($breachKey);
 
             if ($isBreaching && ! $wasBreaching) {
                 event(new SlaBreached(
-                    connection: $meta['connection'],
-                    queue: $meta['name'],
-                    oldestJobAge: $meta['metrics']->oldestJobAge,
+                    connection: $meta->connection,
+                    queue: $meta->name,
+                    oldestJobAge: $meta->metrics->oldestJobAge,
                     slaTarget: $slaTarget,
-                    pending: $meta['metrics']->pending,
-                    activeWorkers: $meta['metrics']->activeWorkers,
+                    pending: $meta->metrics->pending,
+                    activeWorkers: $meta->metrics->activeWorkers,
                 ));
             } elseif (! $isBreaching && $wasBreaching) {
                 event(new SlaRecovered(
-                    connection: $meta['connection'],
-                    queue: $meta['name'],
-                    currentJobAge: $meta['metrics']->oldestJobAge,
+                    connection: $meta->connection,
+                    queue: $meta->name,
+                    currentJobAge: $meta->metrics->oldestJobAge,
                     slaTarget: $slaTarget,
-                    pending: $meta['metrics']->pending,
-                    activeWorkers: $meta['metrics']->activeWorkers,
+                    pending: $meta->metrics->pending,
+                    activeWorkers: $meta->metrics->activeWorkers,
                 ));
             }
 

@@ -44,6 +44,27 @@ are therefore mutually exclusive, and support wins. Re-check this when Laravel 1
 and 12 drops out of the matrix — until then a Pest 5 bump will resolve only by dropping
 the L12 axis, which is not a trade this package makes.
 
+## Deferred to the next major
+
+Three things are known-wrong-but-deliberately-unchanged, because fixing any of them
+breaks a consumer. They are listed here rather than as scattered comments, so the set
+is auditable and nobody re-opens one in isolation.
+
+1. **Namespace.** The standard says `Cbox\<Package>\`; this package ships
+   `Cbox\LaravelQueueAutoscale\`. Renaming breaks every `use` statement in every
+   consumer, so it waits for a major with an upgrade guide.
+2. **`CapacityCalculationResult::$details` is an array.** Its exact keys are documented
+   in `docs/api-reference/scaling-decision.md` and `docs/algorithms/resource-constraints.md`,
+   so consumers index into it. `cpuBreakdown()` and `memoryBreakdown()` were added
+   alongside it as typed accessors and the package uses those internally; the array
+   stays until a major can drop it.
+3. **Pest is pinned to 4.x.** Not a choice we can make freely — see the Laravel version
+   support section above. It unblocks when Laravel 12 leaves the CI matrix, which is
+   itself a major-version event.
+
+When a major is cut, work this list. Until then, adding a fourth entry should feel like
+a cost, not a free deferral.
+
 ## Conventions
 
 - Follow the existing code conventions in this package. When creating or editing a file,

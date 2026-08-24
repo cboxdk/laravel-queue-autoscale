@@ -48,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fallbackSeconds` until it has collected `minSamples` again — short-lived and
   self-healing, not lost data.
 
+- **The leader's per-workload bag is a typed object.** `$workloadMeta` carried nine
+  string keys through all three phases of a cluster cycle; it is now
+  `Cluster\EvaluatedWorkload`, which also owns the `isBreaching()`, `isScalable()`,
+  `breachKey()` and `type()` derivations that were computed inline at each use.
+  `AutoscaleManager` no longer contains a single `array<string, mixed>`.
 - **`AutoscaleManager` decomposed into collaborators.** It was 3090 lines across
   67 methods with 20 mutable state fields, and six of the seven fixes in this
   release added to it. Nine classes now own what used to be inlined there:
@@ -80,6 +85,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a section landing, with `WorkerScaler` documented alongside the pool and spawner.
 - README is titled **Cbox Queue Autoscale**, matching the branding the sibling packages
   use; "Queue Autoscale for Laravel" remains the descriptor.
+
+### Added
+
+- `CapacityCalculationResult::cpuBreakdown()` and `memoryBreakdown()`, returning the
+  nested `cpu_details` / `memory_details` numbers as typed readonly objects
+  (`CpuBreakdown`, `MemoryBreakdown`). `$details` is unchanged and still documented —
+  its keys are public API — so this is additive; the package now uses the accessors
+  internally rather than indexing into nested `mixed`.
 
 ### Removed
 

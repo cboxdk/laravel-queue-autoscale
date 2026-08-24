@@ -36,6 +36,36 @@ readonly class CapacityCalculationResult
     ) {}
 
     /**
+     * The CPU breakdown as a typed object.
+     *
+     * `$details` remains the documented array form — its keys are public API —
+     * so this is an additive accessor for callers that would otherwise index
+     * into nested `mixed`.
+     */
+    public function cpuBreakdown(): CpuBreakdown
+    {
+        return CpuBreakdown::fromDetails($this->nestedDetails('cpu_details'));
+    }
+
+    /**
+     * The memory breakdown as a typed object. See cpuBreakdown().
+     */
+    public function memoryBreakdown(): MemoryBreakdown
+    {
+        return MemoryBreakdown::fromDetails($this->nestedDetails('memory_details'));
+    }
+
+    /**
+     * @return array<array-key, mixed>
+     */
+    private function nestedDetails(string $key): array
+    {
+        $nested = $this->details[$key] ?? null;
+
+        return is_array($nested) ? $nested : [];
+    }
+
+    /**
      * Check if CPU is the limiting factor
      */
     public function isCpuLimited(): bool
