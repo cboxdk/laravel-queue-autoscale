@@ -60,6 +60,33 @@ function invokeDistributeClusterTargetWithCache(array $managers, string $workloa
     return $distributor->distribute($managers, $workloadKey, $targetWorkers, $assignedTotals);
 }
 
+/**
+ * Drive a seeded cache through enough heartbeats for a sustained imbalance to
+ * be confirmed. The gate deliberately does not act on one reading — jitter and
+ * drift look identical in a single sample — so a spec about correction has to
+ * present the imbalance for as long as a real one would last.
+ *
+ * @param  array<int, ClusterManagerState>  $managers
+ * @param  array<string, int>  $assignedTotals
+ * @param  array<string, array<string, int>>  $previousDistributions
+ * @return array<string, int>
+ */
+function invokeDistributeUntilConfirmed(array $managers, string $workloadKey, int $targetWorkers, array &$assignedTotals, array $previousDistributions): array
+{
+    $distributor = new WorkerDistributor;
+    $distributor->seed($previousDistributions);
+
+    $result = [];
+    $seed = $assignedTotals;
+
+    for ($beat = 0; $beat < 8; $beat++) {
+        $assignedTotals = $seed;
+        $result = $distributor->distribute($managers, $workloadKey, $targetWorkers, $assignedTotals);
+    }
+
+    return $result;
+}
+
 it('caps assignments at per-host maxWorkers', function () {
     $small = makeManagerState('small', maxWorkers: 2);
     $large = makeManagerState('large', maxWorkers: 4);
@@ -111,7 +138,7 @@ it('rebalances cached assignments when host capacity changes the fair split', fu
     $workloadKey = 'queue:redis:fast';
 
     $assignedTotals = ['small' => 0, 'large' => 0];
-    $result = invokeDistributeClusterTargetWithCache(
+    $result = invokeDistributeUntilConfirmed(
         managers: $managers,
         workloadKey: $workloadKey,
         targetWorkers: 6,
@@ -362,7 +389,7 @@ it('still rebalances a cached distribution skewed by at least a full worker', fu
     $managers = [$a, $b];
 
     $assignedTotals = ['a' => 0, 'b' => 0];
-    $result = invokeDistributeClusterTargetWithCache(
+    $result = invokeDistributeUntilConfirmed(
         managers: $managers,
         workloadKey: 'queue:redis:fast',
         targetWorkers: 4,
@@ -376,99 +403,123 @@ it('still rebalances a cached distribution skewed by at least a full worker', fu
 });
 
 /*
- * The rebalance gate has two jobs and the pair of them is the whole design:
+ * The rebalance gate has two jobs, and the pair of them is the whole design:
  * abandon the cached placement when capacity has genuinely drifted, and keep
- * it when the only thing that moved was the measurement. Neither was covered.
+ * it when the only thing that moved was the measurement.
  *
- * The threshold is one worker's utilization on the smallest host that can
- * hold work. It has to be on the SMALLEST host's scale because spread is
- * min-to-max utilization, so that is the granularity it moves on. Deriving it
- * from the largest instead put the gate an order of magnitude below the moves
- * it judges: measured on a 40/8/4 fleet with a constant target and one worker
- * of jitter per heartbeat, that produced 177 reshuffles in 400 heartbeats.
+ * Magnitude alone cannot separate those. At realistic utilization the jitter
+ * in maxWorkers — recomputed from live CPU and memory every heartbeat — is the
+ * same size as the signal, which is why every fleet-wide threshold tried here
+ * failed one property or the other: derived from the smallest host it froze
+ * heterogeneous fleets, derived from the largest it approved nearly anything.
  *
- * Hosts under two workers are excluded rather than clamped afterwards. One
- * reporting 0 or 1 — which the capacity calculator produces under memory
- * pressure, since it floors at zero — would set the threshold to 1.0, and
- * since utilization is workers/maxWorkers the spread is itself bounded by 1.0,
- * so no skew of any size could ever clear the gate.
+ * So the gate asks two questions instead. Is a move worth one worker at the
+ * granularity of the two hosts it moves between, and has that been true for
+ * several consecutive cycles? Jitter reverses; drift does not.
  */
-function distributeTwice(array $before, array $after, int $target): array
+function driveHeartbeats(WorkerDistributor $distributor, array $caps, int $target, int $beats, int $jitter = 0): array
 {
-    $distributor = new WorkerDistributor;
-    $ids = array_map(static fn (int $i): string => "h{$i}", array_keys($before));
+    $ids = array_map(static fn (int $i): string => "h{$i}", array_keys($caps));
+    $last = [];
 
-    $managers = [];
-    foreach ($before as $i => $max) {
-        $managers[] = makeManagerState($ids[$i], maxWorkers: $max);
+    for ($beat = 0; $beat < $beats; $beat++) {
+        $managers = [];
+        foreach ($caps as $i => $max) {
+            $managers[] = makeManagerState($ids[$i], maxWorkers: max(1, $max + ($jitter === 0 ? 0 : ($beat % 2 === 0 ? $jitter : -$jitter))));
+        }
+
+        $totals = array_fill_keys($ids, 0);
+        $last = $distributor->distribute($managers, 'queue:redis:x', $target, $totals);
     }
-    $totals = array_fill_keys($ids, 0);
-    $first = $distributor->distribute($managers, 'queue:redis:x', $target, $totals);
 
-    $managers = [];
-    foreach ($after as $i => $max) {
-        $managers[] = makeManagerState($ids[$i], maxWorkers: $max);
-    }
-    $totals = array_fill_keys($ids, 0);
-    $second = $distributor->distribute($managers, 'queue:redis:x', $target, $totals);
-
-    return [array_values($first), array_values($second)];
+    return array_values($last);
 }
 
-test('the cache is abandoned when capacity genuinely drifts', function (array $before, array $after, int $target) {
-    [$first, $second] = distributeTwice($before, $after, $target);
-
-    expect($second)->not->toBe($first);
-})->with([
-    'the big and small host swap capacity' => [[40, 8, 4], [8, 40, 4], 26],
-    'a host degrades from 12 to 2' => [[12, 12, 12], [12, 12, 2], 18],
-    'a host degrades from 40 to 4' => [[40, 40, 40], [40, 40, 4], 30],
-]);
-
-test('the cache is kept when only the measurement jittered', function (array $before, array $after, int $target) {
-    [$first, $second] = distributeTwice($before, $after, $target);
-
-    expect($second)->toBe($first);
-})->with([
-    'heterogeneous fleet, one worker each way' => [[40, 8, 4], [39, 9, 4], 26],
-    'homogeneous fleet, one worker each way' => [[12, 12, 12], [13, 11, 12], 18],
-    'wide fleet, one worker each way' => [[64, 16, 8], [65, 15, 8], 60],
-]);
-
-test('a degraded host does not make the gate unsatisfiable', function (int $degradedMax) {
-    $managers = [
-        makeManagerState('degraded', maxWorkers: $degradedMax),
-        makeManagerState('a', maxWorkers: 40),
-        makeManagerState('b', maxWorkers: 40),
-    ];
-
-    $method = new ReflectionMethod(WorkerDistributor::class, 'rebalanceSpreadThreshold');
-
-    // The spread can never exceed 1.0, so a threshold at or above it means no
-    // skew of any size clears the gate.
-    expect($method->invoke(new WorkerDistributor, $managers))->toBeLessThan(1.0);
-})->with([0, 1, 2]);
-
-test('a fully skewed placement rebalances even with a degraded host present', function () {
+test('a placement survives capacity that jitters back and forth', function (array $caps, int $target) {
     $distributor = new WorkerDistributor;
-    $distributor->seed(['queue:redis:x' => ['a' => 30, 'b' => 0, 'degraded' => 0]]);
 
-    $totals = ['a' => 0, 'b' => 0, 'degraded' => 0];
-    $result = $distributor->distribute([
+    $settled = driveHeartbeats($distributor, $caps, $target, 1);
+    $afterJitter = driveHeartbeats($distributor, $caps, $target, 40, jitter: 1);
+
+    expect($afterJitter)->toBe($settled);
+})->with([
+    'homogeneous' => [[12, 12, 12], 21],
+    'mildly heterogeneous' => [[40, 32], 43],
+    'wide' => [[64, 16, 8], 52],
+]);
+
+test('a single cycle of imbalance does not move workers', function () {
+    $distributor = new WorkerDistributor;
+    $ids = ['a', 'b', 'c'];
+
+    $totals = array_fill_keys($ids, 0);
+    $settled = $distributor->distribute([
         makeManagerState('a', maxWorkers: 40),
         makeManagerState('b', maxWorkers: 40),
-        makeManagerState('degraded', maxWorkers: 1),
+        makeManagerState('c', maxWorkers: 40),
     ], 'queue:redis:x', 30, $totals);
 
-    // A move worth exactly one worker sits on the threshold boundary; a strict
-    // comparison rejected that tie and left the skew in place forever.
+    // One bad reading, still large enough to hold what it has. An infeasible
+    // cache is a different case and is recomputed at once, as it must be.
+    $totals = array_fill_keys($ids, 0);
+    $afterOne = $distributor->distribute([
+        makeManagerState('a', maxWorkers: 40),
+        makeManagerState('b', maxWorkers: 12),
+        makeManagerState('c', maxWorkers: 40),
+    ], 'queue:redis:x', 30, $totals);
+
+    expect($afterOne)->toBe($settled);
+});
+
+test('a sustained degradation is eventually acted on', function () {
+    $distributor = new WorkerDistributor;
+
+    $settled = driveHeartbeats($distributor, [40, 40, 40], 30, 1);
+    $afterSustained = driveHeartbeats($distributor, [40, 4, 40], 30, 10);
+
+    expect($afterSustained)->not->toBe($settled);
+});
+
+/*
+ * The scenario that exposed the previous threshold: a host degrades under
+ * memory pressure, its workers pile onto the others, and it recovers. Deriving
+ * the threshold from the smallest host left the recovered host at zero
+ * indefinitely for 23 of 41 capacities — a 40-worker host idle while two ran
+ * at 90%, with the gate calling the placement balanced.
+ */
+test('a recovered host is given work again', function (int $thirdHostCapacity) {
+    $distributor = new WorkerDistributor;
+
+    driveHeartbeats($distributor, [40, 40, $thirdHostCapacity], 33, 1);
+    driveHeartbeats($distributor, [40, 0, $thirdHostCapacity], 33, 8);
+    $afterRecovery = driveHeartbeats($distributor, [40, 40, $thirdHostCapacity], 33, 12);
+
+    expect($afterRecovery[1])->toBeGreaterThan(0);
+})->with([2, 4, 8, 16, 32]);
+
+test('a fleet containing a dead host still rebalances between the live ones', function () {
+    $distributor = new WorkerDistributor;
+    $distributor->seed(['queue:redis:x' => ['a' => 30, 'b' => 0, 'dead' => 0]]);
+
+    $ids = ['a', 'b', 'dead'];
+    $result = [];
+    for ($beat = 0; $beat < 8; $beat++) {
+        $totals = array_fill_keys($ids, 0);
+        $result = $distributor->distribute([
+            makeManagerState('a', maxWorkers: 40),
+            makeManagerState('b', maxWorkers: 40),
+            makeManagerState('dead', maxWorkers: 1),
+        ], 'queue:redis:x', 30, $totals);
+    }
+
     expect($result['b'])->toBeGreaterThan(0);
 });
 
-test('the threshold stays at one worker step on a homogeneous fleet', function () {
-    $managers = [makeManagerState('a', maxWorkers: 8), makeManagerState('b', maxWorkers: 8)];
+test('the confirmation counter is dropped with the workload it belongs to', function () {
+    $distributor = new WorkerDistributor;
 
-    $method = new ReflectionMethod(WorkerDistributor::class, 'rebalanceSpreadThreshold');
+    driveHeartbeats($distributor, [40, 40], 30, 1);
+    $distributor->pruneTo([]);
 
-    expect($method->invoke(new WorkerDistributor, $managers))->toBe(1.0 / 8);
+    expect($distributor->cachedPlacements())->toBe([]);
 });
