@@ -231,6 +231,37 @@ See [Queue Topology → Exclusive Queues](queue-topology.md#exclusive-sequential
 
 Any scalable profile can scale down to zero workers by setting `workers.min = 0`. Two shipped profiles already do this: `BurstyProfile` and `BackgroundProfile`.
 
+### Discovered queues have no floor
+
+A worker floor applies only to a queue you named. Queues are **discovered** from
+metrics rather than registered, so an application that mints a queue name per
+tenant presents thousands of them — and a floor multiplied by a set nobody
+bounded is unbounded process creation.
+
+A queue matching no entry in `queues`, neither an exact name nor a glob, is
+given `workers.min = 0` regardless of what `sla_defaults` says. It still
+receives every other default: SLA target, `workers.max`, forecast, spawn
+compensation and fuse. It scales from zero on demand instead of holding an idle
+worker forever, which costs the scale-from-zero overhead described above on its
+first job after an idle period.
+
+To floor every discovered queue anyway, say so explicitly:
+
+```php
+'queues' => [
+    '*' => ['workers' => ['min' => 1]],
+],
+```
+
+Declaring that also trips the doctor's warning to set
+`limits.max_total_workers`, which is the bound that makes it safe.
+
+One consequence worth knowing: the engine clamps a target to measured
+CPU/memory **before** applying any floor. A named queue's floor overrides that
+clamp; an unnamed queue has no floor to override it with. On a host already at
+capacity, a discovered queue with a backlog therefore gets zero workers where it
+previously got one. Name the queue if you want it served regardless.
+
 ### When to use
 
 Scale-to-zero is appropriate for queues with **sporadic or unpredictable traffic** where it is acceptable that jobs are not processed immediately. Examples:

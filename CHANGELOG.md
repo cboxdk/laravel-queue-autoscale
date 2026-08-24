@@ -5,6 +5,44 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+**Behaviour change: a worker floor now applies only to a queue you named.**
+Queues are discovered from metrics rather than registered, so an application
+minting a queue name per tenant was getting one permanently-running
+`queue:work` per name ever seen — the floor is applied after the CPU/memory
+clamp, and `limits.max_total_workers` ships unset. If you relied on the
+implicit floor, name the queues, or restore it wholesale with
+`'queues' => ['*' => ['workers' => ['min' => 1]]]` and set a ceiling.
+
+### Changed
+
+- **A queue matching no entry in `queues` gets `workers.min = 0`**, whatever
+  `sla_defaults` says. It still receives every other default — SLA target,
+  `workers.max`, forecast, spawn compensation, fuse — and scales from zero on
+  demand. Named and glob-matched queues are unaffected, as are groups. A
+  non-scalable default profile is exempt, because `workers.scalable = false`
+  requires `min === max` by construction.
+  One consequence: the engine clamps to measured CPU/memory before any floor
+  applies, so on a host already at capacity a discovered queue with a backlog
+  now gets zero workers where it previously got one.
+
+### Fixed
+
+- **A follower clamps the leader's recommendation to its own `workers.max`.**
+  Redundant while the leader is correct, and the difference between a blast
+  radius of `workers.max` and whatever integer arrived over the wire when it is
+  not — a bug, a version mismatch mid-rolling-deploy, or anything with write
+  access to the coordination key. Covers the pinned path too, where a queue's
+  max is its pinned count.
+- **The anti-flapping cooldown no longer lowers its own memory.** A held target
+  was written back clamped, so one transient dip in reported workers ratcheted
+  the hold down for the rest of the window and never recovered. Only what is
+  published is clamped now.
+- **Worker output truncates on a character boundary.** The 64 KB cap on an
+  unterminated line cut bytes, so a multibyte character straddling it put
+  invalid UTF-8 into the log channel.
+
 ## v4.1.0 - 2026-08-24
 
 **Read this before deploying to a cluster.** The Redis coordination keys change

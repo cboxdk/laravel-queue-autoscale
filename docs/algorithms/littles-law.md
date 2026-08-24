@@ -198,7 +198,10 @@ arrivalRate = 0.0  ->  calculate() returns 0.0
 targetWorkers = max(workers.min, min(workers.max, ceil(0.0))) = 1
 ```
 
-The floor comes from `workers.min`, never from the calculator.
+The floor comes from `workers.min`, never from the calculator — and `workers.min`
+is zero for a queue you never named, so the same example on a discovered queue
+settles at 0 rather than 1. See
+[Workload Profiles](../basic-usage/workload-profiles.md).
 
 ## Properties
 
