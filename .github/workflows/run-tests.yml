@@ -133,10 +133,22 @@ jobs:
           redis-server --daemonize yes --port 7002 --appendonly yes --cluster-enabled yes --cluster-config-file nodes-7002.conf
           redis-cli --cluster create 127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002 --cluster-replicas 0 --cluster-yes
 
+      # `--cluster create` returns once slots are assigned, but cluster_state
+      # only flips to ok after the nodes agree, a moment later. Checking once
+      # immediately is a race, so poll each node until it is ready.
       - name: Check Redis Cluster is ready
         run: |
           for port in 7000 7001 7002; do
-            redis-cli -c -h 127.0.0.1 -p "$port" cluster info | grep "cluster_state:ok"
+            for attempt in $(seq 1 30); do
+              if redis-cli -c -h 127.0.0.1 -p "$port" cluster info | grep -q "cluster_state:ok"; then
+                echo "node $port ready after ${attempt} attempt(s)"
+                continue 2
+              fi
+              sleep 1
+            done
+            echo "node $port never reached cluster_state:ok" >&2
+            redis-cli -c -h 127.0.0.1 -p "$port" cluster info >&2
+            exit 1
           done
 
       - name: Execute cluster integration tests
