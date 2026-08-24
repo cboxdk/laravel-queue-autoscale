@@ -5,7 +5,7 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v4.1.0 - 2026-08-24
 
 **Read this before deploying to a cluster.** The Redis coordination keys change
 format in this release, so during a rolling deploy the managers still on the old
@@ -29,7 +29,14 @@ accept the overlap knowingly. Single-host installations are unaffected.
   specs against a real three-master cluster.
 - Cluster-scoped scaling policies. A policy implementing the new opt-in `ClusterScopedPolicy` marker interface is additionally consulted by the cluster leader against a `ScalingDecision` carrying the workload's cluster-wide counts (`scope = ScalingScope::Cluster`), before the target is distributed across hosts. This is where a global budget belongs: a cap applied only per host multiplies the intended ceiling by the host count. `ScalingDecision` gained a `scope` field (default `Host`, so every existing decision reads exactly as before) and a `withTargetWorkers()` helper that preserves all other fields. Policies that do not opt in are never consulted by the leader, so existing behavior is unchanged.
 
+- `CapacityCalculationResult::cpuBreakdown()` and `memoryBreakdown()`, returning the
+  nested `cpu_details` / `memory_details` numbers as typed readonly objects
+  (`CpuBreakdown`, `MemoryBreakdown`). `$details` is unchanged and still documented —
+  its keys are public API — so this is additive; the package now uses the accessors
+  internally rather than indexing into nested `mixed`.
+
 ### Changed
+
 - **Requires `cboxdk/laravel-queue-metrics` `^3.3`** (was `^3.0`). v3.3.0 fixes
   several defects in exactly the readings the autoscaler makes its decisions
   from, so the older floor let the manager scale on numbers that were wrong:
@@ -84,26 +91,7 @@ accept the overlap knowingly. Single-host installations are unaffected.
   configuration are unchanged; the classes are constructor defaults, so nothing a
   consumer wires up has to change.
 
-### Documentation
-
-- Added a root `SECURITY.md` so GitHub surfaces the private reporting channel. It
-  points at `docs/advanced-usage/security.md` as the canonical version rather than
-  duplicating it, and claims only controls that exist: the queue-name guard, the host
-  worker ceiling, and the CI gates that actually run.
-- The API reference was a single 607-line `_index.md`. It is now six topic pages behind
-  a section landing, with `WorkerScaler` documented alongside the pool and spawner.
-- README is titled **Cbox Queue Autoscale**, matching the branding the sibling packages
-  use; "Queue Autoscale for Laravel" remains the descriptor.
-
-### Added
-
-- `CapacityCalculationResult::cpuBreakdown()` and `memoryBreakdown()`, returning the
-  nested `cpu_details` / `memory_details` numbers as typed readonly objects
-  (`CpuBreakdown`, `MemoryBreakdown`). `$details` is unchanged and still documented —
-  its keys are public API — so this is additive; the package now uses the accessors
-  internally rather than indexing into nested `mixed`.
-
-### Fixed (found by review, before release)
+### Fixed
 
 - **A worker's dying words are no longer dropped.** Forwarding worker stderr to
   the log channel skipped any worker that had already exited — which is exactly
@@ -153,6 +141,16 @@ accept the overlap knowingly. Single-host installations are unaffected.
   actually running. Single-host mode never had this hazard because it holds by
   declining to act; the cluster path publishes a number hosts move toward.
 
+- A manager that dies abruptly (for example SIGKILLed by the kernel OOM killer) no longer causes its replacement to double-provision. On startup the manager now scans procfs for workers stamped with this package's environment markers and its own manager id, SIGTERMs them, and logs a summary before the first spawn. Previously those orphans were invisible to the replacement (the worker pool is process-local), so it spawned a full new set on top of them and each doubled generation made the next OOM kill more likely. The reap is scoped to the same manager id (so deliberately co-hosted managers never touch each other's workers), skips on hosts without procfs, and can be disabled with `queue-autoscale.manager.reap_orphans_on_start`.
+
+- Worker stderr is now drained every cycle and forwarded to the manager's log channel tagged with the worker PID, so worker log lines (job exceptions, memory warnings, and for containerized apps typically the whole application log channel) reach the container's log stream instead of accumulating unread inside the manager. Both stream buffers are also cleared after each read, and draining no longer depends on a renderer being attached, so a long-lived worker's output history no longer lives on in the manager's memory.
+
+- One invalid discovered queue can no longer abort the entire evaluation cycle. Unsafe workload names (for example an empty queue name recorded by the metrics layer) are now filtered from the cluster leader's evaluation and from applied cluster recommendations, matching the single-host loop, and each workload's reconciliation is isolated so an exception for one queue is logged and the remaining queues still scale. Previously a single phantom queue wedged scale-up and worker respawn for every queue on the manager until the bad metric expired.
+
+- With two or more managers, the leader no longer reshuffles workers between hosts on nearly every cycle. The distribution cache's balance check discarded the cached placement whenever moving any single worker would improve the utilization spread by more than 0.000001, but the spread's inputs (each host's live-CPU/memory-derived maxWorkers) jitter every heartbeat, so an idle cluster still tore down and re-booted workers continuously. The check now requires an improvement worth at least one worker's utilization on the smallest host before rebalancing, and workloads are distributed in a stable sorted order so the check is comparable across cycles. Placement may shift once on upgrade as the new ordering takes effect, then holds steady; a genuinely skewed placement (one worker's worth or more) still rebalances as before.
+
+- The anti-flapping cooldown now applies in cluster mode. The single-host paths have always damped scaling direction reversals through `scaling.cooldown_seconds`, but the cluster leader recomputed and republished every workload's target each cycle with no equivalent guard, so a demand signal that oscillates cycle-to-cycle was executed as real spawns on one evaluation and kills on the next, cluster-wide, on the evaluation cadence. The leader now damps direction reversals before distribution using the same semantics as the single-host guard (only reversals are held, the last direction goes stale after the window, and a scale-up during an SLA breach always passes), holding the previously published target for the workload. The damping state is leader working memory and resets on leadership change, so a failover costs one undamped cycle.
+
 ### Removed
 
 - The `test-autoscale/` directory, an abandoned `laravel new` skeleton (54 files)
@@ -166,16 +164,16 @@ accept the overlap knowingly. Single-host installations are unaffected.
   and a `Factory::guessFactoryNamesUsing()` call in the base `TestCase` naming a
   `Database\Factories` namespace this package does not have.
 
-### Fixed
-- A manager that dies abruptly (for example SIGKILLed by the kernel OOM killer) no longer causes its replacement to double-provision. On startup the manager now scans procfs for workers stamped with this package's environment markers and its own manager id, SIGTERMs them, and logs a summary before the first spawn. Previously those orphans were invisible to the replacement (the worker pool is process-local), so it spawned a full new set on top of them and each doubled generation made the next OOM kill more likely. The reap is scoped to the same manager id (so deliberately co-hosted managers never touch each other's workers), skips on hosts without procfs, and can be disabled with `queue-autoscale.manager.reap_orphans_on_start`.
+### Documentation
 
-- Worker stderr is now drained every cycle and forwarded to the manager's log channel tagged with the worker PID, so worker log lines (job exceptions, memory warnings, and for containerized apps typically the whole application log channel) reach the container's log stream instead of accumulating unread inside the manager. Both stream buffers are also cleared after each read, and draining no longer depends on a renderer being attached, so a long-lived worker's output history no longer lives on in the manager's memory.
-
-- One invalid discovered queue can no longer abort the entire evaluation cycle. Unsafe workload names (for example an empty queue name recorded by the metrics layer) are now filtered from the cluster leader's evaluation and from applied cluster recommendations, matching the single-host loop, and each workload's reconciliation is isolated so an exception for one queue is logged and the remaining queues still scale. Previously a single phantom queue wedged scale-up and worker respawn for every queue on the manager until the bad metric expired.
-
-- With two or more managers, the leader no longer reshuffles workers between hosts on nearly every cycle. The distribution cache's balance check discarded the cached placement whenever moving any single worker would improve the utilization spread by more than 0.000001, but the spread's inputs (each host's live-CPU/memory-derived maxWorkers) jitter every heartbeat, so an idle cluster still tore down and re-booted workers continuously. The check now requires an improvement worth at least one worker's utilization on the smallest host before rebalancing, and workloads are distributed in a stable sorted order so the check is comparable across cycles. Placement may shift once on upgrade as the new ordering takes effect, then holds steady; a genuinely skewed placement (one worker's worth or more) still rebalances as before.
-
-- The anti-flapping cooldown now applies in cluster mode. The single-host paths have always damped scaling direction reversals through `scaling.cooldown_seconds`, but the cluster leader recomputed and republished every workload's target each cycle with no equivalent guard, so a demand signal that oscillates cycle-to-cycle was executed as real spawns on one evaluation and kills on the next, cluster-wide, on the evaluation cadence. The leader now damps direction reversals before distribution using the same semantics as the single-host guard (only reversals are held, the last direction goes stale after the window, and a scale-up during an SLA breach always passes), holding the previously published target for the workload. The damping state is leader working memory and resets on leadership change, so a failover costs one undamped cycle.
+- Added a root `SECURITY.md` so GitHub surfaces the private reporting channel. It
+  points at `docs/advanced-usage/security.md` as the canonical version rather than
+  duplicating it, and claims only controls that exist: the queue-name guard, the host
+  worker ceiling, and the CI gates that actually run.
+- The API reference was a single 607-line `_index.md`. It is now six topic pages behind
+  a section landing, with `WorkerScaler` documented alongside the pool and spawner.
+- README is titled **Cbox Queue Autoscale**, matching the branding the sibling packages
+  use; "Queue Autoscale for Laravel" remains the descriptor.
 
 ## v4.0.1 - 2026-08-14
 
