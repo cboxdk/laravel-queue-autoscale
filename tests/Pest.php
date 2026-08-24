@@ -10,7 +10,13 @@ use Cbox\LaravelQueueAutoscale\Scaling\Calculators\LinearRegressionForecaster;
 use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\ModerateForecastPolicy;
 use Cbox\LaravelQueueAutoscale\Tests\IntegrationTestCase;
 use Cbox\LaravelQueueAutoscale\Tests\TestCase;
+use Cbox\LaravelQueueMetrics\Actions\CalculateQueueMetricsAction;
+use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueDepthData;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
+use Cbox\LaravelQueueMetrics\Repositories\Contracts\JobMetricsRepository;
+use Cbox\LaravelQueueMetrics\Repositories\Contracts\QueueMetricsRepository;
+use Cbox\LaravelQueueMetrics\Services\JobMetricsQueryService;
+use Cbox\LaravelQueueMetrics\Services\QueueMetricsQueryService;
 use Cbox\Telemetry\TelemetryManager;
 
 // Scoped rather than ->in(__DIR__) so tests/Integration can claim its own
@@ -148,4 +154,98 @@ function elasticMqReachable(): bool
     $body = @file_get_contents(elasticMqEndpoint().'/?Action=ListQueues', false, $context);
 
     return is_string($body) && str_contains($body, 'ListQueuesResponse');
+}
+
+/*
+ * Shared discovery stubs.
+ *
+ * Several suites need the manager to "discover" a fixed set of queues without
+ * a metrics backend behind it. They live here rather than in one spec file so
+ * a second suite reaching for them does not end up with a drifting copy.
+ */
+
+/**
+ * The per-queue array shape QueueMetrics::getAllQueuesWithMetrics() yields,
+ * with just enough backlog to make the engine want at least one worker.
+ */
+function rawDiscoveredMetrics(string $connection, string $queue, int $pending = 5): array
+{
+    return [
+        'connection' => $connection,
+        'queue' => $queue,
+        'driver' => 'redis',
+        'depth' => [
+            'total' => $pending,
+            'pending' => $pending,
+            'scheduled' => 0,
+            'reserved' => 0,
+            'oldest_job_age_seconds' => 0,
+            'oldest_job_age_status' => 'normal',
+        ],
+        'performance_60s' => [
+            'throughput_per_minute' => 0.0,
+            'avg_duration_ms' => 0.0,
+            'window_seconds' => 60,
+        ],
+        'lifetime' => [
+            'failure_rate_percent' => 0.0,
+        ],
+        'workers' => [
+            'active_count' => 0,
+            'current_busy_percent' => 0.0,
+            'lifetime_busy_percent' => 0,
+        ],
+        'baseline' => null,
+        'trends' => [],
+        'timestamp' => now()->toIso8601String(),
+    ];
+}
+
+/**
+ * Make queue discovery yield the given result. The QueueMetrics facade
+ * resolves its query services straight from the container, so binding
+ * instances there is the seam; the services themselves are final and
+ * cannot be mocked in place.
+ */
+function fakeDiscoveredQueues(array $queues): void
+{
+    $queueService = Mockery::mock();
+    $queueService->shouldReceive('getAllQueuesWithMetrics')->andReturn($queues);
+    $queueService->shouldReceive('getQueueDepth')->andReturnUsing(
+        fn (string $connection, string $queue): QueueDepthData => new QueueDepthData(
+            connection: $connection,
+            queue: $queue,
+            pendingJobs: 0,
+            reservedJobs: 0,
+            delayedJobs: 0,
+            oldestPendingJobAge: null,
+            oldestDelayedJobAge: null,
+            measuredAt: now(),
+        )
+    );
+    $queueService->shouldReceive('getQueueMetrics')->andReturnUsing(
+        fn (string $connection, string $queue) => createMetrics(['connection' => $connection, 'queue' => $queue])
+    );
+
+    $jobService = Mockery::mock();
+    $jobService->shouldReceive('getAllJobsWithMetrics')->andReturn([]);
+
+    app()->instance(QueueMetricsQueryService::class, $queueService);
+    app()->instance(JobMetricsQueryService::class, $jobService);
+}
+
+/**
+ * The metrics recalculation at the top of an evaluation cycle talks to the
+ * metrics package's repositories. CalculateQueueMetricsAction is final, so
+ * rather than mocking it we hand the real action empty repositories.
+ */
+function stubMetricsRecalculation(): void
+{
+    $queueRepository = Mockery::mock(QueueMetricsRepository::class);
+    $queueRepository->shouldReceive('listQueues')->andReturn([]);
+
+    app()->instance(CalculateQueueMetricsAction::class, new CalculateQueueMetricsAction(
+        Mockery::mock(JobMetricsRepository::class),
+        $queueRepository,
+    ));
 }

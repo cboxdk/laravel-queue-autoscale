@@ -63,6 +63,28 @@ readonly class QueueConfiguration
          */
         $merged = self::deepMerge($defaults, $overrideArray);
 
+        // A worker floor is a statement about a queue the operator NAMED.
+        //
+        // Queues are discovered from metrics, not registered, so an app that
+        // mints a queue name per tenant presents thousands of them. Each one
+        // that matches no entry in `queues` inherits sla_defaults — and the
+        // shipped default profile floors at one worker, a floor the engine
+        // deliberately applies AFTER the CPU/memory clamp. The result is one
+        // permanently-running process per queue name nobody asked for, bounded
+        // by nothing. In cluster mode it is worse: the fair-share allocator
+        // satisfies every floor before it weighs demand, so unnamed floors
+        // evict the queue that actually has a backlog.
+        //
+        // Withdrawing only the floor is the narrowest fix: an unmatched queue
+        // still gets the default SLA target, max, forecast, spawn compensation
+        // and fuse. It scales from zero on demand instead of standing idle.
+        // To floor everything anyway, name everything: `'*' => ['workers' =>
+        // ['min' => 1]]`, which also trips the doctor's warning to set
+        // `limits.max_total_workers` — the bound that makes it safe.
+        if (QueueConfigResolver::matchedRuleFor($queue) === null) {
+            $merged['workers']['min'] = 0;
+        }
+
         return new self(
             connection: $connection,
             queue: $queue,

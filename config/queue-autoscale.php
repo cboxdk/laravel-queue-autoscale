@@ -46,6 +46,24 @@ return [
     |       ],
     |   ],
     |
+    | A worker floor applies only to a queue named here.
+    |
+    | Queues are DISCOVERED from metrics, not registered, so an application
+    | that mints a queue name per tenant presents thousands of them. A queue
+    | matching no entry above — neither an exact name nor a glob — is given
+    | 'workers.min' => 0 regardless of what sla_defaults says, because a floor
+    | multiplied by a set nobody bounded is unbounded process creation. Such a
+    | queue still gets every other default: SLA target, max, forecast, spawn
+    | compensation and fuse. It scales from zero on demand instead of holding
+    | an idle worker forever.
+    |
+    | To floor every discovered queue anyway, say so explicitly:
+    |
+    |   '*' => ['workers' => ['min' => 1]],
+    |
+    | Doing that also trips the doctor's warning to set
+    | limits.max_total_workers, which is the bound that makes it safe.
+    |
     */
     'queues' => [
         // 'payments' => CriticalProfile::class,

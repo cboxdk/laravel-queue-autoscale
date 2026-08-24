@@ -33,19 +33,35 @@ class QueueConfigResolver
      */
     public static function overrideFor(string $queue): mixed
     {
+        $key = self::matchedRuleFor($queue);
+
+        return $key === null ? [] : self::all()[$key];
+    }
+
+    /**
+     * The configuration key governing a queue, or null when nothing matches.
+     *
+     * Distinct from overrideFor(), which returns `[]` both for "no rule
+     * matched" and for an explicit but empty entry like `'emails' => []`.
+     * That ambiguity matters: a queue nobody named must not inherit a worker
+     * floor, because queues are DISCOVERED and a floor multiplied by a set
+     * nobody bounded is unbounded process creation.
+     */
+    public static function matchedRuleFor(string $queue): ?string
+    {
         $queues = self::all();
 
         if (array_key_exists($queue, $queues)) {
-            return $queues[$queue];
+            return $queue;
         }
 
         foreach ($queues as $key => $override) {
             if (self::isPattern($key) && fnmatch($key, $queue)) {
-                return $override;
+                return $key;
             }
         }
 
-        return [];
+        return null;
     }
 
     /**
