@@ -105,6 +105,26 @@ accept the overlap knowingly. Single-host installations are unaffected.
 
 ### Fixed (found by review, before release)
 
+- **A worker's dying words are no longer dropped.** Forwarding worker stderr to
+  the log channel skipped any worker that had already exited — which is exactly
+  the worker whose stderr matters, because a fatal or an OOM writes its stack
+  trace on the way out. The operator got "Removed dead worker, pid N" and
+  nothing explaining it. Symfony keeps the output buffered after exit, and the
+  cycle already drains before it reaps, so the final output is now read.
+- **The partial-line buffer is capped.** Holding an unterminated line with no
+  limit reproduced, inside the manager, the same unbounded retention the stderr
+  drain was written to remove — a worker emitting a large blob with no trailing
+  newline grew it for the worker's whole lifetime. Flushed truncated past 64 KB.
+- **Group scaling reports what it achieved.** The correction applied to the
+  per-queue paths — report the workers that actually started or were actually
+  terminated, not the number requested — was never applied to the group paths,
+  so a group whose every spawn failed still logged and emitted "scaled 0 → 5".
+- **The cluster leader's own evaluation is isolated per workload.** Failure
+  isolation reached the apply path and the single-host loop but not the leader's
+  demand collection, which has the widest blast radius of the three: one bad
+  config entry or throwing policy left *every* host in the cluster without a
+  recommendation for the cycle, each holding against a stale one.
+
 - **The orphan reaper could terminate another application's workers.** The
   manager id is the reaper's ownership token, but it was derived from host
   identity alone — hostname, machine-id, container env, resolved IP. Two

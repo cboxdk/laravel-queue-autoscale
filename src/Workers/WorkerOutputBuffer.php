@@ -6,6 +6,15 @@ namespace Cbox\LaravelQueueAutoscale\Workers;
 
 class WorkerOutputBuffer
 {
+    /**
+     * How much of an unterminated line is held before it is flushed truncated.
+     *
+     * Generous enough that a real stack-trace line survives intact, small
+     * enough that a worker streaming without newlines cannot exhaust the
+     * manager it reports to.
+     */
+    private const MAX_PARTIAL_LINE_BYTES = 65536;
+
     /** @var array<int, string> Partial stdout line buffers per PID */
     private array $buffers = [];
 
@@ -24,7 +33,15 @@ class WorkerOutputBuffer
 
         foreach ($workers as $worker) {
             $pid = $worker->pid();
-            if ($pid === null || ! $worker->isRunning()) {
+
+            // A worker that has already exited is deliberately still drained.
+            // The stderr of a worker that OOMed or fatalled is the stderr an
+            // operator most needs, and Symfony keeps it buffered after exit —
+            // skipping dead workers here meant the manager reported only
+            // "Removed dead worker" and dropped the stack trace that explained
+            // it. cleanupDeadWorkers() clears the buffer immediately after this
+            // runs, so this is the last chance to read it.
+            if ($pid === null) {
                 continue;
             }
 
@@ -51,7 +68,15 @@ class WorkerOutputBuffer
 
         foreach ($workers as $worker) {
             $pid = $worker->pid();
-            if ($pid === null || ! $worker->isRunning()) {
+
+            // A worker that has already exited is deliberately still drained.
+            // The stderr of a worker that OOMed or fatalled is the stderr an
+            // operator most needs, and Symfony keeps it buffered after exit —
+            // skipping dead workers here meant the manager reported only
+            // "Removed dead worker" and dropped the stack trace that explained
+            // it. cleanupDeadWorkers() clears the buffer immediately after this
+            // runs, so this is the last chance to read it.
+            if ($pid === null) {
                 continue;
             }
 
@@ -85,7 +110,21 @@ class WorkerOutputBuffer
         $lines = explode("\n", $buffer);
 
         if (! str_ends_with($chunk, "\n")) {
-            $buffers[$pid] = (string) array_pop($lines);
+            $partial = (string) array_pop($lines);
+
+            // Cap the held remainder. A worker emitting a large blob with no
+            // trailing newline — a progress bar redrawing with \r, a dumped
+            // payload — would otherwise grow this buffer for its whole
+            // lifetime, which is the same unbounded retention this class was
+            // written to stop, just moved from Symfony's buffer into ours.
+            // Truncating loses the tail of one pathological line; not
+            // truncating loses the manager.
+            if (strlen($partial) > self::MAX_PARTIAL_LINE_BYTES) {
+                $lines[] = substr($partial, 0, self::MAX_PARTIAL_LINE_BYTES).' …[truncated]';
+                $partial = '';
+            }
+
+            $buffers[$pid] = $partial;
         } else {
             $buffers[$pid] = '';
             if (end($lines) === '') {

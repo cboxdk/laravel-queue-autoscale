@@ -457,46 +457,59 @@ class AutoscaleManager
                 continue;
             }
 
-            $config = QueueConfiguration::fromConfig($metrics->connection, $metrics->queue);
-            $workloadKey = ClusterRecommendation::queueWorkloadKey($metrics->connection, $metrics->queue);
-            $currentWorkers = $this->clusterCurrentWorkers($activeManagers, $workloadKey);
-            $targetWorkers = $this->clusterTargetWorkers($config, $metrics, $currentWorkers, $clusterTotalWorkers);
-            $targetWorkers = $this->applyClusterScopedPolicies($metrics->connection, $metrics->queue, $currentWorkers, $targetWorkers, $config);
+            // Isolated per workload for the same reason the apply and
+            // single-host paths are: one bad config entry, one throwing policy
+            // or one unreadable metric would otherwise unwind to the run loop
+            // and leave EVERY host in the cluster without a recommendation for
+            // the cycle, each holding against a stale one.
+            try {
+                $config = QueueConfiguration::fromConfig($metrics->connection, $metrics->queue);
+                $workloadKey = ClusterRecommendation::queueWorkloadKey($metrics->connection, $metrics->queue);
+                $currentWorkers = $this->clusterCurrentWorkers($activeManagers, $workloadKey);
+                $targetWorkers = $this->clusterTargetWorkers($config, $metrics, $currentWorkers, $clusterTotalWorkers);
+                $targetWorkers = $this->applyClusterScopedPolicies($metrics->connection, $metrics->queue, $currentWorkers, $targetWorkers, $config);
 
-            $demands[$workloadKey] = $targetWorkers;
-            $workerConfigs[$workloadKey] = ['min' => $config->workers->min, 'max' => $config->workers->max];
-            $workloadMeta[$workloadKey] = new EvaluatedWorkload(
-                isGroup: false,
-                connection: $metrics->connection,
-                name: $metrics->queue,
-                driver: $metrics->driver,
-                config: $config,
-                currentWorkers: $currentWorkers,
-                metrics: $metrics,
-                memberQueues: [$metrics->queue],
-            );
+                $demands[$workloadKey] = $targetWorkers;
+                $workerConfigs[$workloadKey] = ['min' => $config->workers->min, 'max' => $config->workers->max];
+                $workloadMeta[$workloadKey] = new EvaluatedWorkload(
+                    isGroup: false,
+                    connection: $metrics->connection,
+                    name: $metrics->queue,
+                    driver: $metrics->driver,
+                    config: $config,
+                    currentWorkers: $currentWorkers,
+                    metrics: $metrics,
+                    memberQueues: [$metrics->queue],
+                );
+            } catch (\Throwable $e) {
+                $this->reportWorkloadFailure('queue', $metrics->connection, $metrics->queue, $e);
+            }
         }
 
         foreach ($groups as $group) {
-            $aggregated = $this->metricsAdapter->aggregateGroup($group, $metricsByKey);
-            $config = $group->toScalingConfiguration();
-            $workloadKey = ClusterRecommendation::groupWorkloadKey($group->connection, $group->name);
-            $currentWorkers = $this->clusterCurrentWorkers($activeManagers, $workloadKey);
-            $targetWorkers = $this->clusterTargetWorkers($config, $aggregated, $currentWorkers, $clusterTotalWorkers);
-            $targetWorkers = $this->applyClusterScopedPolicies($group->connection, $group->name, $currentWorkers, $targetWorkers, $config);
+            try {
+                $aggregated = $this->metricsAdapter->aggregateGroup($group, $metricsByKey);
+                $config = $group->toScalingConfiguration();
+                $workloadKey = ClusterRecommendation::groupWorkloadKey($group->connection, $group->name);
+                $currentWorkers = $this->clusterCurrentWorkers($activeManagers, $workloadKey);
+                $targetWorkers = $this->clusterTargetWorkers($config, $aggregated, $currentWorkers, $clusterTotalWorkers);
+                $targetWorkers = $this->applyClusterScopedPolicies($group->connection, $group->name, $currentWorkers, $targetWorkers, $config);
 
-            $demands[$workloadKey] = $targetWorkers;
-            $workerConfigs[$workloadKey] = ['min' => $config->workers->min, 'max' => $config->workers->max];
-            $workloadMeta[$workloadKey] = new EvaluatedWorkload(
-                isGroup: true,
-                connection: $group->connection,
-                name: $group->name,
-                driver: $aggregated->driver,
-                config: $config,
-                currentWorkers: $currentWorkers,
-                metrics: $aggregated,
-                memberQueues: array_values($group->queues),
-            );
+                $demands[$workloadKey] = $targetWorkers;
+                $workerConfigs[$workloadKey] = ['min' => $config->workers->min, 'max' => $config->workers->max];
+                $workloadMeta[$workloadKey] = new EvaluatedWorkload(
+                    isGroup: true,
+                    connection: $group->connection,
+                    name: $group->name,
+                    driver: $aggregated->driver,
+                    config: $config,
+                    currentWorkers: $currentWorkers,
+                    metrics: $aggregated,
+                    memberQueues: array_values($group->queues),
+                );
+            } catch (\Throwable $e) {
+                $this->reportWorkloadFailure('group', $group->connection, $group->name, $e);
+            }
         }
 
         // Phase B: Fair-share allocation

@@ -140,14 +140,37 @@ class WorkerScaler
 
         $this->pool->addMany($workers);
 
+        // Report what actually started, not what was asked for — the same
+        // correction the per-queue path carries. The spawner drops workers that
+        // fail to launch, so a run where every spawn failed still logged and
+        // emitted "scaled 0 -> 5" while the pool gained nothing.
+        $spawned = $workers->count();
+        $reached = $decision->currentWorkers + $spawned;
+
+        if ($spawned < $toAdd) {
+            Log::channel(AutoscaleConfiguration::logChannel())->warning(
+                'Fewer group workers started than requested',
+                [
+                    'group' => $group->name,
+                    'queues' => $group->queues,
+                    'requested' => $toAdd,
+                    'started' => $spawned,
+                ]
+            );
+        }
+
+        if ($spawned === 0) {
+            return;
+        }
+
         Log::channel(AutoscaleConfiguration::logChannel())->info(
             'Scaled up group workers',
             [
                 'group' => $group->name,
                 'queues' => $group->queues,
                 'from' => $decision->currentWorkers,
-                'to' => $decision->targetWorkers,
-                'added' => $toAdd,
+                'to' => $reached,
+                'added' => $spawned,
                 'reason' => $decision->reason,
             ]
         );
@@ -156,7 +179,7 @@ class WorkerScaler
             connection: $group->connection,
             queue: $group->name,
             from: $decision->currentWorkers,
-            to: $decision->targetWorkers,
+            to: $reached,
             action: 'up',
             reason: $decision->reason,
         ));
@@ -174,13 +197,27 @@ class WorkerScaler
             $this->terminator->requestTermination($worker);
         }
 
+        // getTerminatable() can return fewer workers than asked for — some may
+        // already be draining — so report what was actually terminated, as the
+        // per-queue path does.
+        $removed = $workers->count();
+        $reached = $decision->currentWorkers - $removed;
+
+        if ($removed < $toRemove) {
+            $this->reporter->verbose(
+                "  ⚠️  Only {$removed} of {$toRemove} group worker(s) could be terminated; the rest are already draining",
+                'warn'
+            );
+        }
+
         Log::channel(AutoscaleConfiguration::logChannel())->info(
             'Scaled down group workers',
             [
                 'group' => $group->name,
                 'from' => $decision->currentWorkers,
-                'to' => $decision->targetWorkers,
-                'removed' => $toRemove,
+                'to' => $reached,
+                'requested' => $decision->targetWorkers,
+                'removed' => $removed,
                 'reason' => $decision->reason,
             ]
         );
@@ -189,7 +226,7 @@ class WorkerScaler
             connection: $group->connection,
             queue: $group->name,
             from: $decision->currentWorkers,
-            to: $decision->targetWorkers,
+            to: $reached,
             action: 'down',
             reason: $decision->reason,
         ));

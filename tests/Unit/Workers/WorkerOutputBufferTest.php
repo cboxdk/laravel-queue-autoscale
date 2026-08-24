@@ -70,14 +70,31 @@ it('keeps partial lines on the two streams from bleeding into each other', funct
         ->and($this->buffer->collectErrorOutput([$worker]))->toBe([101 => ['stderr-part b']]);
 });
 
-it('skips dead workers and workers without a pid', function (): void {
-    $workers = [
-        bufferedOutputWorker(101, stdoutChunks: ["never\n"], running: false),
-        bufferedOutputWorker(null, stdoutChunks: ["never\n"]),
-    ];
+it('skips workers without a pid', function (): void {
+    $workers = [bufferedOutputWorker(null, stdoutChunks: ["never\n"])];
 
     expect($this->buffer->collectOutput($workers))->toBe([])
         ->and($this->buffer->collectErrorOutput($workers))->toBe([]);
+});
+
+/**
+ * The stderr of a worker that OOMed or fatalled is the stderr an operator most
+ * needs, and it is written on the way out. This used to be skipped, so the
+ * manager logged "Removed dead worker" and dropped the stack trace explaining
+ * why. Symfony keeps the output buffered after exit, and cleanupDeadWorkers()
+ * clears it immediately after this read, so this is the last chance to see it.
+ */
+it('still drains a worker that has already exited', function (): void {
+    $worker = bufferedOutputWorker(
+        101,
+        stdoutChunks: ["last words\n"],
+        stderrChunks: ["PHP Fatal error: Allowed memory size exhausted\n"],
+        running: false,
+    );
+
+    expect($this->buffer->collectOutput([$worker]))->toBe([101 => ['last words']])
+        ->and($this->buffer->collectErrorOutput([$worker]))
+        ->toBe([101 => ['PHP Fatal error: Allowed memory size exhausted']]);
 });
 
 it('clears the retained process buffers after each read', function (): void {
@@ -130,4 +147,28 @@ it('forgets partial remainders for both streams when a pid is cleared', function
 
     expect($this->buffer->collectOutput([$worker]))->toBe([101 => ['fresh out']])
         ->and($this->buffer->collectErrorOutput([$worker]))->toBe([101 => ['fresh err']]);
+});
+
+/**
+ * The retention this class exists to bound must not simply move from Symfony's
+ * buffer into ours. A worker streaming without newlines — a progress bar
+ * redrawing with \r, a dumped payload — would otherwise grow the held
+ * remainder for its whole lifetime.
+ */
+it('caps an unterminated line instead of holding it forever', function (): void {
+    $worker = bufferedOutputWorker(101, stdoutChunks: [str_repeat('x', 200_000)]);
+
+    $lines = $this->buffer->collectOutput([$worker]);
+
+    expect($lines[101])->toHaveCount(1)
+        ->and($lines[101][0])->toEndWith('…[truncated]')
+        ->and(strlen($lines[101][0]))->toBeLessThan(200_000);
+});
+
+it('leaves a normal partial line untouched by the cap', function (): void {
+    $worker = bufferedOutputWorker(101, stdoutChunks: ['a short partial', " line\n"]);
+
+    $this->buffer->collectOutput([$worker]);
+
+    expect($this->buffer->collectOutput([$worker]))->toBe([101 => ['a short partial line']]);
 });

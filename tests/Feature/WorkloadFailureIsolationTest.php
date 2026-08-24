@@ -12,6 +12,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Events\WorkersScaled;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Testing\FakeClusterStore;
+use Cbox\LaravelQueueAutoscale\Tests\Fixtures\ThrowingProfile;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerProcess;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Cbox\LaravelQueueMetrics\Actions\CalculateQueueMetricsAction;
@@ -359,4 +360,42 @@ it('continues evaluating remaining groups when one group fails to reconcile on a
     Event::assertDispatched(WorkersScaled::class, function (WorkersScaled $event): bool {
         return $event->queue === 'healthy-group' && $event->action === 'up';
     });
+});
+
+/*
+ * #53 isolated the apply path and the single-host loop, but the leader's own
+ * demand-collection loop was left unguarded. A throw there unwinds to the run
+ * loop, so NO recommendation is published for ANY host that cycle and every
+ * manager holds against a stale one — the widest blast radius of the three
+ * paths, and the one that was missed.
+ */
+it('publishes for the remaining workloads when one throws during leader evaluation', function (): void {
+    Event::fake();
+
+    $store = (new FakeClusterStore)
+        ->withManager(isolationManagerState('mgr-1'))
+        ->withLeader('mgr-1');
+
+    app()->instance(ClusterStoreContract::class, $store);
+    app()->forgetInstance(AutoscaleManager::class);
+
+    stubMetricsRecalculation();
+
+    fakeDiscoveredQueues([
+        'redis:poison' => rawDiscoveredMetrics('redis', 'poison'),
+        'redis:healthy' => rawDiscoveredMetrics('redis', 'healthy'),
+    ]);
+
+    // A profile that throws only for the poison queue, reached from inside
+    // Phase A via QueueConfiguration::fromConfig().
+    config()->set('queue-autoscale.queues.poison.profile', ThrowingProfile::class);
+
+    $manager = app(AutoscaleManager::class);
+    (new ReflectionMethod($manager, 'evaluateAndPublishClusterRecommendations'))->invoke($manager);
+
+    $recommendation = $store->publishedRecommendations()['mgr-1'] ?? null;
+
+    expect($recommendation)->not->toBeNull('the cycle must still publish')
+        ->and($recommendation->workloads)->toHaveKey('queue:redis:healthy')
+        ->and($recommendation->workloads)->not->toHaveKey('queue:redis:poison');
 });
