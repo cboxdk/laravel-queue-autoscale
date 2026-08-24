@@ -245,6 +245,22 @@ readonly class AutoscaleConfiguration
         $parts[] = 'host='.self::hostLabel();
         $parts[] = 'ip='.(string) gethostbyname(self::hostLabel());
 
+        // Host identity alone is not ownership. Two applications deployed to
+        // one VM share hostname, machine-id and resolved IP, so without this
+        // they derive the SAME manager id — and OrphanedWorkerReaper treats
+        // the id as an ownership token, so one app's manager restarting would
+        // SIGTERM the other app's entire worker fleet. Containers are safe by
+        // accident (separate PID namespaces); bare metal and VMs are not.
+        //
+        // Guarded because this runs before the application is necessarily
+        // booted: managerId() is reachable from a context with no container,
+        // and it must still produce an id rather than throw.
+        if (function_exists('app') && app()->bound('config')) {
+            $parts[] = 'app='.self::applicationScopeId();
+        } elseif (function_exists('base_path')) {
+            $parts[] = 'app='.substr(sha1(base_path()), 0, 12);
+        }
+
         return implode('|', array_unique(array_filter($parts, static fn (string $value): bool => trim($value) !== '')));
     }
 

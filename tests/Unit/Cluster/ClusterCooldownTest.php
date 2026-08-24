@@ -265,3 +265,35 @@ test('a workload with no recorded scale time is never in cooldown', function ():
         ->and($decision->wasHeld)->toBeFalse()
         ->and($decision->breachOverride)->toBeFalse();
 });
+
+/*
+ * The remembered value is the last target PUBLISHED, which the fleet may never
+ * have reached — a host ceiling, max_total_workers, or a failed spawn all
+ * leave the actual worker count below it. Republishing it unclamped answered a
+ * scale-down request with a scale-up, which is the opposite of damping.
+ */
+test('a hold never publishes more workers than are actually running', function (): void {
+    $cooldown = new ClusterCooldown;
+
+    // Cycle 1: demand rises to 22 and is published, but only 15 ever start.
+    $cooldown->apply('queue:redis:reports', 8, 22, false, 60);
+
+    // Cycle 2: demand collapses. This is a scale-DOWN request.
+    $decision = $cooldown->apply('queue:redis:reports', 15, 8, false, 60);
+
+    expect($decision->wasHeld)->toBeTrue()
+        ->and($decision->targetWorkers)->toBe(15)
+        ->and($decision->targetWorkers)->toBeLessThanOrEqual(15, 'a hold must never scale up');
+});
+
+test('a hold still damps when the fleet did reach the published target', function (): void {
+    $cooldown = new ClusterCooldown;
+
+    $cooldown->apply('queue:redis:reports', 8, 22, false, 60);
+
+    // The fleet converged: current now equals the published 22.
+    $decision = $cooldown->apply('queue:redis:reports', 22, 4, false, 60);
+
+    expect($decision->wasHeld)->toBeTrue()
+        ->and($decision->targetWorkers)->toBe(22, 'the damping itself must be unchanged');
+});

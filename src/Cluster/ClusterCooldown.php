@@ -49,7 +49,16 @@ class ClusterCooldown
             $isBreachScaleUp = $currentDirection === 'up' && $isBreaching;
 
             if (! $isBreachScaleUp && $this->inCooldown($workloadKey, $cooldownSeconds)) {
-                $held = max(0, $this->lastPublishedTargets[$workloadKey] ?? $currentWorkers);
+                // Hold, but never above what is already running. The remembered
+                // value is the last target PUBLISHED, which the fleet may never
+                // have reached — a host ceiling, max_total_workers, or a failed
+                // spawn all leave current below it. Republishing it unclamped
+                // would answer a scale-down request with a scale-up, which is
+                // the opposite of damping. Single-host mode has no equivalent
+                // hazard because it holds by declining to act; the cluster path
+                // publishes a number that hosts actively converge toward.
+                $remembered = $this->lastPublishedTargets[$workloadKey] ?? $currentWorkers;
+                $held = max(0, min($remembered, $currentWorkers));
                 $this->lastPublishedTargets[$workloadKey] = $held;
 
                 return new CooldownDecision($held, wasHeld: true);

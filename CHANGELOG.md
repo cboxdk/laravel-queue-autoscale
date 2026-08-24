@@ -103,6 +103,36 @@ accept the overlap knowingly. Single-host installations are unaffected.
   its keys are public API — so this is additive; the package now uses the accessors
   internally rather than indexing into nested `mixed`.
 
+### Fixed (found by review, before release)
+
+- **The orphan reaper could terminate another application's workers.** The
+  manager id is the reaper's ownership token, but it was derived from host
+  identity alone — hostname, machine-id, container env, resolved IP. Two
+  applications deployed to one VM, which is the Forge/Ploi/VPS topology the
+  deployment docs describe, therefore derived the *same* id, and one app's
+  manager restarting SIGTERMed the other app's entire worker fleet. Containers
+  were safe only by accident, through separate PID namespaces. The identity now
+  folds in the application scope, so the guarantee the reaper's docblock always
+  claimed is finally true. **Manager ids change on upgrade**: workers orphaned
+  by a pre-upgrade manager are no longer recognised and will exit on their own
+  `--max-time` instead of being reaped once.
+- **Cluster hysteresis could disable rebalancing entirely.** The threshold was
+  one worker's utilization on the *smallest* host, but the gate weighs a
+  single-worker move, so the threshold has to live on a single worker's scale.
+  A host reporting `maxWorkers` of 0 or 1 — which the capacity calculator
+  produces under memory pressure, since it floors at zero — yielded a threshold
+  of 1.0, and since the utilization spread is itself bounded by 1.0 no
+  improvement of any size could ever clear it. The cached placement was then
+  replayed forever and an idle host stayed idle. Measured on the largest host
+  now; behaviour on a homogeneous fleet is unchanged.
+- **The cluster cooldown could answer a scale-down with a scale-up.** The held
+  value was the last target *published*, which the fleet may never have reached
+  — a host ceiling, `max_total_workers`, or a failed spawn all leave the real
+  count below it. A reversal inside the window then republished the stale higher
+  number and hosts converged up to it. The hold is now clamped to what is
+  actually running. Single-host mode never had this hazard because it holds by
+  declining to act; the cluster path publishes a number hosts move toward.
+
 ### Removed
 
 - The `test-autoscale/` directory, an abandoned `laravel new` skeleton (54 files)

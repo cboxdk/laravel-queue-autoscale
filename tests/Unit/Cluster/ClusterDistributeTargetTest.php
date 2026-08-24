@@ -374,3 +374,36 @@ it('still rebalances a cached distribution skewed by at least a full worker', fu
 
     expect($result)->toBe(['a' => 2, 'b' => 2]);
 });
+
+/*
+ * The gate weighs a single-worker move, so the threshold has to live on a
+ * single worker's scale. Deriving it from the SMALLEST host broke on a
+ * heterogeneous fleet: a host reporting maxWorkers of 0 or 1 — which the
+ * capacity calculator produces under memory pressure, since it floors at zero
+ * — yielded a threshold of 1.0, and since the spread is itself bounded by 1.0
+ * the gate became unsatisfiable for any skew whatsoever.
+ */
+test('a degraded host does not make the rebalance gate unsatisfiable', function (int $degradedMax) {
+    $managers = [
+        makeManagerState('degraded', maxWorkers: $degradedMax),
+        makeManagerState('a', maxWorkers: 8),
+        makeManagerState('b', maxWorkers: 8),
+    ];
+
+    $method = new ReflectionMethod(WorkerDistributor::class, 'rebalanceSpreadThreshold');
+    $threshold = $method->invoke(new WorkerDistributor, $managers);
+
+    // The utilization spread can never exceed 1.0, so a threshold at or above
+    // it means no improvement of any size can ever clear the gate.
+    expect($threshold)->toBeLessThan(1.0);
+})->with([0, 1, 2]);
+
+test('the threshold stays at one worker step on a homogeneous fleet', function () {
+    $managers = [makeManagerState('a', maxWorkers: 8), makeManagerState('b', maxWorkers: 8)];
+
+    $method = new ReflectionMethod(WorkerDistributor::class, 'rebalanceSpreadThreshold');
+
+    // Unchanged from the behaviour the hysteresis was introduced with: one
+    // worker on an 8-worker host, which is what absorbs maxWorkers jitter.
+    expect($method->invoke(new WorkerDistributor, $managers))->toBe(1.0 / 8);
+});

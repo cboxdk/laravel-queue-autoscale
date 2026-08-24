@@ -18,10 +18,18 @@ use Illuminate\Support\Facades\Log;
  * OOM kill more likely.
  *
  * Workers are recognised by the environment markers WorkerSpawner stamps on
- * every child, and only workers stamped with THIS manager's id are touched:
- * the id derives deterministically from host and container identity, so a
- * supervisor-restarted manager matches its predecessor's workers while a
- * second manager deliberately running on the same host does not.
+ * every child, and only workers stamped with THIS manager's id are touched.
+ * The id derives deterministically from host, container AND application
+ * identity, so a supervisor-restarted manager matches its predecessor's
+ * workers, while a second application deployed to the same host does not —
+ * two apps on one VM share hostname, machine-id and IP, so host identity
+ * alone would make each app's manager restart kill the other's fleet.
+ *
+ * The id is the only ownership test. This does not verify that the owning
+ * manager is actually dead, nor re-check the process between reading its
+ * environment and signalling it, so a PID recycled in that window could be
+ * signalled. Both are acceptable because the signal is SIGTERM to a process
+ * that already claimed to be ours; neither would be acceptable for SIGKILL.
  */
 class OrphanedWorkerReaper
 {

@@ -224,22 +224,33 @@ class WorkerDistributor
      * "improvement", so with two or more managers the cache was discarded
      * and workers reshuffled between hosts on almost every evaluation, each
      * move a graceful SIGTERM plus a full framework boot elsewhere.
-     * Requiring at least one worker's worth of utilization on the smallest
-     * host keeps the cache until the skew is worth a real worker.
+     * Requiring at least one worker's worth of utilization keeps the cache
+     * until the skew is worth a real worker.
+     *
+     * Measured on the LARGEST host, not the smallest. The gate weighs a
+     * single-worker move, so the threshold has to live on a single worker's
+     * scale — and one worker on the biggest host is the finest step any move
+     * can produce. Deriving it from the smallest host breaks on a
+     * heterogeneous fleet: a host reporting maxWorkers of 0 or 1, which the
+     * capacity calculator produces under memory pressure since it floors at
+     * zero, yields a threshold of 1.0. Utilization is workers/maxWorkers and
+     * the distributor never assigns above maxWorkers, so the spread is itself
+     * bounded by 1.0 — the gate becomes unsatisfiable for any skew whatsoever,
+     * and the hysteresis silently turns into "never rebalance".
      *
      * @param  array<int, ClusterManagerState>  $activeManagers
      */
     private function rebalanceSpreadThreshold(array $activeManagers): float
     {
-        $smallestMaxWorkers = null;
+        $largestMaxWorkers = null;
 
         foreach ($activeManagers as $state) {
-            $smallestMaxWorkers = $smallestMaxWorkers === null
+            $largestMaxWorkers = $largestMaxWorkers === null
                 ? $state->maxWorkers
-                : min($smallestMaxWorkers, $state->maxWorkers);
+                : max($largestMaxWorkers, $state->maxWorkers);
         }
 
-        return 1.0 / max($smallestMaxWorkers ?? 1, 1);
+        return 1.0 / max($largestMaxWorkers ?? 1, 1);
     }
 
     /**
