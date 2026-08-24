@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
+use Cbox\LaravelQueueAutoscale\Cluster\ClusterSummaryBuilder;
 
 /**
  * Helper to invoke private clusterScaleSignal via reflection.
@@ -18,11 +18,10 @@ function invokeClusterScaleSignal(
     int $totalWorkers,
     array $workloads,
 ): array {
-    $manager = app(AutoscaleManager::class);
-    $method = new ReflectionMethod($manager, 'clusterScaleSignal');
+    $method = new ReflectionMethod(ClusterSummaryBuilder::class, 'clusterScaleSignal');
 
     return $method->invoke(
-        $manager,
+        new ClusterSummaryBuilder,
         $currentHosts,
         $recommendedHosts,
         $requiredWorkers,

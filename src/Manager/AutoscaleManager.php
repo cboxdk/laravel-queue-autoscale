@@ -8,6 +8,7 @@ use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterCooldown;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterRecommendation;
+use Cbox\LaravelQueueAutoscale\Cluster\ClusterSummaryBuilder;
 use Cbox\LaravelQueueAutoscale\Cluster\WorkerDistributor;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
@@ -41,6 +42,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\ResourceEstimateResolver;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingScope;
+use Cbox\LaravelQueueAutoscale\Scaling\WorkloadDiscovery;
 use Cbox\LaravelQueueAutoscale\Support\Coerce;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
 use Cbox\LaravelQueueAutoscale\Support\WorkloadName;
@@ -51,9 +53,7 @@ use Cbox\LaravelQueueAutoscale\Workers\WorkerProcess;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerScaler;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
-use Cbox\LaravelQueueMetrics\Actions\CalculateQueueMetricsAction;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
-use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
 use Composer\InstalledVersions;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
@@ -88,18 +88,6 @@ class AutoscaleManager
      */
     private array $breachState = [];
 
-    /**
-     * Tri-state cache for group-config validation:
-     *   null  = not yet attempted
-     *   true  = validated OK, safe to evaluate groups
-     *   false = validation failed — skip groups for the rest of this process.
-     *
-     * Validating on every cycle would spam the log when config is bad and waste
-     * work when it is good. We cache the outcome and the operator restarts the
-     * manager after fixing the config.
-     */
-    private ?bool $groupsValid = null;
-
     private ?OutputRendererContract $renderer = null;
 
     private WorkerOutputBuffer $outputBuffer;
@@ -120,6 +108,8 @@ class AutoscaleManager
 
     private readonly WorkerScaler $scaler;
 
+    private readonly WorkloadDiscovery $discovery;
+
     /** Whether this manager held the lease on the previous cycle. */
     private bool $wasLeader = false;
 
@@ -139,12 +129,14 @@ class AutoscaleManager
         private readonly ClusterCooldown $cooldown = new ClusterCooldown,
         private readonly QueueMetricsAdapter $metricsAdapter = new QueueMetricsAdapter,
         private readonly ConsoleReporter $reporter = new ConsoleReporter,
+        private readonly ClusterSummaryBuilder $summaryBuilder = new ClusterSummaryBuilder,
         ?MeasuredResourceCollector $resourceCollector = null,
     ) {
         $this->pool = new WorkerPool;
         $this->outputBuffer = new WorkerOutputBuffer;
 
         $this->resourceCollector = $resourceCollector ?? new MeasuredResourceCollector($resolver);
+        $this->discovery = new WorkloadDiscovery($metricsAdapter);
 
         // The scaler shares this manager's pool and output buffer rather than
         // owning them: the read paths that size the next decision live here,
@@ -424,47 +416,11 @@ class AutoscaleManager
 
     private function evaluateAndPublishClusterRecommendations(): void
     {
-        app(CalculateQueueMetricsAction::class)->executeForAllQueues();
-
         $this->reportMeasuredResources($this->resourceCollector->collect());
 
-        $allQueues = QueueMetrics::getAllQueuesWithMetrics();
-
-        $configuredQueues = AutoscaleConfiguration::configuredQueues();
-        foreach ($configuredQueues as $queueKey => $queueInfo) {
-            if (! isset($allQueues[$queueKey])) {
-                $allQueues[$queueKey] = $this->metricsAdapter->forQueue($queueInfo['connection'], $queueInfo['queue']);
-            }
-        }
-
-        $groups = GroupConfiguration::allFromConfig();
-
-        foreach ($groups as $group) {
-            foreach ($group->queues as $memberQueue) {
-                $queueKey = "{$group->connection}:{$memberQueue}";
-
-                if (! isset($allQueues[$queueKey])) {
-                    $allQueues[$queueKey] = $this->metricsAdapter->forQueue($group->connection, $memberQueue);
-                }
-            }
-        }
-
-        if ($groups !== [] && $this->groupsValid === null) {
-            try {
-                GroupConfiguration::assertNoQueueConflicts($groups);
-                $this->groupsValid = true;
-            } catch (\Throwable $e) {
-                $this->groupsValid = false;
-                Log::channel(AutoscaleConfiguration::logChannel())->critical(
-                    'Group configuration is invalid — groups disabled until manager restart',
-                    ['error' => $e->getMessage()]
-                );
-            }
-        }
-
-        if ($this->groupsValid === false) {
-            $groups = [];
-        }
+        $discovered = $this->discovery->discover();
+        $allQueues = $discovered->queues;
+        $groups = $discovered->groups;
 
         $groupedQueueKeys = $this->groupedQueueKeys($groups);
         $metricsByKey = [];
@@ -712,7 +668,7 @@ class AutoscaleManager
         $recentDecisions = $this->clusterStore->recentDecisions(
             AutoscaleConfiguration::decisionHistorySeconds()
         );
-        $summary = $this->buildClusterSummary($activeManagers, $workloads, $recentDecisions);
+        $summary = $this->summaryBuilder->build($activeManagers, $workloads, $recentDecisions);
         $this->clusterStore->publishSummary($summary);
         event(new ClusterSummaryPublished(
             clusterId: Coerce::toString($summary['cluster_id'] ?? null),
@@ -1039,193 +995,6 @@ class AutoscaleManager
         }
     }
 
-    /**
-     * @param  array<int, ClusterManagerState>  $activeManagers
-     * @param  array<int, array<string, int|float|string|list<string>>>  $workloads
-     * @param  array<int, array<string, mixed>>  $scalingDecisions
-     * @return array<string, mixed>
-     */
-    private function buildClusterSummary(array $activeManagers, array $workloads, array $scalingDecisions = []): array
-    {
-        $workloadSortKey = static function (array $workload): string {
-            $type = is_string($workload['type'] ?? null) ? $workload['type'] : '';
-            $connection = is_string($workload['connection'] ?? null) ? $workload['connection'] : '';
-            $name = is_string($workload['name'] ?? null) ? $workload['name'] : '';
-
-            return "{$type}:{$connection}:{$name}";
-        };
-
-        usort(
-            $workloads,
-            static fn (array $a, array $b): int => strcmp($workloadSortKey($a), $workloadSortKey($b)),
-        );
-
-        $currentHosts = count($activeManagers);
-        $totalWorkerCapacity = array_sum(array_map(static fn (ClusterManagerState $state): int => $state->maxWorkers, $activeManagers));
-        $requiredWorkers = array_sum(array_map(static fn (array $workload): int => (int) $workload['demand'], $workloads));
-        $totalWorkers = array_sum(array_map(static fn (ClusterManagerState $state): int => $state->totalWorkers, $activeManagers));
-        $recommendedHosts = $this->recommendedHostCount($activeManagers, $requiredWorkers);
-        $signal = $this->clusterScaleSignal($currentHosts, $recommendedHosts, $requiredWorkers, $totalWorkerCapacity, $totalWorkers, $workloads);
-        $generatedAt = now();
-        $generatedAtMs = $this->currentTimestamp();
-        $leaderLeaseTtlSeconds = AutoscaleConfiguration::clusterLeaderLeaseSeconds();
-        $leaderExpiresAt = $generatedAt->copy()->addSeconds($leaderLeaseTtlSeconds);
-
-        $managers = array_map(function (ClusterManagerState $state): array {
-            return [
-                'manager_id' => $state->managerId,
-                'host' => $state->host,
-                'is_leader' => $state->managerId === AutoscaleConfiguration::managerId(),
-                'last_seen_at' => $state->lastSeenAt,
-                'last_seen_human' => now()->setTimestamp((int) floor($state->lastSeenAt / 1000))->diffForHumans(),
-                'total_workers' => $state->totalWorkers,
-                'max_workers' => $state->maxWorkers,
-                'available_worker_capacity' => $state->availableWorkerCapacity,
-                'capacity_limiter' => $state->capacityLimiter,
-                'cpu_percent' => round($state->cpuPercent, 1),
-                'cpu_cores' => $state->cpuCores,
-                'cpu_usable_cores' => $state->cpuUsableCores,
-                'cpu_reserved_cores' => $state->cpuReservedCores,
-                'memory_percent' => round($state->memoryPercent, 1),
-                'memory_total_mb' => round($state->memoryTotalMb, 1),
-                'memory_used_mb' => round($state->memoryUsedMb, 1),
-                'memory_free_mb' => round($state->memoryFreeMb, 1),
-                'queue_count' => $state->queueCount,
-                'group_count' => $state->groupCount,
-                'package_version' => $state->packageVersion,
-                'queue_workers' => $state->queueWorkers,
-                'group_workers' => $state->groupWorkers,
-            ];
-        }, $activeManagers);
-
-        return [
-            'cluster_id' => AutoscaleConfiguration::clusterAppId(),
-            'generated_at' => $generatedAt->toIso8601String(),
-            'generated_at_unix_ms' => $generatedAtMs,
-            'leader_id' => AutoscaleConfiguration::managerId(),
-            'leader_renewed_at' => $generatedAt->toIso8601String(),
-            'leader_renewed_at_unix_ms' => $generatedAtMs,
-            'leader_lease_ttl_seconds' => $leaderLeaseTtlSeconds,
-            'leader_expires_at' => $leaderExpiresAt->toIso8601String(),
-            'manager_count' => $currentHosts,
-            'total_workers' => $totalWorkers,
-            'required_workers' => $requiredWorkers,
-            'total_worker_capacity' => $totalWorkerCapacity,
-            'utilization_percent' => $totalWorkerCapacity > 0 ? round(($requiredWorkers / $totalWorkerCapacity) * 100, 1) : 0.0,
-            'scale_signal' => $signal,
-            'managers' => $managers,
-            'workloads' => array_map(function (array $workload): array {
-                $workload['action'] = match ((int) $workload['action']) {
-                    1 => 'scale_up',
-                    -1 => 'scale_down',
-                    default => 'hold',
-                };
-
-                return $workload;
-            }, $workloads),
-            'scaling_decisions' => $scalingDecisions,
-        ];
-    }
-
-    /**
-     * @param  array<int, ClusterManagerState>  $activeManagers
-     */
-    private function recommendedHostCount(array $activeManagers, int $requiredWorkers): int
-    {
-        if ($activeManagers === []) {
-            return 0;
-        }
-
-        if ($requiredWorkers <= 0) {
-            return 1;
-        }
-
-        $capacities = array_map(static fn (ClusterManagerState $state): int => max($state->maxWorkers, 1), $activeManagers);
-        rsort($capacities);
-
-        $accumulated = 0;
-        foreach ($capacities as $index => $capacity) {
-            $accumulated += $capacity;
-
-            if ($accumulated >= $requiredWorkers) {
-                return $index + 1;
-            }
-        }
-
-        $currentHosts = count($capacities);
-        $averageCapacity = max((int) floor(array_sum($capacities) / max($currentHosts, 1)), 1);
-        $remaining = max($requiredWorkers - $accumulated, 0);
-
-        return $currentHosts + (int) ceil($remaining / $averageCapacity);
-    }
-
-    /**
-     * @param  array<int, array<string, mixed>>  $workloads
-     * @return array<string, int|string>
-     */
-    private function clusterScaleSignal(
-        int $currentHosts,
-        int $recommendedHosts,
-        int $requiredWorkers,
-        int $totalWorkerCapacity,
-        int $totalWorkers,
-        array $workloads,
-    ): array {
-        if ($requiredWorkers > $totalWorkerCapacity) {
-            return [
-                'action' => 'scale_up',
-                'reason' => 'required workers exceed observed cluster capacity',
-                'current_hosts' => $currentHosts,
-                'recommended_hosts' => max($recommendedHosts, $currentHosts + 1),
-            ];
-        }
-
-        if ($recommendedHosts < $currentHosts) {
-            // Do not recommend scale-down when the cluster is under pressure.
-            $utilizationPercent = $totalWorkerCapacity > 0
-                ? ($totalWorkers / $totalWorkerCapacity) * 100
-                : 0.0;
-
-            $hasScaleUpPressure = false;
-            foreach ($workloads as $workload) {
-                $target = is_numeric($workload['target_workers'] ?? null) ? (int) $workload['target_workers'] : 0;
-                $current = is_numeric($workload['current_workers'] ?? null) ? (int) $workload['current_workers'] : 0;
-                $pending = is_numeric($workload['pending'] ?? null) ? (int) $workload['pending'] : 0;
-
-                if ($target > $current || $pending > 0) {
-                    $hasScaleUpPressure = true;
-
-                    break;
-                }
-            }
-
-            if ($utilizationPercent >= 80.0 || $hasScaleUpPressure) {
-                return [
-                    'action' => 'hold',
-                    'reason' => $utilizationPercent >= 80.0
-                        ? sprintf('high utilization (%.0f%%) prevents scale-down', $utilizationPercent)
-                        : 'pending workload prevents scale-down',
-                    'current_hosts' => $currentHosts,
-                    'recommended_hosts' => $currentHosts,
-                ];
-            }
-
-            return [
-                'action' => 'scale_down',
-                'reason' => 'required workers fit on fewer hosts',
-                'current_hosts' => $currentHosts,
-                'recommended_hosts' => max($recommendedHosts, 1),
-            ];
-        }
-
-        return [
-            'action' => 'hold',
-            'reason' => 'current host count matches required worker capacity',
-            'current_hosts' => $currentHosts,
-            'recommended_hosts' => max($recommendedHosts, 1),
-        ];
-    }
-
     private function packageVersion(): string
     {
         if (! class_exists(InstalledVersions::class)) {
@@ -1300,63 +1069,11 @@ class AutoscaleManager
     {
         $this->beginEvaluationCycle();
 
-        // Recalculate metrics first to ensure throughput uses current sliding window
-        app(CalculateQueueMetricsAction::class)->executeForAllQueues();
-
         $this->reportMeasuredResources($this->resourceCollector->collect());
 
-        // Get ALL queues with metrics from laravel-queue-metrics
-        // Returns: ['redis:default' => [...metrics array...], ...]
-        $allQueues = QueueMetrics::getAllQueuesWithMetrics();
-
-        // Also include configured queues that might not have historical data yet
-        // This ensures newly configured queues are monitored from the start
-        $configuredQueues = AutoscaleConfiguration::configuredQueues();
-        foreach ($configuredQueues as $queueKey => $queueInfo) {
-            if (! isset($allQueues[$queueKey])) {
-                // Fetch fresh metrics for this queue directly
-                $allQueues[$queueKey] = $this->metricsAdapter->forQueue($queueInfo['connection'], $queueInfo['queue']);
-            }
-        }
-
-        // Load groups. Validation is cheap: skip entirely when there are no groups.
-        $groups = GroupConfiguration::allFromConfig();
-
-        // Force-fetch metrics for group member queues too. Without this, a brand-new
-        // group whose members have never seen traffic would be invisible until the
-        // metrics package happens to discover them independently, delaying first
-        // scale-up.
-        foreach ($groups as $group) {
-            foreach ($group->queues as $memberQueue) {
-                $k = "{$group->connection}:{$memberQueue}";
-
-                if (! isset($allQueues[$k])) {
-                    $allQueues[$k] = $this->metricsAdapter->forQueue($group->connection, $memberQueue);
-                }
-            }
-        }
-
-        // Validate group config exactly once per manager process. Cache the outcome
-        // so a bad config doesn't spam the log every eval cycle, and a good config
-        // doesn't re-run the O(groups × members) conflict check forever.
-        if ($groups !== [] && $this->groupsValid === null) {
-            try {
-                GroupConfiguration::assertNoQueueConflicts($groups);
-                $this->groupsValid = true;
-            } catch (\Throwable $e) {
-                $this->groupsValid = false;
-                Log::channel(AutoscaleConfiguration::logChannel())->critical(
-                    'Group configuration is invalid — groups disabled until manager restart',
-                    ['error' => $e->getMessage()]
-                );
-            }
-        }
-
-        // If group validation failed earlier in this process, don't attempt group
-        // evaluation. Per-queue autoscaling still runs normally.
-        if ($this->groupsValid === false) {
-            $groups = [];
-        }
+        $discovered = $this->discovery->discover();
+        $allQueues = $discovered->queues;
+        $groups = $discovered->groups;
 
         // Build a set of queue names that are owned by groups so we skip
         // them in the per-queue loop (they are handled via evaluateGroup).

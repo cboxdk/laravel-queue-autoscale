@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
-use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
+use Cbox\LaravelQueueAutoscale\Cluster\ClusterSummaryBuilder;
 
 /**
  * Create a minimal ClusterManagerState for summary tests.
@@ -44,10 +44,7 @@ function makeSummaryManagerState(string $id, int $maxWorkers, int $totalWorkers 
  */
 function invokeBuildClusterSummary(array $managers, array $workloads, array $scalingDecisions = []): array
 {
-    $manager = app(AutoscaleManager::class);
-    $method = new ReflectionMethod($manager, 'buildClusterSummary');
-
-    return $method->invoke($manager, $managers, $workloads, $scalingDecisions);
+    return (new ClusterSummaryBuilder)->build($managers, $workloads, $scalingDecisions);
 }
 
 it('includes scaling_decisions key in cluster summary', function () {
