@@ -48,6 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fallbackSeconds` until it has collected `minSamples` again — short-lived and
   self-healing, not lost data.
 
+- **Cluster placement and anti-flapping damping moved out of `AutoscaleManager`**
+  into `Cluster\WorkerDistributor` and `Cluster\ClusterCooldown`. Both were
+  self-contained leader working memory living as four mutable arrays on a 3090-line
+  manager; each is now a collaborator owning its own state behind `pruneTo()` and
+  `reset()`. `ClusterCooldown::apply()` returns a `CooldownDecision` instead of
+  logging from inside the damping logic, so the calculation is a pure function of
+  its inputs and the caller decides what to announce. Behavior, log lines and
+  configuration are unchanged; the classes are constructor defaults, so nothing a
+  consumer wires up has to change.
+
 ### Removed
 
 - The `test-autoscale/` directory, an abandoned `laravel new` skeleton (54 files)

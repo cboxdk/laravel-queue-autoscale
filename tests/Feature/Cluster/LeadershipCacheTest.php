@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Cbox\LaravelQueueAutoscale\Cluster\WorkerDistributor;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 
 /**
@@ -18,15 +19,19 @@ use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
  * These drive the real cycle rather than reimplementing the transition, so
  * they fail if the reset moves or is removed.
  */
+function leaderDistributor(AutoscaleManager $manager): WorkerDistributor
+{
+    return (new ReflectionProperty($manager, 'distributor'))->getValue($manager);
+}
+
 function leaderCache(AutoscaleManager $manager): array
 {
-    return (new ReflectionProperty($manager, 'previousDistributions'))->getValue($manager);
+    return leaderDistributor($manager)->cachedPlacements();
 }
 
 function primeLeaderCache(AutoscaleManager $manager, bool $wasLeader): void
 {
-    (new ReflectionProperty($manager, 'previousDistributions'))
-        ->setValue($manager, ['queue:redis:exports' => ['a' => 10, 'b' => 10]]);
+    leaderDistributor($manager)->seed(['queue:redis:exports' => ['a' => 10, 'b' => 10]]);
     (new ReflectionProperty($manager, 'wasLeader'))->setValue($manager, $wasLeader);
 }
 

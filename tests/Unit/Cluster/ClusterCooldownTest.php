@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Cbox\LaravelQueueAutoscale\Cluster\ClusterCooldown;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
 use Cbox\LaravelQueueAutoscale\Contracts\ClusterStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
@@ -19,8 +20,10 @@ use Illuminate\Support\Facades\Event;
 
 function applyCooldown(AutoscaleManager $manager, string $key, int $current, int $target, bool $isBreaching = false): int
 {
-    return (new ReflectionMethod($manager, 'applyClusterCooldown'))
-        ->invoke($manager, $key, $current, $target, $isBreaching);
+    $cooldown = (new ReflectionProperty($manager, 'cooldown'))->getValue($manager);
+    $seconds = (int) config('queue-autoscale.scaling.cooldown_seconds', 60) ?: 60;
+
+    return $cooldown->apply($key, $current, $target, $isBreaching, $seconds)->targetWorkers;
 }
 
 function cooldownManagerState(string $id, int $totalWorkers = 0, array $queueWorkers = []): ClusterManagerState
@@ -253,10 +256,12 @@ test('the leader publishes the held target while an oscillating demand reverses 
 });
 
 test('a workload with no recorded scale time is never in cooldown', function (): void {
-    $manager = app(AutoscaleManager::class);
+    // Nothing has been published for this workload, so there is no remembered
+    // direction to reverse against and the first move must pass through
+    // undamped however large it is.
+    $decision = (new ClusterCooldown)->apply('queue:redis:never-seen', 8, 1, false, 60);
 
-    $inCooldown = (new ReflectionMethod($manager, 'inClusterCooldown'))
-        ->invoke($manager, 'queue:redis:never-seen', 60);
-
-    expect($inCooldown)->toBeFalse();
+    expect($decision->targetWorkers)->toBe(1)
+        ->and($decision->wasHeld)->toBeFalse()
+        ->and($decision->breachOverride)->toBeFalse();
 });

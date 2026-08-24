@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
-use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
+use Cbox\LaravelQueueAutoscale\Cluster\WorkerDistributor;
 use Cbox\LaravelQueueAutoscale\Scaling\FairShareAllocator;
 
 /**
@@ -44,10 +44,7 @@ function makeFairShareManagerState(string $id, int $maxWorkers, int $totalWorker
  */
 function invokeFairShareDistributeClusterTarget(array $managers, string $workloadKey, int $targetWorkers, array &$assignedTotals): array
 {
-    $manager = app(AutoscaleManager::class);
-    $method = new ReflectionMethod($manager, 'distributeClusterTarget');
-
-    return $method->invokeArgs($manager, [$managers, $workloadKey, $targetWorkers, &$assignedTotals]);
+    return (new WorkerDistributor)->distribute($managers, $workloadKey, $targetWorkers, $assignedTotals);
 }
 
 it('distributes fair-share targets across hosts without starvation', function () {

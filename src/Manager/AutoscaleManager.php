@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Manager;
 
 use Cbox\LaravelQueueAutoscale\Alerting\AlertRateLimiter;
+use Cbox\LaravelQueueAutoscale\Cluster\ClusterCooldown;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterRecommendation;
+use Cbox\LaravelQueueAutoscale\Cluster\WorkerDistributor;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
@@ -113,29 +115,6 @@ class AutoscaleManager
     /** @var list<string> */
     private array $lastObservedManagerIds = [];
 
-    /**
-     * Cached per-workload host distributions from the previous cycle.
-     * Used to prevent thrashing when the cluster-wide target is unchanged.
-     *
-     * @var array<string, array<string, int>> workloadKey => [managerId => assignedWorkers]
-     */
-    private array $previousDistributions = [];
-
-    /**
-     * Anti-flapping state for the leader's published targets, mirroring the
-     * single-host $lastScaleTime/$lastScaleDirection pair but keyed by
-     * workload key. Leader working memory: discarded on leadership change.
-     *
-     * @var array<string, Carbon>
-     */
-    private array $lastClusterScaleTime = [];
-
-    /** @var array<string, string> */
-    private array $lastClusterScaleDirection = [];
-
-    /** @var array<string, int> Previously published cluster-wide targets */
-    private array $lastPublishedClusterTargets = [];
-
     /** Whether this manager held the lease on the previous cycle. */
     private bool $wasLeader = false;
 
@@ -151,6 +130,8 @@ class AutoscaleManager
         private readonly ResourceEstimateResolver $resolver,
         private readonly AlertRateLimiter $alerts = new AlertRateLimiter,
         private readonly OrphanedWorkerReaper $orphanReaper = new OrphanedWorkerReaper,
+        private readonly WorkerDistributor $distributor = new WorkerDistributor,
+        private readonly ClusterCooldown $cooldown = new ClusterCooldown,
     ) {
         $this->pool = new WorkerPool;
         $this->outputBuffer = new WorkerOutputBuffer;
@@ -651,8 +632,19 @@ class AutoscaleManager
             $currentWorkers = $meta['current_workers'];
             $slaTarget = $meta['config']->sla->targetSeconds;
             $isBreaching = $meta['metrics']->oldestJobAge > 0 && $meta['metrics']->oldestJobAge >= $slaTarget;
-            $targetWorkers = $this->applyClusterCooldown($workloadKey, $currentWorkers, $targetWorkers, $isBreaching);
-            $workloadAssignments = $this->distributeClusterTarget($activeManagers, $workloadKey, $targetWorkers, $assignedTotals);
+            $cooldownSeconds = $this->clusterInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
+            $damped = $this->cooldown->apply($workloadKey, $currentWorkers, $targetWorkers, $isBreaching, $cooldownSeconds);
+
+            if ($damped->wasHeld) {
+                $this->verbose("  ⏸️  Anti-flapping: holding {$workloadKey} at {$damped->targetWorkers} during cooldown", 'debug');
+            }
+
+            if ($damped->breachOverride) {
+                $this->verbose('  🚨 SLA breach override: bypassing anti-flapping cooldown for cluster scale-up', 'warn');
+            }
+
+            $targetWorkers = $damped->targetWorkers;
+            $workloadAssignments = $this->distributor->distribute($activeManagers, $workloadKey, $targetWorkers, $assignedTotals);
 
             foreach ($workloadAssignments as $managerId => $target) {
                 $assignments[$managerId][$workloadKey] = $target;
@@ -749,13 +741,8 @@ class AutoscaleManager
 
         // Prune cached distributions and cooldown state for workloads no
         // longer present
-        $this->previousDistributions = array_intersect_key(
-            $this->previousDistributions,
-            $adjustedTargets,
-        );
-        $this->lastClusterScaleTime = array_intersect_key($this->lastClusterScaleTime, $adjustedTargets);
-        $this->lastClusterScaleDirection = array_intersect_key($this->lastClusterScaleDirection, $adjustedTargets);
-        $this->lastPublishedClusterTargets = array_intersect_key($this->lastPublishedClusterTargets, $adjustedTargets);
+        $this->distributor->pruneTo($adjustedTargets);
+        $this->cooldown->pruneTo($adjustedTargets);
 
         $issuedAt = $this->currentTimestamp();
         $leaderToken = $this->clusterStore->leaderToken();
@@ -957,217 +944,6 @@ class AutoscaleManager
         return $total;
     }
 
-    /**
-     * @param  array<int, ClusterManagerState>  $activeManagers
-     * @param  array<string, int>  $assignedTotals
-     * @return array<string, int>
-     */
-    private function distributeClusterTarget(
-        array $activeManagers,
-        string $workloadKey,
-        int $targetWorkers,
-        array &$assignedTotals,
-    ): array {
-        $targets = [];
-
-        foreach ($activeManagers as $state) {
-            $targets[$state->managerId] = 0;
-        }
-
-        if ($targetWorkers <= 0 || $activeManagers === []) {
-            $this->previousDistributions[$workloadKey] = $targets;
-
-            return $targets;
-        }
-
-        // Reuse previous distribution when target is unchanged, all cached
-        // assignments still fit within each host's remaining capacity, and the
-        // cached split is still balanced by host capacity.
-        // This prevents worker pool thrashing caused by sort-order instability
-        // when reported current counts fluctuate between heartbeats.
-        $cached = $this->previousDistributions[$workloadKey] ?? null;
-
-        if ($cached !== null && array_sum($cached) === $targetWorkers) {
-            $activeManagerIds = array_map(
-                static fn (ClusterManagerState $state): string => $state->managerId,
-                $activeManagers,
-            );
-            sort($activeManagerIds);
-
-            $cachedManagerIds = array_keys($cached);
-            sort($cachedManagerIds);
-
-            if ($activeManagerIds === $cachedManagerIds) {
-                $maxWorkersMap = [];
-                foreach ($activeManagers as $state) {
-                    $maxWorkersMap[$state->managerId] = $state->maxWorkers;
-                }
-
-                $feasible = true;
-                foreach ($cached as $managerId => $cachedCount) {
-                    $available = $maxWorkersMap[$managerId] - ($assignedTotals[$managerId] ?? 0);
-                    if ($cachedCount > $available) {
-                        $feasible = false;
-                        break;
-                    }
-                }
-
-                if ($feasible && $this->distributionIsCapacityBalanced($activeManagers, $cached, $assignedTotals)) {
-                    foreach ($cached as $managerId => $cachedCount) {
-                        $targets[$managerId] = $cachedCount;
-                        $assignedTotals[$managerId] += $cachedCount;
-                    }
-
-                    return $targets;
-                }
-            }
-        }
-
-        [$type, $connection, $name] = explode(':', $workloadKey, 3);
-        $currentCounts = [];
-
-        foreach ($activeManagers as $state) {
-            $counts = $type === 'group' ? $state->groupWorkers : $state->queueWorkers;
-            $currentCounts[$state->managerId] = (int) ($counts["{$connection}:{$name}"] ?? 0);
-        }
-
-        $remaining = $targetWorkers;
-
-        while ($remaining > 0) {
-            $candidates = array_values(array_filter(
-                $activeManagers,
-                fn (ClusterManagerState $state): bool => ($assignedTotals[$state->managerId] + $targets[$state->managerId]) < $state->maxWorkers,
-            ));
-
-            if ($candidates === []) {
-                break;
-            }
-
-            usort(
-                $candidates,
-                fn (ClusterManagerState $a, ClusterManagerState $b): int => $this->projectedUtilizationAfterAssignment($a, $targets, $assignedTotals) <=> $this->projectedUtilizationAfterAssignment($b, $targets, $assignedTotals)
-                    ?: (($currentCounts[$b->managerId] - $targets[$b->managerId]) <=> ($currentCounts[$a->managerId] - $targets[$a->managerId]))
-                    ?: strcmp($a->managerId, $b->managerId),
-            );
-
-            $chosen = $candidates[0];
-
-            $targets[$chosen->managerId]++;
-            $remaining--;
-        }
-
-        foreach ($targets as $managerId => $target) {
-            $assignedTotals[$managerId] += $target;
-        }
-
-        $this->previousDistributions[$workloadKey] = $targets;
-
-        return $targets;
-    }
-
-    /**
-     * @param  array<int, ClusterManagerState>  $activeManagers
-     * @param  array<string, int>  $distribution
-     * @param  array<string, int>  $assignedTotals
-     */
-    private function distributionIsCapacityBalanced(array $activeManagers, array $distribution, array $assignedTotals): bool
-    {
-        $currentSpread = $this->distributionUtilizationSpread($activeManagers, $distribution, $assignedTotals);
-        $threshold = $this->rebalanceSpreadThreshold($activeManagers);
-
-        foreach ($activeManagers as $donor) {
-            $donorId = $donor->managerId;
-
-            if (($distribution[$donorId] ?? 0) <= 0) {
-                continue;
-            }
-
-            foreach ($activeManagers as $recipient) {
-                $recipientId = $recipient->managerId;
-
-                if ($recipientId === $donorId) {
-                    continue;
-                }
-
-                if ((($assignedTotals[$recipientId] ?? 0) + ($distribution[$recipientId] ?? 0)) >= $recipient->maxWorkers) {
-                    continue;
-                }
-
-                $candidate = $distribution;
-                $candidate[$donorId]--;
-                $candidate[$recipientId]++;
-
-                if ($this->distributionUtilizationSpread($activeManagers, $candidate, $assignedTotals) + $threshold < $currentSpread) {
-                    return false;
-                }
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * The spread improvement a single-worker move must achieve before the
-     * cached distribution is abandoned.
-     *
-     * The spread's inputs jitter by construction: each host's maxWorkers is
-     * recomputed from live CPU and memory readings every heartbeat, and
-     * worker churn itself moves both. Against denominators like that, the
-     * previous 0.000001 epsilon let nearly every cycle find a hair-thin
-     * "improvement", so with two or more managers the cache was discarded
-     * and workers reshuffled between hosts on almost every evaluation, each
-     * move a graceful SIGTERM plus a full framework boot elsewhere.
-     * Requiring at least one worker's worth of utilization on the smallest
-     * host keeps the cache until the skew is worth a real worker.
-     *
-     * @param  array<int, ClusterManagerState>  $activeManagers
-     */
-    private function rebalanceSpreadThreshold(array $activeManagers): float
-    {
-        $smallestMaxWorkers = null;
-
-        foreach ($activeManagers as $state) {
-            $smallestMaxWorkers = $smallestMaxWorkers === null
-                ? $state->maxWorkers
-                : min($smallestMaxWorkers, $state->maxWorkers);
-        }
-
-        return 1.0 / max($smallestMaxWorkers ?? 1, 1);
-    }
-
-    /**
-     * @param  array<int, ClusterManagerState>  $activeManagers
-     * @param  array<string, int>  $distribution
-     * @param  array<string, int>  $assignedTotals
-     */
-    private function distributionUtilizationSpread(array $activeManagers, array $distribution, array $assignedTotals): float
-    {
-        $min = null;
-        $max = null;
-
-        foreach ($activeManagers as $state) {
-            $utilization = $this->utilizationFor($state, ($assignedTotals[$state->managerId] ?? 0) + ($distribution[$state->managerId] ?? 0));
-            $min = $min === null ? $utilization : min($min, $utilization);
-            $max = $max === null ? $utilization : max($max, $utilization);
-        }
-
-        return ($max ?? 0.0) - ($min ?? 0.0);
-    }
-
-    /**
-     * @param  array<string, int>  $targets
-     * @param  array<string, int>  $assignedTotals
-     */
-    private function projectedUtilizationAfterAssignment(ClusterManagerState $state, array $targets, array $assignedTotals): float
-    {
-        return $this->utilizationFor($state, ($assignedTotals[$state->managerId] ?? 0) + ($targets[$state->managerId] ?? 0) + 1);
-    }
-
-    private function utilizationFor(ClusterManagerState $state, int $workers): float
-    {
-        return $workers / max($state->maxWorkers, 1);
-    }
-
     private function reconcileQueueTarget(QueueConfiguration $config, int $targetWorkers): void
     {
         $currentWorkers = $this->pool->count($config->connection, $config->queue);
@@ -1283,16 +1059,14 @@ class AutoscaleManager
     private function noteLeadership(bool $isLeader): void
     {
         if ($isLeader && ! $this->wasLeader) {
-            $this->previousDistributions = [];
+            $this->distributor->reset();
 
             // The cooldown memory is the same kind of stale working memory as
             // the distribution cache: another leader has been publishing in
             // between, so directions and targets remembered from the previous
             // lease describe a cluster that no longer exists. The cost of a
             // failover is one undamped cycle.
-            $this->lastClusterScaleTime = [];
-            $this->lastClusterScaleDirection = [];
-            $this->lastPublishedClusterTargets = [];
+            $this->cooldown->reset();
         }
 
         $this->wasLeader = $isLeader;
@@ -2995,72 +2769,6 @@ class AutoscaleManager
         ));
 
         $this->lastObservedManagerIds = $managerIds;
-    }
-
-    /**
-     * Damp direction reversals in the leader's published targets.
-     *
-     * The single-host paths damp reversals through the cooldown in
-     * evaluateQueue()/evaluateGroup(), but the cluster path had no
-     * equivalent: the leader recomputed and republished every workload's
-     * target each cycle, and every host executed each swing as real spawns
-     * and kills. A demand signal that oscillates cycle-to-cycle (a
-     * wave-dispatched backlog draining and refilling) therefore thrashed
-     * the cluster-wide worker count on the evaluation cadence, where a
-     * single host would have absorbed the reversals.
-     *
-     * Damped here on the leader, before distribution, so the whole cluster
-     * acts on one damped decision instead of each host damping its own
-     * share independently. Semantics mirror the single-host guard: only a
-     * direction reversal inside scaling.cooldown_seconds is held, the last
-     * direction goes stale once the window elapses, and a scale-up during
-     * an SLA breach always passes.
-     */
-    private function applyClusterCooldown(string $workloadKey, int $currentWorkers, int $targetWorkers, bool $isBreaching): int
-    {
-        $currentDirection = $targetWorkers > $currentWorkers ? 'up' : ($targetWorkers < $currentWorkers ? 'down' : 'hold');
-        $lastDirection = $this->lastClusterScaleDirection[$workloadKey] ?? null;
-
-        $cooldownSeconds = $this->clusterInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
-
-        if ($lastDirection !== null && ! $this->inClusterCooldown($workloadKey, $cooldownSeconds)) {
-            unset($this->lastClusterScaleDirection[$workloadKey]);
-            $lastDirection = null;
-        }
-
-        if ($currentDirection !== 'hold' && $lastDirection !== null && $currentDirection !== $lastDirection) {
-            $isBreachScaleUp = $currentDirection === 'up' && $isBreaching;
-
-            if (! $isBreachScaleUp && $this->inClusterCooldown($workloadKey, $cooldownSeconds)) {
-                $held = max(0, $this->lastPublishedClusterTargets[$workloadKey] ?? $currentWorkers);
-                $this->lastPublishedClusterTargets[$workloadKey] = $held;
-                $this->verbose("  ⏸️  Anti-flapping: holding {$workloadKey} at {$held} during cooldown", 'debug');
-
-                return $held;
-            }
-
-            if ($isBreachScaleUp) {
-                $this->verbose('  🚨 SLA breach override: bypassing anti-flapping cooldown for cluster scale-up', 'warn');
-            }
-        }
-
-        if ($currentDirection !== 'hold') {
-            $this->lastClusterScaleTime[$workloadKey] = now();
-            $this->lastClusterScaleDirection[$workloadKey] = $currentDirection;
-        }
-
-        $this->lastPublishedClusterTargets[$workloadKey] = $targetWorkers;
-
-        return $targetWorkers;
-    }
-
-    private function inClusterCooldown(string $workloadKey, int $cooldownSeconds): bool
-    {
-        if (! isset($this->lastClusterScaleTime[$workloadKey])) {
-            return false;
-        }
-
-        return $this->lastClusterScaleTime[$workloadKey]->diffInSeconds(now()) < $cooldownSeconds;
     }
 
     private function inCooldown(string $key, int $cooldownSeconds): bool

@@ -3,9 +3,9 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
+use Cbox\LaravelQueueAutoscale\Cluster\WorkerDistributor;
 use Cbox\LaravelQueueAutoscale\Configuration\Profiles\ConnectionLimitedProfile;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
-use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Testing\QueueMetricsFactory;
 use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
@@ -232,16 +232,17 @@ test('the cap is a fleet total, not a per-host allowance', function (): void {
     );
 
     $assignedTotals = ['host-1' => 0, 'host-2' => 0, 'host-3' => 0];
-    $manager = app(AutoscaleManager::class);
-    $distribute = new ReflectionMethod($manager, 'distributeClusterTarget');
+    // One distributor across the loop, so the running $assignedTotals and the
+    // placement cache carry between tenants exactly as they do on the leader.
+    $distributor = new WorkerDistributor;
 
     foreach (tenantQueues('.', 'redis') as $queue) {
-        $assignments = $distribute->invokeArgs($manager, [
+        $assignments = $distributor->distribute(
             $managers,
             "queue:redis:{$queue}",
             TENANT_CONNECTION_LIMIT,
-            &$assignedTotals,
-        ]);
+            $assignedTotals,
+        );
 
         expect(array_sum($assignments))->toBe(TENANT_CONNECTION_LIMIT);
     }

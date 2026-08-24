@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
-use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
+use Cbox\LaravelQueueAutoscale\Cluster\WorkerDistributor;
 
 /**
  * Create a minimal ClusterManagerState for distribution tests.
@@ -43,10 +43,7 @@ function makeManagerState(string $id, int $maxWorkers, int $totalWorkers = 0, ar
  */
 function invokeDistributeClusterTarget(array $managers, string $workloadKey, int $targetWorkers, array &$assignedTotals): array
 {
-    $manager = app(AutoscaleManager::class);
-    $method = new ReflectionMethod($manager, 'distributeClusterTarget');
-
-    return $method->invokeArgs($manager, [$managers, $workloadKey, $targetWorkers, &$assignedTotals]);
+    return (new WorkerDistributor)->distribute($managers, $workloadKey, $targetWorkers, $assignedTotals);
 }
 
 /**
@@ -57,14 +54,10 @@ function invokeDistributeClusterTarget(array $managers, string $workloadKey, int
  */
 function invokeDistributeClusterTargetWithCache(array $managers, string $workloadKey, int $targetWorkers, array &$assignedTotals, array $previousDistributions): array
 {
-    $manager = app(AutoscaleManager::class);
+    $distributor = new WorkerDistributor;
+    $distributor->seed($previousDistributions);
 
-    $property = new ReflectionProperty($manager, 'previousDistributions');
-    $property->setValue($manager, $previousDistributions);
-
-    $method = new ReflectionMethod($manager, 'distributeClusterTarget');
-
-    return $method->invokeArgs($manager, [$managers, $workloadKey, $targetWorkers, &$assignedTotals]);
+    return $distributor->distribute($managers, $workloadKey, $targetWorkers, $assignedTotals);
 }
 
 it('caps assignments at per-host maxWorkers', function () {
