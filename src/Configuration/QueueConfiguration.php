@@ -81,7 +81,15 @@ readonly class QueueConfiguration
         // To floor everything anyway, name everything: `'*' => ['workers' =>
         // ['min' => 1]]`, which also trips the doctor's warning to set
         // `limits.max_total_workers` — the bound that makes it safe.
-        if (QueueConfigResolver::matchedRuleFor($queue) === null) {
+        // A pinned (non-scalable) default is exempt: workers.scalable = false
+        // requires min === max by construction, so zeroing the floor would
+        // make the configuration invalid and throw. Pointing sla_defaults at a
+        // non-scalable profile is an explicit statement that every queue runs
+        // a fixed worker count — unlike the shipped BalancedProfile, which is
+        // merely what you get by not choosing.
+        $scalable = $merged['workers']['scalable'] ?? true;
+
+        if ($scalable !== false && QueueConfigResolver::matchedRuleFor($queue) === null) {
             $merged['workers']['min'] = 0;
         }
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
 use Cbox\LaravelQueueAutoscale\Configuration\Profiles\CriticalProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\ExclusiveProfile;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 
 beforeEach(function (): void {
@@ -84,4 +85,23 @@ test('a wildcard rule restores the floor for every discovered queue', function (
     config()->set('queue-autoscale.queues', ['*' => ['workers' => ['min' => 1]]]);
 
     expect(QueueConfiguration::fromConfig('redis', 'anything-at-all')->workers->min)->toBe(1);
+});
+
+/*
+ * workers.scalable = false requires min === max by construction, so zeroing
+ * the floor would make the configuration invalid and throw — aborting every
+ * discovered queue every cycle. Pointing sla_defaults at a non-scalable
+ * profile is an explicit statement that every queue runs a fixed worker
+ * count, unlike the shipped default which is merely what you get by not
+ * choosing.
+ */
+test('a non-scalable default profile keeps its floor for unmatched queues', function (): void {
+    config()->set('queue-autoscale.sla_defaults', ExclusiveProfile::class);
+    config()->set('queue-autoscale.queues', []);
+
+    $cfg = QueueConfiguration::fromConfig('redis', 'discovered-tenant-x');
+
+    expect($cfg->workers->scalable)->toBeFalse()
+        ->and($cfg->workers->min)->toBe($cfg->workers->max)
+        ->and($cfg->workers->min)->toBeGreaterThan(0);
 });
