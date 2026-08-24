@@ -29,7 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   always reported zero on Laravel versions without the native queue size
   methods. It also eliminates the phantom `default` queue that discovery used
   to surface, and lets `getQueueDepth()` tolerate a queue the driver cannot
-  read yet instead of throwing every cycle.
+  read yet instead of throwing every cycle. v3.3.1 fixes a double-prefixing
+  bug in `scanKeys()` that silently no-oped metric cleanup and baseline reads
+  whenever a Redis connection prefix was configured (Laravel's default), and
+  v3.3.2 makes worker heartbeats Redis Cluster-safe, closing the last gap in
+  end-to-end cluster support alongside this release's own coordination fixes.
 
 - **Coordination key format.** Cluster coordination keys move from
   `queue-autoscale:cluster:<appid>:*` to `queue-autoscale:cluster:{<appid>}:*`
