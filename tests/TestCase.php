@@ -3,10 +3,19 @@
 namespace Cbox\LaravelQueueAutoscale\Tests;
 
 use Cbox\LaravelQueueAutoscale\LaravelQueueAutoscaleServiceProvider;
+use Cbox\LaravelQueueAutoscale\Testing\InteractsWithAutoscaling;
 use Orchestra\Testbench\TestCase as Orchestra;
 
 class TestCase extends Orchestra
 {
+    /**
+     * The trait this package ships for its consumers. Composed here so our own
+     * suite reaches for the same helpers a host application would — if one of
+     * them is awkward to use from here, that is a defect in the trait, not a
+     * reason to work around it in a spec.
+     */
+    use InteractsWithAutoscaling;
+
     protected function getPackageProviders($app)
     {
         return [

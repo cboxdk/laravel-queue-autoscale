@@ -1,4 +1,4 @@
-# Queue Autoscale for Laravel
+# Cbox Queue Autoscale
 
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/cboxdk/laravel-queue-autoscale.svg?style=flat-square)](https://packagist.org/packages/cboxdk/laravel-queue-autoscale)
 [![GitHub Tests Action Status](https://img.shields.io/github/actions/workflow/status/cboxdk/laravel-queue-autoscale/tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/cboxdk/laravel-queue-autoscale/actions?query=workflow%3Atests+branch%3Amain)

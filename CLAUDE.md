@@ -37,6 +37,13 @@ current major on Packagist — never assume, and never copy a sibling package's 
 Companion tooling tracks its own parent, not Laravel: PHPUnit follows Pest, so read the
 intended version's actual `require` before bumping it.
 
+**Pest stays on 4.x, deliberately.** Pest 5 requires `phpunit ^13.3`, and
+`orchestra/testbench-core` on the Laravel 12 line (`v10.x`) declares
+`conflict: phpunit >=13.2.0`. Supporting the previous Laravel major and running Pest 5
+are therefore mutually exclusive, and support wins. Re-check this when Laravel 14 ships
+and 12 drops out of the matrix — until then a Pest 5 bump will resolve only by dropping
+the L12 axis, which is not a trade this package makes.
+
 ## Conventions
 
 - Follow the existing code conventions in this package. When creating or editing a file,

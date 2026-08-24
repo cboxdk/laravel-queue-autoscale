@@ -14,7 +14,7 @@ Create `/etc/systemd/system/queue-autoscale.service`:
 
 ```ini
 [Unit]
-Description=Laravel Queue Autoscale manager
+Description=Queue Autoscale manager for Laravel
 After=network.target redis-server.service
 
 [Service]

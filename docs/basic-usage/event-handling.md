@@ -828,4 +828,4 @@ foreach ($events as $record) {
 - [Scaling Policies](scaling-policies.md) - Alternative to events for ordered execution
 - [Monitoring](monitoring.md) - Monitoring and observability
 - [Custom Strategies](../advanced-usage/custom-strategies.md) - Custom scaling strategies
-- [API Reference: Events](../api-reference/_index.md) - Complete event API documentation
+- [API Reference: Events](../api-reference/events.md) - Complete event API documentation

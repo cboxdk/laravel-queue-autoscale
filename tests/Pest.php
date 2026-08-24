@@ -21,9 +21,9 @@ uses(IntegrationTestCase::class)->in('Integration');
 
 /**
  * The telemetry integration lives behind an optional dev dependency
- * (cboxdk/laravel-telemetry, required on Laravel 12+ only). Skip the
- * Pest-style telemetry specs cleanly when it isn't installed, e.g. on the
- * Laravel 11 CI leg, instead of fataling on a missing class.
+ * (cboxdk/laravel-telemetry). Skip the
+ * Pest-style telemetry specs cleanly when it isn't installed, instead of
+ * fataling on a missing class.
  */
 uses()
     ->beforeEach(function () {

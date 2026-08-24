@@ -70,6 +70,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configuration are unchanged; the classes are constructor defaults, so nothing a
   consumer wires up has to change.
 
+### Documentation
+
+- Added a root `SECURITY.md` so GitHub surfaces the private reporting channel. It
+  points at `docs/advanced-usage/security.md` as the canonical version rather than
+  duplicating it, and claims only controls that exist: the queue-name guard, the host
+  worker ceiling, and the CI gates that actually run.
+- The API reference was a single 607-line `_index.md`. It is now six topic pages behind
+  a section landing, with `WorkerScaler` documented alongside the pool and spawner.
+- README is titled **Cbox Queue Autoscale**, matching the branding the sibling packages
+  use; "Queue Autoscale for Laravel" remains the descriptor.
+
 ### Removed
 
 - The `test-autoscale/` directory, an abandoned `laravel new` skeleton (54 files)
