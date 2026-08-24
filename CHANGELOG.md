@@ -49,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - One invalid discovered queue can no longer abort the entire evaluation cycle. Unsafe workload names (for example an empty queue name recorded by the metrics layer) are now filtered from the cluster leader's evaluation and from applied cluster recommendations, matching the single-host loop, and each workload's reconciliation is isolated so an exception for one queue is logged and the remaining queues still scale. Previously a single phantom queue wedged scale-up and worker respawn for every queue on the manager until the bad metric expired.
 
+- With two or more managers, the leader no longer reshuffles workers between hosts on nearly every cycle. The distribution cache's balance check discarded the cached placement whenever moving any single worker would improve the utilization spread by more than 0.000001, but the spread's inputs (each host's live-CPU/memory-derived maxWorkers) jitter every heartbeat, so an idle cluster still tore down and re-booted workers continuously. The check now requires an improvement worth at least one worker's utilization on the smallest host before rebalancing, and workloads are distributed in a stable sorted order so the check is comparable across cycles. Placement may shift once on upgrade as the new ordering takes effect, then holds steady; a genuinely skewed placement (one worker's worth or more) still rebalances as before.
+
 ## v4.0.1 - 2026-08-14
 
 **Upgrade promptly if you use queue groups: v4.0.0 could not start a group

@@ -616,6 +616,14 @@ class AutoscaleManager
         $scalableTargets = $allocator->allocate($scalableDemands, $scalableConfigs, $scalableCapacity);
         $adjustedTargets = $pinnedDemands + $scalableTargets;
 
+        // Phase C consumes this in iteration order and accumulates
+        // $assignedTotals as it goes, so the order must be stable across
+        // cycles. Workloads arrive here in metrics-discovery order, which is
+        // not: the same per-workload split could pass the balance check one
+        // cycle and fail it the next purely because workloads evaluated
+        // earlier had shifted the running totals differently.
+        ksort($adjustedTargets);
+
         // Phase C: Distribute adjusted targets across hosts, build workload
         // summaries, and record scaling decisions + SLA events.
         $workloads = [];
@@ -1001,6 +1009,7 @@ class AutoscaleManager
     private function distributionIsCapacityBalanced(array $activeManagers, array $distribution, array $assignedTotals): bool
     {
         $currentSpread = $this->distributionUtilizationSpread($activeManagers, $distribution, $assignedTotals);
+        $threshold = $this->rebalanceSpreadThreshold($activeManagers);
 
         foreach ($activeManagers as $donor) {
             $donorId = $donor->managerId;
@@ -1024,13 +1033,42 @@ class AutoscaleManager
                 $candidate[$donorId]--;
                 $candidate[$recipientId]++;
 
-                if ($this->distributionUtilizationSpread($activeManagers, $candidate, $assignedTotals) + 0.000001 < $currentSpread) {
+                if ($this->distributionUtilizationSpread($activeManagers, $candidate, $assignedTotals) + $threshold < $currentSpread) {
                     return false;
                 }
             }
         }
 
         return true;
+    }
+
+    /**
+     * The spread improvement a single-worker move must achieve before the
+     * cached distribution is abandoned.
+     *
+     * The spread's inputs jitter by construction: each host's maxWorkers is
+     * recomputed from live CPU and memory readings every heartbeat, and
+     * worker churn itself moves both. Against denominators like that, the
+     * previous 0.000001 epsilon let nearly every cycle find a hair-thin
+     * "improvement", so with two or more managers the cache was discarded
+     * and workers reshuffled between hosts on almost every evaluation, each
+     * move a graceful SIGTERM plus a full framework boot elsewhere.
+     * Requiring at least one worker's worth of utilization on the smallest
+     * host keeps the cache until the skew is worth a real worker.
+     *
+     * @param  array<int, ClusterManagerState>  $activeManagers
+     */
+    private function rebalanceSpreadThreshold(array $activeManagers): float
+    {
+        $smallestMaxWorkers = null;
+
+        foreach ($activeManagers as $state) {
+            $smallestMaxWorkers = $smallestMaxWorkers === null
+                ? $state->maxWorkers
+                : min($smallestMaxWorkers, $state->maxWorkers);
+        }
+
+        return 1.0 / max($smallestMaxWorkers ?? 1, 1);
     }
 
     /**
