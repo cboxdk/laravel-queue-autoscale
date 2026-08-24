@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
+use Cbox\LaravelQueueAutoscale\Workers\WorkerScaler;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -14,9 +15,12 @@ use Illuminate\Support\Facades\Log;
  */
 function clampRequest(AutoscaleManager $manager, int $requested): int
 {
-    $method = new ReflectionMethod(AutoscaleManager::class, 'clampToHostCeiling');
+    return managerScaler($manager)->clampToHostCeiling($requested);
+}
 
-    return $method->invoke($manager, $requested);
+function managerScaler(AutoscaleManager $manager): WorkerScaler
+{
+    return (new ReflectionProperty($manager, 'scaler'))->getValue($manager);
 }
 
 beforeEach(function (): void {

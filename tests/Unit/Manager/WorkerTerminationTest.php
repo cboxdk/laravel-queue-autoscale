@@ -6,6 +6,7 @@ use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerPool;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerProcess;
+use Cbox\LaravelQueueAutoscale\Workers\WorkerScaler;
 use Illuminate\Support\Facades\Event;
 use Symfony\Component\Process\Process;
 
@@ -14,6 +15,11 @@ function workerTerminationPool(AutoscaleManager $manager): WorkerPool
     $property = new ReflectionProperty($manager, 'pool');
 
     return $property->getValue($manager);
+}
+
+function workerTerminationScaler(AutoscaleManager $manager): WorkerScaler
+{
+    return (new ReflectionProperty($manager, 'scaler'))->getValue($manager);
 }
 
 it('requests scale-down termination without using the blocking terminator path', function () {
@@ -44,9 +50,8 @@ it('requests scale-down termination without using the blocking terminator path',
         reason: 'test:scale_down',
     );
 
-    $method = new ReflectionMethod($manager, 'scaleDown');
     $start = microtime(true);
-    $method->invoke($manager, $decision);
+    workerTerminationScaler($manager)->scaleDown($decision);
     $elapsed = microtime(true) - $start;
 
     expect($pool->count('redis', 'default'))->toBe(0)
@@ -70,8 +75,7 @@ it('enforces termination deadlines on workers already shutting down', function (
     $worker->markTerminationRequested(now()->subSeconds(31), 30);
     $pool->add($worker);
 
-    $method = new ReflectionMethod($manager, 'enforceTerminationDeadlines');
-    $method->invoke($manager);
+    workerTerminationScaler($manager)->enforceTerminationDeadlines();
 
     usleep(100_000);
 
