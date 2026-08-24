@@ -5,6 +5,10 @@ declare(strict_types=1);
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterRecommendation;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterStore;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\ExclusiveProfile;
+use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
@@ -240,4 +244,64 @@ it('applies a recommendation within the configured maximum untouched', function 
     (new ReflectionMethod($manager, 'applyClusterRecommendation'))->invoke($manager, $recommendation);
 
     Event::assertDispatched(WorkersScaled::class, fn (WorkersScaled $e): bool => $e->queue === 'exports' && $e->to === 4);
+});
+
+/*
+ * The clamp has to cover all three apply paths. A pinned queue's max IS its
+ * pinned count, and clampToHostCeiling is the only other bound — which returns
+ * the request unchanged when limits.max_total_workers is unset, as it ships.
+ * So the pinned path was the least bounded of the three.
+ *
+ * Asserted as a bound rather than an exact count: what matters is that a
+ * recommendation of five thousand cannot produce five thousand workers, not
+ * which of the permitted counts this cycle settles on.
+ */
+it('never exceeds the local maximum for a pinned queue', function () {
+    config()->set('queue-autoscale.queues', ['exclusive' => ExclusiveProfile::class]);
+    config()->set('queue-autoscale.groups', []);
+    config()->set('queue-autoscale.limits.max_total_workers', null);
+
+    fakeSpawner();
+    Event::fake([WorkersScaled::class]);
+
+    $manager = app(AutoscaleManager::class);
+    (new ReflectionMethod($manager, 'applyClusterRecommendation'))->invoke($manager, new ClusterRecommendation(
+        managerId: 'test-mgr',
+        issuedAt: now()->timestamp,
+        workloads: ['queue:redis:exclusive' => 5000],
+    ));
+
+    $pinned = QueueConfiguration::fromConfig('redis', 'exclusive')->workers->max;
+    $pool = (new ReflectionProperty($manager, 'pool'))->getValue($manager);
+
+    expect($pool->count('redis', 'exclusive'))->toBeLessThanOrEqual($pinned);
+});
+
+it('never exceeds the local maximum for a group', function () {
+    config()->set('queue-autoscale.queues', []);
+    config()->set('queue-autoscale.groups', [
+        'reports' => [
+            'connection' => 'redis',
+            'queues' => ['a', 'b'],
+            'profile' => BalancedProfile::class,
+        ],
+    ]);
+    config()->set('queue-autoscale.limits.max_total_workers', null);
+
+    fakeSpawner();
+    Event::fake([WorkersScaled::class]);
+
+    $manager = app(AutoscaleManager::class);
+    (new ReflectionMethod($manager, 'applyClusterRecommendation'))->invoke($manager, new ClusterRecommendation(
+        managerId: 'test-mgr',
+        issuedAt: now()->timestamp,
+        workloads: ['group:redis:reports' => 5000],
+    ));
+
+    $groups = GroupConfiguration::allFromConfig();
+    $max = reset($groups)->workers->max;
+    $pool = (new ReflectionProperty($manager, 'pool'))->getValue($manager);
+
+    expect($pool->countGroup('redis', 'reports'))->toBeLessThanOrEqual($max)
+        ->and($max)->toBeLessThan(5000);
 });

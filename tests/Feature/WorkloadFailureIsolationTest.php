@@ -75,9 +75,6 @@ function spawnerThatFailsFor(array $poisonQueues, array $poisonGroups = []): voi
 }
 
 /**
-/**
-/**
-/**
  * A minimal manager heartbeat so the leader has somewhere to place workers.
  */
 function isolationManagerState(string $id, int $maxWorkers = 8): ClusterManagerState

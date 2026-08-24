@@ -283,6 +283,13 @@ readonly class AutoscaleConfiguration
         // and must still produce an id rather than throw.
         if (function_exists('app') && app()->bound('config')) {
             $parts[] = 'app='.self::managerAppScope();
+        } elseif (function_exists('base_path')) {
+            // Degraded but still app-scoped. Without this branch a caller
+            // reaching managerId() before the container is up derives a
+            // host-only id — and managerId() memoises, so that would freeze
+            // for the process and reinstate the cross-app collision. Not
+            // deploy-stable, which only matters if it is ever actually taken.
+            $parts[] = 'app='.substr(sha1(base_path()), 0, 12);
         }
 
         return implode('|', array_unique(array_filter($parts, static fn (string $value): bool => trim($value) !== '')));

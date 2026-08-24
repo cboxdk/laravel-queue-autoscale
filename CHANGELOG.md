@@ -29,6 +29,14 @@ implicit floor, name the queues, or restore it wholesale with
 
 ### Fixed
 
+- **The manager id changes on upgrade.** It now carries an application scope,
+  which is what stops two apps on one host from reaping each other's workers.
+  The consequence for an existing deployment: workers orphaned by the
+  pre-upgrade manager are no longer recognised and will exit on their own
+  `--max-time` rather than being reaped once, and during a rolling upgrade a
+  host briefly appears twice in the cluster registry until the stale entry is
+  pruned. Both are transient and neither loses work.
+
 - **A follower clamps the leader's recommendation to its own `workers.max`.**
   Redundant while the leader is correct, and the difference between a blast
   radius of `workers.max` and whatever integer arrived over the wire when it is

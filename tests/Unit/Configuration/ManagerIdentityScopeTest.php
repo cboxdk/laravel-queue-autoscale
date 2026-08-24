@@ -53,20 +53,31 @@ test('the identity still resolves when no application is booted', function (): v
 
 /*
  * The reaper matches this id exactly, so it has to survive a deploy: a
- * restarted manager must recognise its predecessor's workers. PHP resolves
- * symlinks, so anything derived from base_path() changes on every release with
- * a releases/<timestamp> layout — which would have traded over-reaping for
- * silently under-reaping on exactly the platforms this scoping is for.
+ * restarted manager must recognise its predecessor's workers. Anything derived
+ * from base_path() fails that — PHP resolves symlinks, so on a
+ * releases/<timestamp> layout the path changes every release, which would have
+ * traded over-reaping for silently under-reaping.
+ *
+ * Asserted on the derivation rather than by calling twice, which any
+ * deterministic implementation passes including the one this replaced.
  */
-test('the identity is stable across a deploy to a new release directory', function (): void {
-    config()->set('app.name', 'invoicing');
+test('the application scope is derived from config, not from the filesystem', function (): void {
+    config()->set('app.name', 'Invoicing Service');
     config()->set('app.env', 'production');
 
-    $first = identitySource();
+    expect(identitySource())->toContain('app=invoicing-service-production');
+});
 
-    // Same app, same host, new release path — which is all a deploy changes.
-    expect(identitySource())->toBe($first)
-        ->and($first)->not->toContain(base_path());
+test('the application scope moves with the app, not with the release path', function (): void {
+    config()->set('app.name', 'invoicing');
+    config()->set('app.env', 'staging');
+    $staging = identitySource();
+
+    config()->set('app.env', 'production');
+
+    expect(identitySource())->not->toBe($staging)
+        ->and($staging)->not->toContain(sha1(base_path()))
+        ->and($staging)->not->toContain(substr(sha1(base_path()), 0, 12));
 });
 
 /*
