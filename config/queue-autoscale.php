@@ -272,6 +272,16 @@ return [
         'log_channel' => env('QUEUE_AUTOSCALE_LOG_CHANNEL', 'stack'),
         'restart_scope' => env('QUEUE_AUTOSCALE_RESTART_SCOPE'),
         'honor_queue_restart' => env('QUEUE_AUTOSCALE_HONOR_QUEUE_RESTART', true),
+
+        /*
+         * On startup, SIGTERM workers left behind by a previous manager
+         * generation (found via /proc by the env markers every spawned
+         * worker carries, scoped to this manager's id). A manager killed
+         * abruptly (e.g. by the OOM killer) cannot drain its pool, and the
+         * replacement would otherwise spawn a full new set of workers on
+         * top of the orphans.
+         */
+        'reap_orphans_on_start' => env('QUEUE_AUTOSCALE_REAP_ORPHANS_ON_START', true),
     ],
 
     /*
