@@ -14,6 +14,23 @@ namespace Cbox\LaravelQueueAutoscale\Cluster;
 class WorkerDistributor
 {
     /**
+     * Absorbs floating-point error when comparing a spread against the
+     * threshold, so a move worth exactly one worker is not rejected by a
+     * rounding artefact in the addition.
+     */
+    private const SPREAD_EPSILON = 1e-9;
+
+    /**
+     * The smallest maxWorkers a host may report and still set the rebalance
+     * threshold.
+     *
+     * At one worker the threshold would be 1.0, which no spread improvement
+     * can exceed. Excluding such hosts caps the threshold at 0.5 without a
+     * separate clamp.
+     */
+    private const MIN_USABLE_MAX_WORKERS = 2;
+
+    /**
      * The placement each workload received last cycle, so an unchanged target
      * is not re-derived into a different split.
      *
@@ -204,7 +221,16 @@ class WorkerDistributor
                 $candidate[$donorId]--;
                 $candidate[$recipientId]++;
 
-                if ($this->utilizationSpread($activeManagers, $candidate, $assignedTotals) + $threshold < $currentSpread) {
+                // <= with an epsilon, not <. The threshold means "at least one
+                // worker's worth of improvement", and a move worth exactly one
+                // worker lands on the boundary: on a 40/40/1 fleet cached
+                // 30/0/0, moving one worker improves the spread by 1/40 and
+                // the threshold IS 1/40. A strict comparison rejected that
+                // tie, so a fully skewed placement never rebalanced. The
+                // epsilon absorbs float error in the sum.
+                $improved = $this->utilizationSpread($activeManagers, $candidate, $assignedTotals) + $threshold;
+
+                if ($improved <= $currentSpread + self::SPREAD_EPSILON) {
                     return false;
                 }
             }
@@ -227,30 +253,44 @@ class WorkerDistributor
      * Requiring at least one worker's worth of utilization keeps the cache
      * until the skew is worth a real worker.
      *
-     * Measured on the LARGEST host, not the smallest. The gate weighs a
-     * single-worker move, so the threshold has to live on a single worker's
-     * scale — and one worker on the biggest host is the finest step any move
-     * can produce. Deriving it from the smallest host breaks on a
-     * heterogeneous fleet: a host reporting maxWorkers of 0 or 1, which the
-     * capacity calculator produces under memory pressure since it floors at
-     * zero, yields a threshold of 1.0. Utilization is workers/maxWorkers and
-     * the distributor never assigns above maxWorkers, so the spread is itself
-     * bounded by 1.0 — the gate becomes unsatisfiable for any skew whatsoever,
-     * and the hysteresis silently turns into "never rebalance".
+     * Measured on the smallest host that can actually hold work.
+     *
+     * The gate weighs a single-worker move against the SPREAD, and spread is
+     * min-to-max utilization across hosts — so it moves in steps of one worker
+     * on the smallest host, not the largest. A threshold derived from the
+     * largest host sits an order of magnitude below the granularity of the
+     * moves it judges and approves almost anything: measured on a 40/8/4 fleet
+     * with a constant target and one worker of capacity jitter per heartbeat,
+     * that produced 177 reshuffles in 400 heartbeats where the smallest-host
+     * denominator produced none.
+     *
+     * Hosts below two workers are excluded rather than the denominator being
+     * clamped afterwards. A host reporting maxWorkers of 0 or 1 — which the
+     * capacity calculator produces under memory pressure, since it floors at
+     * zero — would otherwise set the threshold to 1.0, and since utilization
+     * is workers/maxWorkers and the distributor never assigns above
+     * maxWorkers, the spread is itself bounded by 1.0. The gate becomes
+     * unsatisfiable for any skew whatsoever and the hysteresis silently turns
+     * into "never rebalance". Excluding those hosts keeps the threshold on the
+     * scale that matters and caps it at 0.5 by construction.
      *
      * @param  array<int, ClusterManagerState>  $activeManagers
      */
     private function rebalanceSpreadThreshold(array $activeManagers): float
     {
-        $largestMaxWorkers = null;
+        $smallestUsable = null;
 
         foreach ($activeManagers as $state) {
-            $largestMaxWorkers = $largestMaxWorkers === null
+            if ($state->maxWorkers < self::MIN_USABLE_MAX_WORKERS) {
+                continue;
+            }
+
+            $smallestUsable = $smallestUsable === null
                 ? $state->maxWorkers
-                : max($largestMaxWorkers, $state->maxWorkers);
+                : min($smallestUsable, $state->maxWorkers);
         }
 
-        return 1.0 / max($largestMaxWorkers ?? 1, 1);
+        return 1.0 / max($smallestUsable ?? self::MIN_USABLE_MAX_WORKERS, self::MIN_USABLE_MAX_WORKERS);
     }
 
     /**

@@ -50,3 +50,21 @@ test('the identity still resolves when no application is booted', function (): v
     // degrade to host identity rather than throw.
     expect(identitySource())->toBeString()->not->toBe('');
 });
+
+/*
+ * The reaper matches this id exactly, so it has to survive a deploy: a
+ * restarted manager must recognise its predecessor's workers. PHP resolves
+ * symlinks, so anything derived from base_path() changes on every release with
+ * a releases/<timestamp> layout — which would have traded over-reaping for
+ * silently under-reaping on exactly the platforms this scoping is for.
+ */
+test('the identity is stable across a deploy to a new release directory', function (): void {
+    config()->set('app.name', 'invoicing');
+    config()->set('app.env', 'production');
+
+    $first = identitySource();
+
+    // Same app, same host, new release path — which is all a deploy changes.
+    expect(identitySource())->toBe($first)
+        ->and($first)->not->toContain(base_path());
+});

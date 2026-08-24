@@ -761,7 +761,7 @@ class AutoscaleManager
                     // Clamped like the scalable paths. A pinned queue's max IS
                     // its pinned count, so an unclamped recommendation could
                     // ask a max-1 queue for thousands.
-                    $this->superviseQueue($config, $metrics, $this->clampToLocalMax($target, $config->workers->max));
+                    $this->superviseQueue($config, $metrics, $this->clampToLocalMax($target, $config->workers->max, "{$connection}:{$queue}"));
 
                     continue;
                 }
@@ -870,8 +870,13 @@ class AutoscaleManager
      * Logged once per workload per breach through the rate limiter rather than
      * every cycle: a leader publishing an impossible number will publish it
      * again next cycle, and the operator needs to see it, not drown in it.
+     *
+     * The workload is part of the limiter key AND the log context. Without it
+     * the suppression is fleet-wide — the limiter is backed by the shared
+     * cache cluster mode already requires — so one host would log one
+     * unattributable line and every other host and workload would go silent.
      */
-    private function clampToLocalMax(int $targetWorkers, int $localMax): int
+    private function clampToLocalMax(int $targetWorkers, int $localMax, string $workload): int
     {
         $target = max(0, $targetWorkers);
 
@@ -879,10 +884,10 @@ class AutoscaleManager
             return $target;
         }
 
-        if ($this->alerts->allow('cluster_target_above_local_max')) {
+        if ($this->alerts->allow("cluster_target_above_local_max:{$workload}")) {
             Log::channel(AutoscaleConfiguration::logChannel())->warning(
                 'Cluster recommendation exceeded this host\'s configured maximum; clamped',
-                ['recommended' => $target, 'local_max' => $localMax]
+                ['workload' => $workload, 'recommended' => $target, 'local_max' => $localMax]
             );
         }
 
@@ -902,7 +907,7 @@ class AutoscaleManager
         // is a blast radius of workers.max instead of whatever integer arrived
         // over the wire, and a follower's own config is the last thing that
         // should be overridable from outside the process.
-        $targetWorkers = $this->clampToLocalMax($targetWorkers, $config->workers->max);
+        $targetWorkers = $this->clampToLocalMax($targetWorkers, $config->workers->max, "{$config->connection}:{$config->queue}");
 
         // No early return when the target already matches. A single host runs
         // the policy chain on every cycle including holds, so a policy there
@@ -929,7 +934,7 @@ class AutoscaleManager
     private function reconcileGroupTarget(GroupConfiguration $group, int $targetWorkers): void
     {
         $currentWorkers = $this->pool->countGroup($group->connection, $group->name);
-        $targetWorkers = $this->clampToLocalMax($targetWorkers, $group->workers->max);
+        $targetWorkers = $this->clampToLocalMax($targetWorkers, $group->workers->max, "group:{$group->connection}:{$group->name}");
 
         $decision = new ScalingDecision(
             connection: $group->connection,

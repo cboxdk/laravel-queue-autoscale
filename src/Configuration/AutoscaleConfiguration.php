@@ -252,13 +252,17 @@ readonly class AutoscaleConfiguration
         // SIGTERM the other app's entire worker fleet. Containers are safe by
         // accident (separate PID namespaces); bare metal and VMs are not.
         //
-        // Guarded because this runs before the application is necessarily
-        // booted: managerId() is reachable from a context with no container,
-        // and it must still produce an id rather than throw.
+        // App name and environment, NOT applicationScopeId() — that one hashes
+        // base_path(), and PHP resolves symlinks, so on a releases/<timestamp>
+        // deploy layout it changes every deploy. The reaper matches this id
+        // exactly, so a changing id means the previous release's workers become
+        // invisible and are never reaped: it would have traded over-reaping for
+        // silently under-reaping, on the very platforms this fix is for.
+        //
+        // Guarded because managerId() is reachable before the container exists
+        // and must still produce an id rather than throw.
         if (function_exists('app') && app()->bound('config')) {
-            $parts[] = 'app='.self::applicationScopeId();
-        } elseif (function_exists('base_path')) {
-            $parts[] = 'app='.substr(sha1(base_path()), 0, 12);
+            $parts[] = 'app='.self::restartScopeId();
         }
 
         return implode('|', array_unique(array_filter($parts, static fn (string $value): bool => trim($value) !== '')));
