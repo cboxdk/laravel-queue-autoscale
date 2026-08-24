@@ -2685,15 +2685,30 @@ class AutoscaleManager
 
     private function processWorkerOutput(): void
     {
-        if ($this->renderer === null) {
-            return;
+        $workers = $this->pool->all();
+
+        // Drain both streams unconditionally: reading is what stops each
+        // worker's output accumulating inside the manager for the worker's
+        // lifetime, so it must not depend on a renderer being attached.
+        $outputLines = $this->outputBuffer->collectOutput($workers);
+        $errorLines = $this->outputBuffer->collectErrorOutput($workers);
+
+        if ($this->renderer !== null) {
+            foreach ($outputLines as $pid => $lines) {
+                foreach ($lines as $line) {
+                    $this->renderer->handleWorkerOutput($pid, $line);
+                }
+            }
         }
 
-        $outputLines = $this->outputBuffer->collectOutput($this->pool->all());
-
-        foreach ($outputLines as $pid => $lines) {
+        // Worker stderr carries what an operator needs during an incident:
+        // job exceptions, memory warnings, and for containerized apps
+        // typically the whole application log channel. Forward it to the
+        // manager's log channel so it reaches the container's log stream
+        // instead of dying in a buffer nothing reads.
+        foreach ($errorLines as $pid => $lines) {
             foreach ($lines as $line) {
-                $this->renderer->handleWorkerOutput($pid, $line);
+                Log::channel(AutoscaleConfiguration::logChannel())->info("[worker {$pid}] {$line}");
             }
         }
     }

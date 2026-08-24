@@ -181,3 +181,33 @@ test('per-queue worker reports no group', function () {
     expect($worker->isGroupWorker())->toBeFalse();
     expect($worker->group)->toBeNull();
 });
+
+test('incremental stream reads delegate to process', function () {
+    $this->mockProcess->shouldReceive('getIncrementalOutput')->once()->andReturn('out chunk');
+    $this->mockProcess->shouldReceive('getIncrementalErrorOutput')->once()->andReturn('err chunk');
+
+    $worker = new WorkerProcess(
+        process: $this->mockProcess,
+        connection: 'redis',
+        queue: 'default',
+        spawnedAt: $this->spawnedAt,
+    );
+
+    expect($worker->getIncrementalOutput())->toBe('out chunk')
+        ->and($worker->getIncrementalErrorOutput())->toBe('err chunk');
+});
+
+test('clearing retained output delegates to process for both streams', function () {
+    $this->mockProcess->shouldReceive('clearOutput')->once()->andReturnSelf();
+    $this->mockProcess->shouldReceive('clearErrorOutput')->once()->andReturnSelf();
+
+    $worker = new WorkerProcess(
+        process: $this->mockProcess,
+        connection: 'redis',
+        queue: 'default',
+        spawnedAt: $this->spawnedAt,
+    );
+
+    $worker->clearOutput();
+    $worker->clearErrorOutput();
+});

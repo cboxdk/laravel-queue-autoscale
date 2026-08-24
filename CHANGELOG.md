@@ -8,7 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Changed
-
 - **Requires `cboxdk/laravel-queue-metrics` `^3.3`** (was `^3.0`). v3.3.0 fixes
   several defects in exactly the readings the autoscaler makes its decisions
   from, so the older floor let the manager scale on numbers that were wrong:
@@ -20,8 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read yet instead of throwing every cycle.
 
 ### Fixed
-
 - A manager that dies abruptly (for example SIGKILLed by the kernel OOM killer) no longer causes its replacement to double-provision. On startup the manager now scans procfs for workers stamped with this package's environment markers and its own manager id, SIGTERMs them, and logs a summary before the first spawn. Previously those orphans were invisible to the replacement (the worker pool is process-local), so it spawned a full new set on top of them and each doubled generation made the next OOM kill more likely. The reap is scoped to the same manager id (so deliberately co-hosted managers never touch each other's workers), skips on hosts without procfs, and can be disabled with `queue-autoscale.manager.reap_orphans_on_start`.
+
+- Worker stderr is now drained every cycle and forwarded to the manager's log channel tagged with the worker PID, so worker log lines (job exceptions, memory warnings, and for containerized apps typically the whole application log channel) reach the container's log stream instead of accumulating unread inside the manager. Both stream buffers are also cleared after each read, and draining no longer depends on a renderer being attached, so a long-lived worker's output history no longer lives on in the manager's memory.
 
 ## v4.0.1 - 2026-08-14
 
