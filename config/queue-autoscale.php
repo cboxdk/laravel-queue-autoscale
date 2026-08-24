@@ -64,6 +64,15 @@ return [
     | Doing that also trips the doctor's warning to set
     | limits.max_total_workers, which is the bound that makes it safe.
     |
+    | One consequence worth knowing: the engine clamps a target to measured
+    | CPU/memory BEFORE applying any floor. A named queue's floor overrides
+    | that clamp; an unnamed queue now has no floor to override it with. So on
+    | a host already at capacity, a discovered queue with a backlog gets zero
+    | workers where it previously got one. That is the correct answer for a
+    | full host — the fix for a full host is another host, which the cluster
+    | scale signal already recommends — but name the queue if you want it
+    | served regardless.
+    |
     */
     'queues' => [
         // 'payments' => CriticalProfile::class,

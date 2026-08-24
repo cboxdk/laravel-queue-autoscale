@@ -122,6 +122,13 @@ test('a named queue still gets its floor while discovered ones do not', function
 test('a discovered queue with real backlog still scales up', function (): void {
     // Withdrawing the floor must not stop a queue being served — it removes
     // the standing promise, not the response to demand.
+    //
+    // Capacity is pinned generously because the engine clamps the target to
+    // measured CPU/memory BEFORE any floor. Without the floor there is nothing
+    // to raise it back, so on a loaded CI runner this would legitimately
+    // resolve to zero and the spec would be measuring the runner, not the fix.
+    config()->set('queue-autoscale.limits.worker_cpu_core_estimate', 0.001);
+    config()->set('queue-autoscale.limits.worker_memory_mb_estimate', 1);
     config()->set('queue-autoscale.queues', []);
 
     fakeDiscoveredQueues([
