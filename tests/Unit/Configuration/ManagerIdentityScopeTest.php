@@ -68,3 +68,31 @@ test('the identity is stable across a deploy to a new release directory', functi
     expect(identitySource())->toBe($first)
         ->and($first)->not->toContain(base_path());
 });
+
+/*
+ * manager.restart_scope is documented as controlling the restart command's
+ * cache key. An operator setting it to a shared value so two apps restart
+ * together must not thereby hand them the same worker-ownership token — that
+ * is the exact collision this scope exists to prevent.
+ */
+test('the restart scope override does not change the manager identity', function (): void {
+    config()->set('app.name', 'invoicing');
+    config()->set('app.env', 'production');
+
+    $withoutOverride = identitySource();
+
+    config()->set('queue-autoscale.manager.restart_scope', 'shared-deploy-group');
+
+    expect(identitySource())->toBe($withoutOverride);
+});
+
+test('two apps sharing a restart scope still derive different identities', function (): void {
+    config()->set('queue-autoscale.manager.restart_scope', 'shared-deploy-group');
+
+    config()->set('app.name', 'invoicing');
+    $first = identitySource();
+
+    config()->set('app.name', 'reporting');
+
+    expect(identitySource())->not->toBe($first);
+});

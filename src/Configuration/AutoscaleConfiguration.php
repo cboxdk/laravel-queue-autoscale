@@ -84,6 +84,33 @@ readonly class AutoscaleConfiguration
         return Str::slug($appName, '-').'-'.$appEnv.'-'.$hash;
     }
 
+    /**
+     * The application half of a manager's identity.
+     *
+     * Deliberately its own derivation rather than a reuse of an existing one.
+     *
+     * Not applicationScopeId(): that hashes base_path(), and PHP resolves
+     * symlinks, so on a releases/<timestamp> deploy layout it changes every
+     * deploy. The reaper matches the manager id exactly, so a changing id
+     * would make the previous release's workers invisible — trading
+     * over-reaping for silent under-reaping on the platforms this scoping
+     * exists for.
+     *
+     * Not restartScopeId() either, despite computing the same thing by
+     * default: that one honours a `manager.restart_scope` override documented
+     * as controlling the restart command's cache key. An operator setting it
+     * to a shared value so two apps restart together would silently hand them
+     * the same worker-ownership token, which is the exact collision this
+     * scope was added to prevent.
+     */
+    private static function managerAppScope(): string
+    {
+        $appName = self::stringConfig('app.name', 'laravel');
+        $appEnv = self::stringConfig('app.env', 'production');
+
+        return Str::slug($appName, '-').'-'.$appEnv;
+    }
+
     public static function restartScopeId(): string
     {
         $configured = config('queue-autoscale.manager.restart_scope');
@@ -252,17 +279,10 @@ readonly class AutoscaleConfiguration
         // SIGTERM the other app's entire worker fleet. Containers are safe by
         // accident (separate PID namespaces); bare metal and VMs are not.
         //
-        // App name and environment, NOT applicationScopeId() — that one hashes
-        // base_path(), and PHP resolves symlinks, so on a releases/<timestamp>
-        // deploy layout it changes every deploy. The reaper matches this id
-        // exactly, so a changing id means the previous release's workers become
-        // invisible and are never reaped: it would have traded over-reaping for
-        // silently under-reaping, on the very platforms this fix is for.
-        //
         // Guarded because managerId() is reachable before the container exists
         // and must still produce an id rather than throw.
         if (function_exists('app') && app()->bound('config')) {
-            $parts[] = 'app='.self::restartScopeId();
+            $parts[] = 'app='.self::managerAppScope();
         }
 
         return implode('|', array_unique(array_filter($parts, static fn (string $value): bool => trim($value) !== '')));
