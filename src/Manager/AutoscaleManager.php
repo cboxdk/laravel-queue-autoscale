@@ -146,14 +146,16 @@ class AutoscaleManager
     }
 
     /**
-     * Keep a fuse-held queue visible in the log for as long as it is held.
+     * Announce departure so the cluster does not keep counting this host.
      *
-     * Scaling actions are logged when they happen, but a held queue only
-     * scales once — down to workers.min on the trip — and then holds. Without
-     * this, the log falls silent for the rest of the outage, which is exactly
-     * when an operator goes looking for it. Rate-limited the same way SLA
-     * breach risk is, so a long outage produces a periodic line rather than
-     * one per evaluation cycle.
+     * A deliberate stop was previously indistinguishable from a crash: the
+     * heartbeat key lived out its TTL and the registry entry survived until
+     * another manager pruned it, so the leader distributed work to a host that
+     * was already gone — and if this manager WAS the leader, the cluster had
+     * no leader until the lease expired.
+     *
+     * Best-effort by design: shutdown must complete even if Redis is the
+     * reason we are shutting down.
      */
     private function leaveCluster(): void
     {
@@ -172,6 +174,16 @@ class AutoscaleManager
         }
     }
 
+    /**
+     * Keep a fuse-held queue visible in the log for as long as it is held.
+     *
+     * Scaling actions are logged when they happen, but a held queue only
+     * scales once — down to workers.min on the trip — and then holds. Without
+     * this, the log falls silent for the rest of the outage, which is exactly
+     * when an operator goes looking for it. Rate-limited the same way SLA
+     * breach risk is, so a long outage produces a periodic line rather than
+     * one per evaluation cycle.
+     */
     private function logFuseHold(ScalingDecision $decision): void
     {
         if ($decision->capacity?->limitingFactor !== LimitingFactor::Fuse) {

@@ -16,8 +16,14 @@ use Illuminate\Support\Carbon;
  * absorbing reversals whether or not it currently holds the lease.
  *
  * Entries are dropped once a workload has been quiet for longer than the
- * retention window, which bounds memory on an installation that discovers
- * queues per tenant.
+ * retention window.
+ *
+ * That sweep is driven by the last scaling ACTION, so it only bounds memory on
+ * a host that actually scales. A cluster leader records breach state for every
+ * discovered workload but never calls recordScale() — the scaling happens on
+ * the followers — so on a leader the breach map is not currently bounded. That
+ * predates this class and is tracked separately; do not read the sweep as a
+ * guarantee for every caller.
  */
 class WorkloadStateTracker
 {

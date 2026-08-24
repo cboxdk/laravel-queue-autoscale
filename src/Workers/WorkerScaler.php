@@ -103,18 +103,6 @@ class WorkerScaler
         return $headroom;
     }
 
-    /**
-     * Announce departure so the cluster does not keep counting this host.
-     *
-     * A deliberate stop was previously indistinguishable from a crash: the
-     * heartbeat key lived out its TTL and the registry entry survived until
-     * another manager pruned it, so the leader distributed work to a host that
-     * was already gone — and if this manager WAS the leader, the cluster had
-     * no leader until the lease expired.
-     *
-     * Best-effort by design: shutdown must complete even if Redis is the
-     * reason we are shutting down.
-     */
     public function scaleUpGroup(GroupConfiguration $group, ScalingDecision $decision): void
     {
         $draining = $this->pool->liveCountGroup($group->connection, $group->name)
@@ -207,15 +195,6 @@ class WorkerScaler
         ));
     }
 
-    /**
-     * Supervise a non-scalable (pinned) queue: maintain the target worker
-     * count. In non-cluster mode the target is always pinnedCount(). In
-     * cluster mode the leader distributes the pinned count across managers,
-     * so the local target may be 0 (not assigned) or pinnedCount() (assigned).
-     *
-     * Respawns on death, terminates excess. Never evaluates scaling.
-     * Still tracks SLA breach state for observability parity.
-     */
     public function scaleUp(ScalingDecision $decision): void
     {
         // A worker draining toward exit is invisible to count(), which is

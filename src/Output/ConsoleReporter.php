@@ -56,9 +56,4 @@ class ConsoleReporter
 
         return $this->output->isVeryVerbose();
     }
-
-    public function hasOutput(): bool
-    {
-        return $this->output !== null;
-    }
 }
