@@ -239,7 +239,10 @@ tenant presents thousands of them — and a floor multiplied by a set nobody
 bounded is unbounded process creation.
 
 A queue matching no entry in `queues`, neither an exact name nor a glob, is
-given `workers.min = 0` regardless of what `sla_defaults` says. It still
+given `workers.min = 0`. Two exemptions: a non-scalable profile, where
+`workers.scalable = false` requires `min == max` by construction, and a
+defaults block whose own `min` exceeds its `max`, which stays invalid rather
+than being silently repaired. It still
 receives every other default: SLA target, `workers.max`, forecast, spawn
 compensation and fuse. It scales from zero on demand instead of holding an idle
 worker forever, which costs the scale-from-zero overhead described above on its

@@ -17,6 +17,12 @@ implicit floor, name the queues, or restore it wholesale with
 
 ### Changed
 
+- **Requires `ext-mbstring`.** Worker output is truncated on a character
+  boundary rather than a byte boundary, so a multibyte character straddling
+  the cap cannot put invalid UTF-8 into the log channel. The extension is
+  present in every mainstream PHP distribution and Laravel itself requires it;
+  the package simply had not declared what it uses.
+
 - **A queue matching no entry in `queues` gets `workers.min = 0`**, whatever
   `sla_defaults` says. It still receives every other default — SLA target,
   `workers.max`, forecast, spawn compensation, fuse — and scales from zero on

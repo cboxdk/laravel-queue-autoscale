@@ -15,6 +15,7 @@ same commit.
 
 - php — `^8.4|^8.5`
 - ext-pcntl, ext-posix (the manager forks and signals worker processes)
+- ext-mbstring (character-boundary truncation of worker output)
 - cboxdk/laravel-queue-metrics — `^3.3`
 - illuminate/contracts — `^12.0||^13.0`
 - symfony/process — `^7.0||^8.0`

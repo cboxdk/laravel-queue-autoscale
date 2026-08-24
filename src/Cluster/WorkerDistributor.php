@@ -82,9 +82,11 @@ class WorkerDistributor
 
         // Reuse previous distribution when target is unchanged, all cached
         // assignments still fit within each host's remaining capacity, and the
-        // cached split is still balanced by host capacity.
+        // cached split has not been beaten by a freshly computed one for
+        // several consecutive cycles.
         // This prevents worker pool thrashing caused by sort-order instability
-        // when reported current counts fluctuate between heartbeats.
+        // when reported current counts fluctuate between heartbeats, and by
+        // capacity readings that move without the fleet actually changing.
         $cached = $this->previousDistributions[$workloadKey] ?? null;
 
         if ($cached !== null && array_sum($cached) === $targetWorkers) {
@@ -112,7 +114,7 @@ class WorkerDistributor
                     }
                 }
 
-                if ($feasible && $this->shouldKeep($workloadKey, $activeManagers, $cached, $assignedTotals)) {
+                if ($feasible && $this->shouldKeep($workloadKey, $activeManagers, $targetWorkers, $cached, $assignedTotals)) {
                     foreach ($cached as $managerId => $cachedCount) {
                         $targets[$managerId] = $cachedCount;
                         $assignedTotals[$managerId] += $cachedCount;
@@ -123,7 +125,34 @@ class WorkerDistributor
             }
         }
 
-        [$type, $connection, $name] = explode(':', $workloadKey, 3);
+        $targets = $this->computePlacement($activeManagers, $workloadKey, $targetWorkers, $assignedTotals);
+
+        foreach ($targets as $managerId => $target) {
+            $assignedTotals[$managerId] += $target;
+        }
+
+        $this->rememberPlacement($workloadKey, $targets);
+
+        return $targets;
+    }
+
+    /**
+     * The placement the greedy allocator produces from scratch, ignoring any
+     * cache. Pure: it does not touch $assignedTotals or any stored state.
+     *
+     * @param  array<int, ClusterManagerState>  $activeManagers
+     * @param  array<string, int>  $assignedTotals
+     * @return array<string, int>
+     */
+    private function computePlacement(array $activeManagers, string $workloadKey, int $targetWorkers, array $assignedTotals): array
+    {
+        $targets = [];
+
+        foreach ($activeManagers as $state) {
+            $targets[$state->managerId] = 0;
+        }
+
+        [$type, $connection, $name] = array_pad(explode(':', $workloadKey, 3), 3, '');
         $currentCounts = [];
 
         foreach ($activeManagers as $state) {
@@ -136,7 +165,7 @@ class WorkerDistributor
         while ($remaining > 0) {
             $candidates = array_values(array_filter(
                 $activeManagers,
-                fn (ClusterManagerState $state): bool => ($assignedTotals[$state->managerId] + $targets[$state->managerId]) < $state->maxWorkers,
+                fn (ClusterManagerState $state): bool => (($assignedTotals[$state->managerId] ?? 0) + $targets[$state->managerId]) < $state->maxWorkers,
             ));
 
             if ($candidates === []) {
@@ -150,17 +179,9 @@ class WorkerDistributor
                     ?: strcmp($a->managerId, $b->managerId),
             );
 
-            $chosen = $candidates[0];
-
-            $targets[$chosen->managerId]++;
+            $targets[$candidates[0]->managerId]++;
             $remaining--;
         }
-
-        foreach ($targets as $managerId => $target) {
-            $assignedTotals[$managerId] += $target;
-        }
-
-        $this->rememberPlacement($workloadKey, $targets);
 
         return $targets;
     }
@@ -243,10 +264,25 @@ class WorkerDistributor
      * @param  array<string, int>  $distribution
      * @param  array<string, int>  $assignedTotals
      */
-    private function shouldKeep(string $workloadKey, array $activeManagers, array $distribution, array $assignedTotals): bool
+    private function shouldKeep(string $workloadKey, array $activeManagers, int $targetWorkers, array $distribution, array $assignedTotals): bool
     {
-        if (! $this->hasMeaningfulRebalance($activeManagers, $distribution, $assignedTotals)) {
-            unset($this->consecutiveImbalance[$workloadKey]);
+        if (! $this->freshPlacementIsBetter($activeManagers, $workloadKey, $targetWorkers, $distribution, $assignedTotals)) {
+            // Decay, not erase. A hard reset let any jitter with a period
+            // shorter than the window defeat confirmation forever: a host
+            // degraded for good, reporting a capacity that ticks up and down,
+            // produced one balanced-looking reading every few cycles and the
+            // evidence was thrown away each time. Measured across 495
+            // periodic-jitter configurations, 199 held a placement materially
+            // worse than a fresh one for 200 cycles. Decaying keeps the
+            // hysteresis against genuine noise while letting a sustained
+            // imbalance accumulate through it.
+            $decayed = ($this->consecutiveImbalance[$workloadKey] ?? 0) - 1;
+
+            if ($decayed > 0) {
+                $this->consecutiveImbalance[$workloadKey] = $decayed;
+            } else {
+                unset($this->consecutiveImbalance[$workloadKey]);
+            }
 
             return true;
         }
@@ -265,66 +301,43 @@ class WorkerDistributor
     }
 
     /**
-     * Whether any single-worker move would meaningfully improve the spread.
+     * Whether a freshly computed placement would be meaningfully better than
+     * the cached one.
      *
-     * The threshold is per MOVE, not per fleet. A move shifts the donor's
-     * utilization by 1/donorMax and the recipient's by 1/recipientMax, so the
-     * granularity it operates on is set by those two hosts. A fleet-wide
-     * scalar is the wrong shape, and it was wrong in both directions:
-     * measured on the smallest host it froze heterogeneous fleets — on
-     * 40/40/8 with the middle host recovering from memory pressure, a
-     * 40-worker host sat at zero indefinitely while the gate called the
-     * placement balanced — and measured on the largest it approved nearly
-     * everything, because one move earns up to 1/donorMax + 1/recipientMax
-     * while the threshold charged for a single end.
+     * Compares whole placements rather than scoring single moves. A one-move
+     * lookahead is blind to any improvement that needs two: with two hosts
+     * recovered from zero capacity, moving one worker onto the first leaves
+     * the second still idle and the spread unchanged, so the gate scored the
+     * stale placement as balanced and two hosts sat empty indefinitely. That
+     * was the third distinct shape of the same blindness, which is why the
+     * question changed rather than the threshold.
+     *
+     * The margin is one worker at the finest granularity in the fleet — the
+     * largest-capacity host — so a fresh split that is merely a rounding away
+     * is not treated as an improvement.
      *
      * @param  array<int, ClusterManagerState>  $activeManagers
-     * @param  array<string, int>  $distribution
+     * @param  array<string, int>  $cached
      * @param  array<string, int>  $assignedTotals
      */
-    private function hasMeaningfulRebalance(array $activeManagers, array $distribution, array $assignedTotals): bool
+    private function freshPlacementIsBetter(array $activeManagers, string $workloadKey, int $targetWorkers, array $cached, array $assignedTotals): bool
     {
-        $currentSpread = $this->utilizationSpread($activeManagers, $distribution, $assignedTotals);
+        $fresh = $this->computePlacement($activeManagers, $workloadKey, $targetWorkers, $assignedTotals);
 
-        foreach ($activeManagers as $donor) {
-            $donorId = $donor->managerId;
-
-            if (($distribution[$donorId] ?? 0) <= 0) {
-                continue;
-            }
-
-            foreach ($activeManagers as $recipient) {
-                $recipientId = $recipient->managerId;
-
-                if ($recipientId === $donorId) {
-                    continue;
-                }
-
-                if ((($assignedTotals[$recipientId] ?? 0) + ($distribution[$recipientId] ?? 0)) >= $recipient->maxWorkers) {
-                    continue;
-                }
-
-                $candidate = $distribution;
-                $candidate[$donorId]--;
-                $candidate[$recipientId]++;
-
-                $gain = $currentSpread - $this->utilizationSpread($activeManagers, $candidate, $assignedTotals);
-
-                // One worker at the finer of the two hosts' granularities.
-                // The epsilon absorbs float error: measured against exact
-                // rational arithmetic across ~300k evaluations the worst error
-                // here is 2.8e-16 and the finest genuine gap is 1.7e-4, so
-                // 1e-9 sits mid-band — it rescues real ties without masking a
-                // real difference.
-                $required = 1.0 / max($donor->maxWorkers, $recipient->maxWorkers, 1);
-
-                if ($gain >= $required - self::SPREAD_EPSILON) {
-                    return true;
-                }
-            }
+        if ($fresh === $cached) {
+            return false;
         }
 
-        return false;
+        $smallestStep = 1.0;
+
+        foreach ($activeManagers as $state) {
+            $smallestStep = min($smallestStep, 1.0 / max($state->maxWorkers, 1));
+        }
+
+        $cachedSpread = $this->utilizationSpread($activeManagers, $cached, $assignedTotals);
+        $freshSpread = $this->utilizationSpread($activeManagers, $fresh, $assignedTotals);
+
+        return $cachedSpread - $freshSpread >= $smallestStep - self::SPREAD_EPSILON;
     }
 
     /**

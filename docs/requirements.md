@@ -22,6 +22,7 @@ Before installing Queue Autoscale for Laravel, ensure your environment meets the
 |---|---|---|
 | `ext-pcntl` | Yes | The manager installs signal handlers so it can shut down gracefully instead of orphaning its workers. |
 | `ext-posix` | Yes | Worker termination and the manager process lock deliver signals by PID. |
+| `ext-mbstring` | Yes | Worker output is truncated on a character boundary, so a multibyte character straddling the cap cannot put invalid UTF-8 into the log channel. |
 | `phpredis` *or* `predis/predis` | Cluster mode only | Redis connectivity for leader election and cross-host coordination. |
 
 Both required extensions are enforced by Composer. They are present in most PHP CLI builds but are commonly **absent from the official `php:*-fpm` and Alpine Docker images** — build them in, or the manager will fail to start.

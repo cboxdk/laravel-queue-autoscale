@@ -159,7 +159,10 @@ it('continues evaluating remaining queues when one queue fails to reconcile on a
     // failure isolation, and leaning on the implicit floor a discovered queue
     // used to inherit made it depend on the host having spare capacity — the
     // engine clamps to measured CPU/memory before any floor applies.
-    config()->set('queue-autoscale.queues', ['default' => ['workers' => ['min' => 1, 'max' => 5]]]);
+    config()->set('queue-autoscale.queues', [
+        'default' => ['workers' => ['min' => 1, 'max' => 5]],
+        'poison' => ['workers' => ['min' => 1, 'max' => 5]],
+    ]);
 
     spawnerThatFailsFor(['poison']);
     Event::fake([WorkersScaled::class]);

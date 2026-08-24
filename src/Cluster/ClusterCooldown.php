@@ -27,8 +27,15 @@ class ClusterCooldown
     /** @var array<string, string> */
     private array $lastScaleDirection = [];
 
-    /** @var array<string, int> */
-    private array $lastPublishedTargets = [];
+    /**
+     * The target each workload was last ALLOWED, which is not always the one
+     * published: a hold publishes min(remembered, running) so it can never
+     * answer a scale-down with a scale-up, while the memory keeps the
+     * remembered figure so one transient dip cannot ratchet the hold down.
+     *
+     * @var array<string, int>
+     */
+    private array $lastAllowedTargets = [];
 
     public function apply(
         string $workloadKey,
@@ -57,14 +64,14 @@ class ClusterCooldown
                 // the opposite of damping. Single-host mode has no equivalent
                 // hazard because it holds by declining to act; the cluster path
                 // publishes a number that hosts actively converge toward.
-                $remembered = max(0, $this->lastPublishedTargets[$workloadKey] ?? $currentWorkers);
+                $remembered = max(0, $this->lastAllowedTargets[$workloadKey] ?? $currentWorkers);
 
                 // The memory keeps the remembered target; only what is
                 // PUBLISHED is clamped. Writing the clamped value back would
                 // ratchet: one transient dip in reported workers — a crash, a
                 // host leaving, a heartbeat lagging behind a spawn — would
                 // lower the hold for the rest of the window and never recover.
-                $this->lastPublishedTargets[$workloadKey] = $remembered;
+                $this->lastAllowedTargets[$workloadKey] = $remembered;
 
                 return new CooldownDecision(min($remembered, $currentWorkers), wasHeld: true);
             }
@@ -90,7 +97,7 @@ class ClusterCooldown
     {
         $this->lastScaleTime = array_intersect_key($this->lastScaleTime, $currentWorkloads);
         $this->lastScaleDirection = array_intersect_key($this->lastScaleDirection, $currentWorkloads);
-        $this->lastPublishedTargets = array_intersect_key($this->lastPublishedTargets, $currentWorkloads);
+        $this->lastAllowedTargets = array_intersect_key($this->lastAllowedTargets, $currentWorkloads);
     }
 
     /**
@@ -101,7 +108,7 @@ class ClusterCooldown
     {
         $this->lastScaleTime = [];
         $this->lastScaleDirection = [];
-        $this->lastPublishedTargets = [];
+        $this->lastAllowedTargets = [];
     }
 
     private function remember(string $workloadKey, string $direction, int $targetWorkers): void
@@ -111,7 +118,7 @@ class ClusterCooldown
             $this->lastScaleDirection[$workloadKey] = $direction;
         }
 
-        $this->lastPublishedTargets[$workloadKey] = $targetWorkers;
+        $this->lastAllowedTargets[$workloadKey] = $targetWorkers;
     }
 
     private function inCooldown(string $workloadKey, int $cooldownSeconds): bool

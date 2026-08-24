@@ -92,8 +92,15 @@ readonly class QueueConfiguration
         // every falsy non-false value. 'scalable' => 0 slipped past a strict
         // check, had its floor zeroed, and then threw on the cast.
         $scalable = (bool) ($merged['workers']['scalable'] ?? true);
+        $configuredMin = $merged['workers']['min'];
+        $configuredMax = $merged['workers']['max'];
 
-        if ($scalable && QueueConfigResolver::matchedRuleFor($queue) === null) {
+        // Only withdraw a floor that was valid to begin with. Zeroing min ahead
+        // of the constructor would otherwise swallow a broken sla_defaults —
+        // min 5 with max 3 throws for a named queue and silently became
+        // min 0, max 3 for a discovered one, so the same config was rejected
+        // in one place and quietly accepted in another.
+        if ($scalable && $configuredMin <= $configuredMax && QueueConfigResolver::matchedRuleFor($queue) === null) {
             $merged['workers']['min'] = 0;
         }
 

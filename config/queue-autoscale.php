@@ -51,8 +51,11 @@ return [
     | Queues are DISCOVERED from metrics, not registered, so an application
     | that mints a queue name per tenant presents thousands of them. A queue
     | matching no entry above — neither an exact name nor a glob — is given
-    | 'workers.min' => 0 regardless of what sla_defaults says, because a floor
-    | multiplied by a set nobody bounded is unbounded process creation. Such a
+    | 'workers.min' => 0, because a floor multiplied by a set nobody bounded is
+    | unbounded process creation. Two exemptions: a non-scalable profile, where
+    | scalable=false requires min == max by construction, and a defaults block
+    | whose own min exceeds its max, which must stay invalid rather than be
+    | silently repaired. Such a
     | queue still gets every other default: SLA target, max, forecast, spawn
     | compensation and fuse. It scales from zero on demand instead of holding
     | an idle worker forever.

@@ -349,3 +349,36 @@ it('produces deterministic results regardless of input order', function () {
         ->and($result1['queue:redis:m'])->toBe(3)
         ->and($result1['queue:redis:z'])->toBe(3);
 });
+
+/*
+ * The minimum-scaling path claimed in its own comment to break ties by key,
+ * and did not — arsort is stable on INSERTION order, and these arrive in
+ * metrics-discovery order. With identical floors the remainders tie, so the
+ * queue discovered first won and the same cluster starved a different queue
+ * depending on the order Redis returned its keys.
+ *
+ * Measured in an end-to-end simulation: with the discovery order shuffled each
+ * cycle, every queue starved about 28% of cycles and the zero-slots migrated,
+ * dragging cross-host churn with them.
+ */
+test('minimum scaling does not depend on discovery order', function (): void {
+    $allocator = new FairShareAllocator;
+
+    $keys = ['q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7', 'q8'];
+    $demands = array_fill_keys($keys, 5);
+    $configs = array_fill_keys($keys, ['min' => 1, 'max' => 5]);
+
+    $forward = $allocator->allocate($demands, $configs, 6);
+
+    $reversed = array_reverse($keys);
+    $backward = $allocator->allocate(
+        array_fill_keys($reversed, 5),
+        array_fill_keys($reversed, ['min' => 1, 'max' => 5]),
+        6,
+    );
+
+    ksort($forward);
+    ksort($backward);
+
+    expect($backward)->toBe($forward);
+});

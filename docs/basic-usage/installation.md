@@ -17,6 +17,7 @@ From the package's `composer.json`:
 | PHP | `^8.4 \| ^8.5` |
 | `ext-pcntl` | required — the manager uses POSIX signals |
 | `ext-posix` | required — worker liveness checks and termination |
+| `ext-mbstring` | required — character-boundary truncation of worker output |
 | `illuminate/contracts` | `^12.0 \|\| ^13.0` |
 | `cboxdk/laravel-queue-metrics` | `^3.0` |
 | `symfony/process` | `^7.0 \|\| ^8.0` |

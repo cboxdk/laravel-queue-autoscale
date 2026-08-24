@@ -55,29 +55,49 @@ test('the identity still resolves when no application is booted', function (): v
  * The reaper matches this id exactly, so it has to survive a deploy: a
  * restarted manager must recognise its predecessor's workers. Anything derived
  * from base_path() fails that — PHP resolves symlinks, so on a
- * releases/<timestamp> layout the path changes every release, which would have
- * traded over-reaping for silently under-reaping.
+ * releases/<timestamp> layout the path changes every release, which would
+ * trade over-reaping for silently under-reaping.
  *
- * Asserted on the derivation rather than by calling twice, which any
- * deterministic implementation passes including the one this replaced.
+ * Asserted as an exact terminal segment rather than a substring. The
+ * derivation this replaced produced 'app=<name>-<env>-<hash-of-base-path>',
+ * which CONTAINS the name and env — so a containment assertion passed against
+ * the very code it was written to reject.
  */
-test('the application scope is derived from config, not from the filesystem', function (): void {
+function appScopeOf(string $source): string
+{
+    $parts = explode('|', $source);
+
+    return end($parts);
+}
+
+test('the application scope is exactly the app name and environment', function (): void {
     config()->set('app.name', 'Invoicing Service');
     config()->set('app.env', 'production');
 
-    expect(identitySource())->toContain('app=invoicing-service-production');
+    // Length-prefixed so ('foo-bar','baz') and ('foo','bar-baz') cannot collide.
+    expect(appScopeOf(identitySource()))->toBe('app=17:Invoicing Service:10:production');
 });
 
-test('the application scope moves with the app, not with the release path', function (): void {
+test('the application scope carries no hash of the release path', function (): void {
     config()->set('app.name', 'invoicing');
-    config()->set('app.env', 'staging');
-    $staging = identitySource();
-
     config()->set('app.env', 'production');
 
-    expect(identitySource())->not->toBe($staging)
-        ->and($staging)->not->toContain(sha1(base_path()))
-        ->and($staging)->not->toContain(substr(sha1(base_path()), 0, 12));
+    $source = identitySource();
+
+    expect($source)->not->toContain(sha1(base_path()))
+        ->and($source)->not->toContain(substr(sha1(base_path()), 0, 12))
+        ->and(appScopeOf($source))->not->toContain(basename(base_path()));
+});
+
+test('two apps whose name and environment split differently do not collide', function (): void {
+    config()->set('app.name', 'foo-bar');
+    config()->set('app.env', 'baz');
+    $first = identitySource();
+
+    config()->set('app.name', 'foo');
+    config()->set('app.env', 'bar-baz');
+
+    expect(identitySource())->not->toBe($first);
 });
 
 /*

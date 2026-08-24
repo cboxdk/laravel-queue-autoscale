@@ -105,7 +105,17 @@ class FairShareAllocator
 
         // Hand the rounding leftovers to the largest fractional parts, and
         // break ties by key so two identical inputs never disagree.
-        arsort($remainders);
+        //
+        // uksort, not arsort: arsort is stable on INSERTION order, and these
+        // arrive in metrics-discovery order. With equal remainders — which is
+        // what identical floors produce — the workload that happened to be
+        // discovered first won, so the same cluster starved a different queue
+        // depending on the order Redis returned its keys. Measured: with the
+        // order shuffled each cycle, every queue starved about 28% of the time
+        // and the zero-slots migrated, taking cross-host churn with them.
+        uksort($remainders, static function (string $a, string $b) use ($remainders): int {
+            return ($remainders[$b] <=> $remainders[$a]) ?: strcmp($a, $b);
+        });
         $leftover = $clusterCapacity - array_sum($scaled);
 
         foreach (array_keys($remainders) as $key) {

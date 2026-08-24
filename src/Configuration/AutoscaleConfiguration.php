@@ -108,7 +108,14 @@ readonly class AutoscaleConfiguration
         $appName = self::stringConfig('app.name', 'laravel');
         $appEnv = self::stringConfig('app.env', 'production');
 
-        return Str::slug($appName, '-').'-'.$appEnv;
+        // Length-prefixed rather than joined by a separator. Slugging and
+        // gluing with a dash makes ('foo-bar', 'baz') and ('foo', 'bar-baz')
+        // collide on 'foo-bar-baz' — two distinct applications deriving one
+        // manager id, which is the collision this scope exists to prevent.
+        //
+        // Colons, not a pipe: the identity source itself is pipe-separated, so
+        // a pipe here would make the source ambiguous to read back.
+        return sprintf('%d:%s:%d:%s', strlen($appName), $appName, strlen($appEnv), $appEnv);
     }
 
     public static function restartScopeId(): string
