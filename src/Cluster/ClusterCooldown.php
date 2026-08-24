@@ -57,11 +57,16 @@ class ClusterCooldown
                 // the opposite of damping. Single-host mode has no equivalent
                 // hazard because it holds by declining to act; the cluster path
                 // publishes a number that hosts actively converge toward.
-                $remembered = $this->lastPublishedTargets[$workloadKey] ?? $currentWorkers;
-                $held = max(0, min($remembered, $currentWorkers));
-                $this->lastPublishedTargets[$workloadKey] = $held;
+                $remembered = max(0, $this->lastPublishedTargets[$workloadKey] ?? $currentWorkers);
 
-                return new CooldownDecision($held, wasHeld: true);
+                // The memory keeps the remembered target; only what is
+                // PUBLISHED is clamped. Writing the clamped value back would
+                // ratchet: one transient dip in reported workers — a crash, a
+                // host leaving, a heartbeat lagging behind a spawn — would
+                // lower the hold for the rest of the window and never recover.
+                $this->lastPublishedTargets[$workloadKey] = $remembered;
+
+                return new CooldownDecision(min($remembered, $currentWorkers), wasHeld: true);
             }
 
             if ($isBreachScaleUp) {

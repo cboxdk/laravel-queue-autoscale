@@ -366,29 +366,12 @@ class ConfigurationDoctor
             // Ask the resolver rather than matching here, so this reports the
             // rule that actually wins — an exact name beats a glob, and the
             // first glob listed beats later ones.
-            if ($this->winningRuleFor($queue) === $rule) {
+            if (QueueConfigResolver::matchedRuleFor($queue) === $rule) {
                 $governed[] = $queue;
             }
         }
 
         return $governed;
-    }
-
-    private function winningRuleFor(string $queue): ?string
-    {
-        $rules = $this->configuredRules();
-
-        if (array_key_exists($queue, $rules)) {
-            return $queue;
-        }
-
-        foreach ($rules as $rule => $_) {
-            if (QueueConfigResolver::isPattern($rule) && fnmatch($rule, $queue)) {
-                return $rule;
-            }
-        }
-
-        return null;
     }
 
     /**

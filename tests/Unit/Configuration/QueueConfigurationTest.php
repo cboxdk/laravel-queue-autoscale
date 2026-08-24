@@ -105,3 +105,23 @@ test('a non-scalable default profile keeps its floor for unmatched queues', func
         ->and($cfg->workers->min)->toBe($cfg->workers->max)
         ->and($cfg->workers->min)->toBeGreaterThan(0);
 });
+
+/*
+ * The floor guard and the constructor must read workers.scalable the same
+ * way. Reading one strictly and casting the other made them disagree on every
+ * falsy non-false value: 'scalable' => 0 slipped past a strict check, had its
+ * floor zeroed, and then threw on the cast.
+ */
+test('the floor guard agrees with the constructor on every falsy scalable value', function (mixed $scalable): void {
+    $defaults = (new BalancedProfile)->resolve();
+    $defaults['workers']['min'] = 4;
+    $defaults['workers']['max'] = 4;
+    $defaults['workers']['scalable'] = $scalable;
+
+    config()->set('queue-autoscale.sla_defaults', $defaults);
+    config()->set('queue-autoscale.queues', []);
+
+    $cfg = QueueConfiguration::fromConfig('redis', 'discovered');
+
+    expect($cfg->workers->min)->toBe($cfg->workers->scalable ? 0 : 4);
+})->with([[0], [false], [null], [''], ['0']]);

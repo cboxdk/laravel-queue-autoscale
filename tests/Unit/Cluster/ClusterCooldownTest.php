@@ -297,3 +297,21 @@ test('a hold still damps when the fleet did reach the published target', functio
     expect($decision->wasHeld)->toBeTrue()
         ->and($decision->targetWorkers)->toBe(22, 'the damping itself must be unchanged');
 });
+
+/*
+ * The hold clamps what is PUBLISHED, not what is remembered. Writing the
+ * clamped value back would ratchet: one transient dip in reported workers — a
+ * crash, a host leaving, a heartbeat lagging behind a spawn — would lower the
+ * hold for the rest of the window and never recover.
+ */
+test('a transient dip in running workers does not permanently lower the hold', function (): void {
+    $cooldown = new ClusterCooldown;
+
+    $cooldown->apply('queue:redis:exports', 0, 10, false, 60);
+
+    $dip = $cooldown->apply('queue:redis:exports', 3, 1, false, 60);
+    $recovered = $cooldown->apply('queue:redis:exports', 10, 1, false, 60);
+
+    expect($dip->targetWorkers)->toBe(3, 'never publishes above what is running')
+        ->and($recovered->targetWorkers)->toBe(10, 'the remembered target survives the dip');
+});

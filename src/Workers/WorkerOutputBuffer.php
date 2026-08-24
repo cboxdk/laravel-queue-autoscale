@@ -120,7 +120,12 @@ class WorkerOutputBuffer
             // Truncating loses the tail of one pathological line; not
             // truncating loses the manager.
             if (strlen($partial) > self::MAX_PARTIAL_LINE_BYTES) {
-                $lines[] = substr($partial, 0, self::MAX_PARTIAL_LINE_BYTES).' …[truncated]';
+                // Cut on a character boundary. Worker output is application
+                // log text, so a byte-wise substr can land mid-sequence and
+                // emit invalid UTF-8 into the log channel. mb_strcut respects
+                // the boundary and still counts bytes, which is what the cap
+                // is denominated in.
+                $lines[] = mb_strcut($partial, 0, self::MAX_PARTIAL_LINE_BYTES, 'UTF-8').' …[truncated]';
                 $partial = '';
             }
 

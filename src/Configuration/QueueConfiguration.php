@@ -87,9 +87,13 @@ readonly class QueueConfiguration
         // non-scalable profile is an explicit statement that every queue runs
         // a fixed worker count — unlike the shipped BalancedProfile, which is
         // merely what you get by not choosing.
-        $scalable = $merged['workers']['scalable'] ?? true;
+        // Cast, not a strict comparison: the constructor below casts the same
+        // value, and reading it two different ways here made them disagree on
+        // every falsy non-false value. 'scalable' => 0 slipped past a strict
+        // check, had its floor zeroed, and then threw on the cast.
+        $scalable = (bool) ($merged['workers']['scalable'] ?? true);
 
-        if ($scalable !== false && QueueConfigResolver::matchedRuleFor($queue) === null) {
+        if ($scalable && QueueConfigResolver::matchedRuleFor($queue) === null) {
             $merged['workers']['min'] = 0;
         }
 

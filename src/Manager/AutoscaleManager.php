@@ -757,7 +757,11 @@ class AutoscaleManager
                 if (! $config->workers->scalable) {
                     $rawMetrics = $this->metricsAdapter->forQueue($connection, $queue);
                     $metrics = QueueMetricsData::fromArray($this->metricsAdapter->mapFields($rawMetrics));
-                    $this->superviseQueue($config, $metrics, $target);
+
+                    // Clamped like the scalable paths. A pinned queue's max IS
+                    // its pinned count, so an unclamped recommendation could
+                    // ask a max-1 queue for thousands.
+                    $this->superviseQueue($config, $metrics, $this->clampToLocalMax($target, $config->workers->max));
 
                     continue;
                 }

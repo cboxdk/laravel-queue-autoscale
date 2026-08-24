@@ -172,3 +172,13 @@ it('leaves a normal partial line untouched by the cap', function (): void {
 
     expect($this->buffer->collectOutput([$worker]))->toBe([101 => ['a short partial line']]);
 });
+
+it('truncates on a character boundary, not a byte boundary', function (): void {
+    // A multibyte character straddling the cap: a byte-wise cut emits half of
+    // it and puts invalid UTF-8 into the log channel.
+    $worker = bufferedOutputWorker(101, stdoutChunks: [str_repeat('a', 65535).'é']);
+
+    $lines = $this->buffer->collectOutput([$worker]);
+
+    expect(mb_check_encoding($lines[101][0], 'UTF-8'))->toBeTrue();
+});
