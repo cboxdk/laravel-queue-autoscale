@@ -120,6 +120,21 @@ class AutoscaleManager
      */
     private array $previousDistributions = [];
 
+    /**
+     * Anti-flapping state for the leader's published targets, mirroring the
+     * single-host $lastScaleTime/$lastScaleDirection pair but keyed by
+     * workload key. Leader working memory: discarded on leadership change.
+     *
+     * @var array<string, Carbon>
+     */
+    private array $lastClusterScaleTime = [];
+
+    /** @var array<string, string> */
+    private array $lastClusterScaleDirection = [];
+
+    /** @var array<string, int> Previously published cluster-wide targets */
+    private array $lastPublishedClusterTargets = [];
+
     /** Whether this manager held the lease on the previous cycle. */
     private bool $wasLeader = false;
 
@@ -631,6 +646,9 @@ class AutoscaleManager
         foreach ($adjustedTargets as $workloadKey => $targetWorkers) {
             $meta = $workloadMeta[$workloadKey];
             $currentWorkers = $meta['current_workers'];
+            $slaTarget = $meta['config']->sla->targetSeconds;
+            $isBreaching = $meta['metrics']->oldestJobAge > 0 && $meta['metrics']->oldestJobAge >= $slaTarget;
+            $targetWorkers = $this->applyClusterCooldown($workloadKey, $currentWorkers, $targetWorkers, $isBreaching);
             $workloadAssignments = $this->distributeClusterTarget($activeManagers, $workloadKey, $targetWorkers, $assignedTotals);
 
             foreach ($workloadAssignments as $managerId => $target) {
@@ -695,8 +713,6 @@ class AutoscaleManager
             // as it acts.
 
             // SLA breach/recovery tracking
-            $slaTarget = $meta['config']->sla->targetSeconds;
-            $isBreaching = $meta['metrics']->oldestJobAge > 0 && $meta['metrics']->oldestJobAge >= $slaTarget;
             $breachKey = ($meta['type'] === 'group' ? 'group:' : '')."{$meta['connection']}:{$meta['name']}";
             $wasBreaching = $this->breachState[$breachKey] ?? false;
 
@@ -727,11 +743,15 @@ class AutoscaleManager
             }
         }
 
-        // Prune cached distributions for workloads no longer present
+        // Prune cached distributions and cooldown state for workloads no
+        // longer present
         $this->previousDistributions = array_intersect_key(
             $this->previousDistributions,
             $adjustedTargets,
         );
+        $this->lastClusterScaleTime = array_intersect_key($this->lastClusterScaleTime, $adjustedTargets);
+        $this->lastClusterScaleDirection = array_intersect_key($this->lastClusterScaleDirection, $adjustedTargets);
+        $this->lastPublishedClusterTargets = array_intersect_key($this->lastPublishedClusterTargets, $adjustedTargets);
 
         $issuedAt = $this->currentTimestamp();
         $leaderToken = $this->clusterStore->leaderToken();
@@ -1220,6 +1240,15 @@ class AutoscaleManager
     {
         if ($isLeader && ! $this->wasLeader) {
             $this->previousDistributions = [];
+
+            // The cooldown memory is the same kind of stale working memory as
+            // the distribution cache: another leader has been publishing in
+            // between, so directions and targets remembered from the previous
+            // lease describe a cluster that no longer exists. The cost of a
+            // failover is one undamped cycle.
+            $this->lastClusterScaleTime = [];
+            $this->lastClusterScaleDirection = [];
+            $this->lastPublishedClusterTargets = [];
         }
 
         $this->wasLeader = $isLeader;
@@ -2922,6 +2951,72 @@ class AutoscaleManager
         ));
 
         $this->lastObservedManagerIds = $managerIds;
+    }
+
+    /**
+     * Damp direction reversals in the leader's published targets.
+     *
+     * The single-host paths damp reversals through the cooldown in
+     * evaluateQueue()/evaluateGroup(), but the cluster path had no
+     * equivalent: the leader recomputed and republished every workload's
+     * target each cycle, and every host executed each swing as real spawns
+     * and kills. A demand signal that oscillates cycle-to-cycle (a
+     * wave-dispatched backlog draining and refilling) therefore thrashed
+     * the cluster-wide worker count on the evaluation cadence, where a
+     * single host would have absorbed the reversals.
+     *
+     * Damped here on the leader, before distribution, so the whole cluster
+     * acts on one damped decision instead of each host damping its own
+     * share independently. Semantics mirror the single-host guard: only a
+     * direction reversal inside scaling.cooldown_seconds is held, the last
+     * direction goes stale once the window elapses, and a scale-up during
+     * an SLA breach always passes.
+     */
+    private function applyClusterCooldown(string $workloadKey, int $currentWorkers, int $targetWorkers, bool $isBreaching): int
+    {
+        $currentDirection = $targetWorkers > $currentWorkers ? 'up' : ($targetWorkers < $currentWorkers ? 'down' : 'hold');
+        $lastDirection = $this->lastClusterScaleDirection[$workloadKey] ?? null;
+
+        $cooldownSeconds = $this->clusterInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
+
+        if ($lastDirection !== null && ! $this->inClusterCooldown($workloadKey, $cooldownSeconds)) {
+            unset($this->lastClusterScaleDirection[$workloadKey]);
+            $lastDirection = null;
+        }
+
+        if ($currentDirection !== 'hold' && $lastDirection !== null && $currentDirection !== $lastDirection) {
+            $isBreachScaleUp = $currentDirection === 'up' && $isBreaching;
+
+            if (! $isBreachScaleUp && $this->inClusterCooldown($workloadKey, $cooldownSeconds)) {
+                $held = max(0, $this->lastPublishedClusterTargets[$workloadKey] ?? $currentWorkers);
+                $this->lastPublishedClusterTargets[$workloadKey] = $held;
+                $this->verbose("  ⏸️  Anti-flapping: holding {$workloadKey} at {$held} during cooldown", 'debug');
+
+                return $held;
+            }
+
+            if ($isBreachScaleUp) {
+                $this->verbose('  🚨 SLA breach override: bypassing anti-flapping cooldown for cluster scale-up', 'warn');
+            }
+        }
+
+        if ($currentDirection !== 'hold') {
+            $this->lastClusterScaleTime[$workloadKey] = now();
+            $this->lastClusterScaleDirection[$workloadKey] = $currentDirection;
+        }
+
+        $this->lastPublishedClusterTargets[$workloadKey] = $targetWorkers;
+
+        return $targetWorkers;
+    }
+
+    private function inClusterCooldown(string $workloadKey, int $cooldownSeconds): bool
+    {
+        if (! isset($this->lastClusterScaleTime[$workloadKey])) {
+            return false;
+        }
+
+        return $this->lastClusterScaleTime[$workloadKey]->diffInSeconds(now()) < $cooldownSeconds;
     }
 
     private function inCooldown(string $key, int $cooldownSeconds): bool
