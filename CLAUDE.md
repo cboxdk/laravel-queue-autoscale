@@ -1,121 +1,221 @@
-# Queue Metrics for Laravel - Development Guidelines
+# Queue Autoscale for Laravel - Development Guidelines
 
 ## Foundational Context
-This is a Laravel package for queue monitoring with metrics, analytics, and insights. You are an expert with all the packages and versions listed below. Ensure you abide by these specific packages & versions.
 
-- php - ^8.3|^8.4
-- laravel/framework - ^11.0
-- cboxdk/system-metrics - ^1.2
-- spatie/laravel-package-tools - ^1.16
-- spatie/laravel-prometheus - ^1.3
-- laravel/pint - ^1.14
-- pestphp/pest - ^4.0
-- orchestra/testbench - ^9.14
-- larastan/larastan - ^3.0
+This is a Laravel **package** — SLA-driven autoscaling for queue workers. It runs a
+long-lived manager process that spawns and terminates `queue:work` children to hold a
+pickup-time SLA, on a single host or across a cluster of managers coordinating through
+Redis. It is a framework library, not an application: no UI, no models, no migrations.
+
+You are an expert with all the packages and versions listed below. These are the real
+constraints from `composer.json` — if you change a constraint, update this list in the
+same commit.
+
+### Runtime requirements
+
+- php — `^8.4|^8.5`
+- ext-pcntl, ext-posix (the manager forks and signals worker processes)
+- cboxdk/laravel-queue-metrics — `^3.3`
+- illuminate/contracts — `^12.0||^13.0`
+- symfony/process — `^7.0||^8.0`
+
+### Development requirements
+
+- orchestra/testbench — `^10.0.0||^11.0.0`
+- pestphp/pest — `^4.4.1` (plus `pest-plugin-arch`, `pest-plugin-laravel`)
+- larastan/larastan — `^3.0`
+- laravel/pint — `^1.14`
+- cboxdk/laravel-telemetry — `^1.2.0` (dev + `suggest` only, never a hard dependency)
+- aws/aws-sdk-php — `^3.390` (dev only, for the SQS integration specs)
+
+### Laravel version support
+
+The package must install on the **current and previous** Laravel major, so
+`illuminate/contracts` carries both and CI runs a matrix over both majors × PHP 8.4/8.5
+× `prefer-lowest`/`prefer-stable`. Before touching any constraint, check the real
+current major on Packagist — never assume, and never copy a sibling package's pin.
+Companion tooling tracks its own parent, not Laravel: PHPUnit follows Pest, so read the
+intended version's actual `require` before bumping it.
 
 ## Conventions
-- You must follow all existing code conventions used in this package. When creating or editing a file, check sibling files for the correct structure, approach, naming.
-- Use descriptive names for variables and methods. For example, `isRegisteredForDiscounts`, not `discount()`.
-- Check for existing components to reuse before writing a new one.
+
+- Follow the existing code conventions in this package. When creating or editing a file,
+  check sibling files for structure, approach, and naming.
+- Use descriptive names for variables and methods — `isRegisteredForDiscounts`, not
+  `discount()`.
+- Check for an existing component to reuse before writing a new one.
 
 ## Package Structure & Architecture
-- This is a Laravel package, not an application. Use package development best practices.
-- Stick to existing directory structure - don't create new base folders without approval.
-- Do not change the package's dependencies without approval.
-- Main source code goes in `src/`, tests in `tests/`, config in `config/`
-- Use Spatie's Laravel Package Tools conventions for service provider setup
+
+- Source in `src/`, tests in `tests/`, config in `config/`, docs in `docs/`.
+- Stick to the existing directory structure — don't create new base folders without
+  approval. The modules are: `Alerting`, `Cluster`, `Commands`, `Configuration`,
+  `Contracts`, `Diagnostics`, `Events`, `Facades`, `Fuse`, `Manager`, `Output`,
+  `Pickup`, `Policies`, `Scaling`, `Support`, `Telemetry`, `Testing`, `Workers`.
+- Do not change dependencies without approval.
+- The service provider is a plain `Illuminate\Support\ServiceProvider`. This package does
+  **not** use `spatie/laravel-package-tools`, and new third-party runtime dependencies
+  need a confirmed reason — default to plain Illuminate and native PHP.
+
+### Contracts-first DI
+
+Every capability is an interface under `Contracts\` bound in the service provider and
+resolved from the container. Depend on the interface, never the concrete class — that is
+what makes the shipped fakes and host overrides possible. There are twelve contracts;
+`ScalingStrategyContract`, `ClusterStoreContract`, `ScalingPolicy` and
+`SpawnLatencyTrackerContract` are the ones consumers most often implement.
+
+### Classes stay open
+
+Consumers must be able to extend, decorate, fake or mock what the package ships, so
+package classes are **not** `final`. `tests/ArchTest.php` asserts this, with an ignore
+list containing only enums (implicitly final in PHP). Configuration value objects are
+`readonly` — immutability is enforced, sealing is not. Do not add `final` to a class
+without changing that arch test deliberately.
+
+### Typed domain models, not arrays
+
+Model domain data as typed value objects and enums. Arrays are acceptable only at true
+serialization boundaries — Redis payloads in `Cluster\ClusterStore`, config arrays in
+`Commands\MigrateConfigCommand`, the metrics arrays `laravel-queue-metrics` returns.
+Parse into typed objects on the way in and serialize back only at the edge. Do not add
+new `array<string, mixed>` bags to the domain; several already exist and are debt, not
+precedent.
+
+### Telemetry stays optional
+
+`cboxdk/laravel-telemetry` is dev-only and listed under `suggest`. Every telemetry code
+path is guarded by `class_exists(TelemetryManager::class)`. A library must not force an
+observability runtime on its host — keep it that way.
+
+## Configuration
+
+- Configuration is publishable via the service provider.
+- Use `env()` **only** in `config/queue-autoscale.php`, never in `src/`.
+- Read configuration as `config('queue-autoscale.key')`.
+- One exception, and it is deliberate: container-identity lookups in `src/` call
+  `getenv()` directly, because they must read the live process rather than a cached
+  config value. `phpstan.neon.dist` disables larastan's `noEnvCallsOutsideOfConfig` for
+  this reason alone.
 
 ## Verification & Testing
-- Tests are critical for package development. Always write tests for new features.
-- Do not create verification scripts when tests cover that functionality.
 
-## Documentation Files
-- You must only create documentation files if explicitly requested by the user.
+Tests are critical for package development. Always write tests for new features, covering
+happy paths, failure paths, and edge cases. Do not create verification scripts when tests
+cover the functionality. Do not remove tests or test files without approval.
+
+### Dogfood the testing surface
+
+`src/Testing/` ships `InteractsWithAutoscaling`, `FakeClusterStore`,
+`InMemoryFailureWindowStore` and `QueueMetricsFactory` for consumers. The package's own
+tests use them — if a fake is awkward to use in our own suite, fix the fake rather than
+working around it. Fixtures that PHPStan must see live in `tests/Fixtures` and are
+included in the analysis paths.
+
+This package ships **no Eloquent models, no migrations and no model factories**. Tests
+build state through the fakes and `Testing\QueueMetricsFactory` — which builds metric
+payloads, not Eloquent records — so none of the usual model/factory/migration guidance
+applies here.
+
+### Running tests
+
+- Full suite: `vendor/bin/pest` or `composer test`
+- The `simulation` group is slow and excluded from normal runs:
+  `vendor/bin/pest --exclude-group=simulation`
+- A single file: `vendor/bin/pest tests/Feature/ExampleTest.php`
+- By name: `vendor/bin/pest --filter=testName`
+- Coverage: `composer test-coverage`
+- Redis and SQS specs are env-gated and skip unless `REDIS_AVAILABLE` /
+  `REDIS_CLUSTER_HOSTS_AND_PORTS` / the AWS credentials are set. A local run showing
+  ~15 skipped tests is normal.
+
+Run the minimal set of tests with filters while iterating; run the full suite before
+finalizing. When tests relating to your feature pass, ask whether to run everything.
+
+### Pest syntax
+
+- `test('it can do something', function () { ... })` or `it('does something', ...)`
+- `expect($value)->toBe(10)`
+- `beforeEach()` / `afterEach()` for setup and teardown
+- Use the Pest Laravel plugin's helpers where they fit
+
+## The verification gate
+
+A change is only finished when all of these are green. Never call it done on a partial
+run — `composer qa` runs the first five in order.
+
+```bash
+vendor/bin/pint --test                 # composer lint
+vendor/bin/phpstan analyse             # composer analyse — level max, larastan
+vendor/bin/pest                        # composer test
+php bin/check-licenses.php             # composer license-check
+composer audit --no-dev
+php bin/generate-sbom.php              # composer sbom — commit the result when deps change
+```
+
+PHPStan runs at **level max** with no baseline and no `@phpstan-ignore`. Fix the
+underlying cause rather than silencing it: no `assert()` or inline `@var` to override
+inference, no casts to quiet a union, no widening a type just to pass.
+
+Run `vendor/bin/pint --dirty` while iterating and `vendor/bin/pint` to fix formatting.
+Do not run `vendor/bin/pint --test` as a fix step; it only reports.
+
+`sbom.json` is committed and regenerated from `composer.lock`. CI validates that the
+generator produces a well-formed CycloneDX document but deliberately does **not** assert
+byte-for-byte drift, because the package does not commit a lock file and CI resolves
+versions this machine never saw. That means a stale `sbom.json` will not fail the build —
+regenerate and commit it yourself whenever a dependency changes.
 
 ## PHP
 
-- Always use curly braces for control structures, even if it has one line.
+- Always use curly braces for control structures, even for a single line.
 
 ### Constructors
-- Use PHP 8 constructor property promotion in `__construct()`.
-    - <code-snippet>public function __construct(public GitHub $github) { }</code-snippet>
-- Do not allow empty `__construct()` methods with zero parameters.
 
-### Type Declarations
-- Always use explicit return type declarations for methods and functions.
-- Use appropriate PHP type hints for method parameters.
+- Use PHP 8 constructor property promotion.
+  - `public function __construct(public GitHub $github) { }`
+- No empty `__construct()` with zero parameters.
 
-<code-snippet name="Explicit Return Types and Method Params" lang="php">
+### Type declarations
+
+- Explicit return types on every method and function.
+- Type hints on every parameter.
+
+```php
 protected function isAccessible(User $user, ?string $path = null): bool
 {
-    ...
+    // ...
 }
-</code-snippet>
+```
 
 ## Comments
-- Prefer PHPDoc blocks over comments. Never use comments within the code itself unless there is something _very_ complex going on.
 
-## PHPDoc Blocks
-- Add useful array shape type definitions for arrays when appropriate.
+Prefer PHPDoc blocks over inline comments. Write a comment only when something genuinely
+non-obvious is happening — and then explain *why*, not *what*. The cluster coordination
+and distribution code in `Manager\AutoscaleManager` is the main place where that bar is
+met: several guards there look removable until you know which failure mode they prevent.
+
+## PHPDoc blocks
+
+Add array shape definitions where an array survives at a boundary. Prefer replacing the
+array with a value object over documenting its shape.
 
 ## Enums
-- Typically, keys in an Enum should be TitleCase. For example: `FavoritePerson`, `BestLake`, `Monthly`.
 
-## Laravel Package Development
+Enum cases are TitleCase — `FavoritePerson`, `BestLake`, `Monthly`.
 
-- This is a Laravel package. Use Orchestra Testbench for testing Laravel functionality.
-- Service providers should extend Spatie's `PackageServiceProvider` for convention and ease of use.
+## Commit discipline
 
-### Database & Models
-- Always use proper Eloquent relationship methods with return type hints.
-- Prefer Eloquent models and relationships over raw database queries.
-- Generate code that prevents N+1 query problems by using eager loading.
-- When modifying columns in migrations, include all previously defined attributes to prevent data loss.
-- Casts should be defined in a `casts()` method on models rather than the `$casts` property.
+- Conventional-commit subjects (`feat(cluster): …`, `fix(manager): …`), with a body
+  explaining the reasoning when the change is not self-evident.
+- Verified, then committed. One coherent change per commit.
+- Branch off `main`. Never commit or push unless asked.
 
-### Configuration
-- Package configuration should be publishable via service provider.
-- Use environment variables only in configuration files - never use the `env()` function directly outside of config files.
-- Use `config('queue-metrics.key')` not `env('QUEUE_METRICS_KEY')`.
+## Documentation files
 
-### Testing with Orchestra Testbench
-- Use Orchestra Testbench to test package functionality in a Laravel environment.
-- When creating models for tests, use factories. Check if the factory has custom states before manually setting up models.
-- Use `fake()` for generating test data following existing conventions.
-
-## Laravel Pint Code Formatter
-
-- You must run `vendor/bin/pint --dirty` before finalizing changes to ensure your code matches the project's expected style.
-- Do not run `vendor/bin/pint --test`, simply run `vendor/bin/pint` to fix any formatting issues.
-
-## Pest Testing Framework
-
-- This package uses Pest (v4) for testing. All tests must be written using Pest syntax.
-- Every time a test has been updated, run that specific test to verify it passes.
-- When tests relating to your feature are passing, ask the user if they would like to run the entire test suite.
-- Tests should cover all happy paths, failure paths, and edge cases.
-- You must not remove any tests or test files from the tests directory without approval.
-
-### Running Tests
-- Run the minimal number of tests using filters before finalizing.
-- To run all tests: `vendor/bin/pest` or `composer test`
-- To run tests in a specific file: `vendor/bin/pest tests/Feature/ExampleTest.php`
-- To filter tests by name: `vendor/bin/pest --filter=testName`
-- To run tests with coverage: `vendor/bin/pest --coverage` or `composer test-coverage`
-
-### Pest Syntax
-- Use `test()` function for tests: `test('it can do something', function() { ... })`
-- Use `it()` for behavior-driven tests: `it('does something', function() { ... })`
-- Use `expect()` for assertions: `expect($value)->toBe(10)`
-- Use `beforeEach()` and `afterEach()` for test setup/teardown
-- Leverage Pest's Laravel plugin features for Laravel-specific testing
-
-## Static Analysis with Larastan
-
-- Run `vendor/bin/phpstan analyse` or `composer analyse` before finalizing changes.
-- Address any issues reported by Larastan to maintain code quality.
-- Follow PHPStan level 5+ standards for type safety.
-
+Only create documentation files when explicitly requested. When you do write docs, follow
+the guide below — and note that the docs site scrapes **tagged releases**, so a docs
+change pushed to `main` does not appear on cbox.dk until it is tagged.
 
 # Cbox Documentation Guide
 
@@ -140,25 +240,45 @@ This guide explains how to structure documentation for Cbox packages to ensure o
 **Files Used on cbox.dk**
 - All `.md` files in the `/docs` folder
 - All image/asset files within `/docs`
-- `_index.md` files for directory landing pages (optional but recommended)
+- `_index.md` files for directory landing pages (**required** — see the grading rule below)
 
 ## Directory Structure
 
-### Recommended Structure
+### Grading rule
+
+The docs site grades a package **`complete`** only when every folder has an `_index.md`
+*and* every `.md` file carries `title` + `weight` + `description` frontmatter. A missing
+`_index.md` or missing frontmatter downgrades it to `partial`. Root-level files are
+exempt from the `_index.md` rule. Verify with the site importer:
+`buildNavigationTree($docsPath)['metadata_quality']` must be `complete`.
+
+### This package's structure
+
+`laravel-queue-autoscale` currently grades `complete`. Keep it that way — every new
+folder needs an `_index.md`, and every new file needs full frontmatter.
+
 ```
 docs/
-├── introduction.md              # What is this package?
-├── installation.md              # How to install
-├── quickstart.md               # 5-minute getting started
-├── basic-usage/                # Core features
-│   ├── _index.md              # Optional: Section overview
-│   ├── feature-one.md
-│   └── feature-two.md
-├── advanced-usage/             # Complex scenarios
+├── index.md                    # Overview, mental model, section TOC
+├── quickstart.md               # Zero-to-working in one read
+├── requirements.md             # PHP / Laravel / extension versions, from composer.json
+├── basic-usage/                # Installation, configuration, day-to-day operation
 │   ├── _index.md
-│   └── advanced-feature.md
-├── api-reference.md            # Complete API docs
-└── testing.md                  # How to test
+│   └── …
+├── advanced-usage/             # Custom strategies, policies, upgrades, security
+│   ├── _index.md
+│   └── …
+├── algorithms/                 # How the scaling maths actually works
+│   ├── _index.md
+│   └── …
+├── cookbook/                   # Task-oriented recipes
+│   ├── _index.md
+│   └── …
+├── deployment/                 # Platform guides (Docker, Forge, Ploi, VPS)
+│   ├── _index.md
+│   └── …
+└── api-reference/
+    └── _index.md
 ```
 
 ### Directory Naming Rules
@@ -220,7 +340,7 @@ title: "API Reference"
 # ❌ Avoid
 title: "Page 1"                    # Generic
 title: "System Metrics CPU Stuff"  # Too long, redundant
-title: "cpu-metrics"               # Not Title Case
+title: "failure-fuse"              # Not Title Case
 ```
 
 **Description Guidelines**
@@ -254,7 +374,7 @@ weight: 2
 # docs/quickstart.md
 weight: 3
 
-# docs/basic-usage/cpu-metrics.md
+# docs/basic-usage/failure-fuse.md
 weight: 10
 ```
 
@@ -272,7 +392,7 @@ Use **relative paths** with full filename to link between documentation pages:
 [Back to Introduction](../introduction.md)
 
 # Link to file in subdirectory
-[CPU Metrics](basic-usage/cpu-metrics.md)
+[Failure Fuse](basic-usage/failure-fuse.md)
 
 # Link to file in different subdirectory
 [Platform Comparison](../platform-support/comparison.md)
@@ -340,7 +460,7 @@ docs/
 │   └── architecture.svg
 ├── basic-usage/
 │   ├── cpu-chart.png   # Feature-specific image
-│   └── cpu-metrics.md
+│   └── failure-fuse.md
 └── screenshots/         # UI screenshots
     └── dashboard.png
 ```
@@ -353,10 +473,10 @@ Always specify the language after the opening fence:
 
 ````markdown
 ```php
-use Cbox\SystemMetrics\SystemMetrics;
+use Cbox\LaravelQueueAutoscale\Facades\LaravelQueueAutoscale;
 
-$cpu = SystemMetrics::cpu()->get();
-echo "Cores: {$cpu->cores}\n";
+$cluster = LaravelQueueAutoscale::cluster();
+echo "Managers: {$cluster['manager_count']}\n";
 ```
 ````
 
@@ -367,12 +487,12 @@ echo "Cores: {$cpu->cores}\n";
 ````markdown
 # ✅ Good - Language specified
 ```php
-$metrics = SystemMetrics::cpu()->get();
+$cluster = LaravelQueueAutoscale::cluster();
 ```
 
 # ❌ Avoid - No language
 ```
-$metrics = SystemMetrics::cpu()->get();
+$cluster = LaravelQueueAutoscale::cluster();
 ```
 ````
 
@@ -417,56 +537,53 @@ Start with the "System Overview" guide for a quick introduction.
 
 ## Complete Example
 
-**File**: `docs/basic-usage/cpu-metrics.md`
+**File**: `docs/basic-usage/failure-fuse.md`
 
 ```markdown
 ---
-title: "CPU Metrics"
-description: "Get raw CPU time counters and per-core metrics from the system"
-weight: 10
+title: "Failure Fuse"
+description: "Stop scaling a queue up when its jobs are failing, and probe for recovery"
+weight: 14
 ---
 
-# CPU Metrics
+# Failure Fuse
 
-Monitor CPU usage and performance with real-time metrics.
+The fuse watches a rolling window of job outcomes per queue. When the failure rate
+crosses the configured threshold it trips, and the manager stops adding workers to
+that queue — scaling up a queue whose jobs all fail just burns capacity faster.
 
-## Getting CPU Statistics
-
-```php
-use Cbox\SystemMetrics\SystemMetrics;
-
-$cpu = SystemMetrics::cpu()->get();
-
-echo "CPU Cores: {$cpu->cores}\n";
-echo "User Time: {$cpu->user}ms\n";
-echo "System Time: {$cpu->system}ms\n";
-```
-
-## Per-Core Metrics
+## Configuring the Fuse
 
 ```php
-foreach ($cpu->perCore as $core) {
-    echo "Core {$core->id}: {$core->usage}%\n";
-}
+'queues' => [
+    'redis:emails' => [
+        'fuse' => [
+            'enabled' => true,
+            'failure_rate_threshold' => 0.5,
+            'window_seconds' => 60,
+        ],
+    ],
+],
 ```
 
-## Performance Considerations
+## Reacting to a Trip
 
-![CPU Performance Chart](../images/cpu-performance.png)
+```php
+use Cbox\LaravelQueueAutoscale\Events\FuseTripped;
 
-The metrics collection is highly optimized:
-- No system calls for static data
-- Efficient caching for hardware info
-- Minimal overhead (<1ms per call)
+Event::listen(function (FuseTripped $event) {
+    Log::critical("Fuse tripped for {$event->workload}", [
+        'failure_rate' => $event->failureRate,
+    ]);
+});
+```
 
-See [Performance Caching](../architecture/performance-caching) for details.
+## Recovery
 
-## Platform Support
+A tripped fuse periodically allows a single probe worker through. If its jobs succeed
+the fuse closes and normal scaling resumes; if they fail the window restarts.
 
-- ✅ Linux: Full support via `/proc/stat`
-- ✅ macOS: Full support via `host_processor_info()`
-
-See [Platform Comparison](../platform-support/comparison) for detailed differences.
+See [Event Handling](event-handling.md) for the full event list.
 ```
 
 ## Quality Checklist
@@ -534,18 +651,18 @@ Your documentation will be available at:
 https://cbox.dk/docs/{package}/{major_version}/{page_path}
 
 Examples:
-/docs/system-metrics/v1/introduction
-/docs/system-metrics/v1/basic-usage/cpu-metrics
-/docs/system-metrics/v2/advanced-usage/custom-implementations
+/docs/laravel-queue-autoscale/v4/index
+/docs/laravel-queue-autoscale/v4/basic-usage/failure-fuse
+/docs/laravel-queue-autoscale/v4/advanced-usage/custom-strategies
 ```
 
 **How URLs Are Generated**
 ```
-File: docs/basic-usage/cpu-metrics.md
-URL:  /docs/system-metrics/v1/basic-usage/cpu-metrics
+File: docs/basic-usage/failure-fuse.md
+URL:  /docs/laravel-queue-autoscale/v4/basic-usage/failure-fuse
 
-File: docs/introduction.md
-URL:  /docs/system-metrics/v1/introduction
+File: docs/index.md
+URL:  /docs/laravel-queue-autoscale/v4/index
 ```
 
 ## SEO Tips
