@@ -7,6 +7,10 @@ use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
+use Cbox\LaravelQueueAutoscale\Scaling\Calculators\CapacityCalculator;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\CapacityCalculationResult;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\LimitingFactor;
+use Cbox\LaravelQueueAutoscale\Scaling\DTOs\ResourceEstimate;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Illuminate\Support\Collection;
 
@@ -69,6 +73,31 @@ function recordingSpawner(SpawnRequests $requests): void
     app()->forgetInstance(AutoscaleManager::class);
 }
 
+/**
+ * Take the host out of the equation.
+ *
+ * CapacityCalculator reads live CPU and memory, which makes any spec that
+ * depends on there being headroom a measurement of the machine it runs on.
+ */
+function fakeAbundantCapacity(): void
+{
+    app()->instance(CapacityCalculator::class, new class extends CapacityCalculator
+    {
+        public function calculateMaxWorkers(int $currentWorkers, ResourceEstimate $estimate): CapacityCalculationResult
+        {
+            return new CapacityCalculationResult(
+                maxWorkersByCpu: 1000,
+                maxWorkersByMemory: 1000,
+                maxWorkersByConfig: PHP_INT_MAX,
+                finalMaxWorkers: 1000,
+                limitingFactor: LimitingFactor::Cpu,
+            );
+        }
+    });
+
+    app()->forgetInstance(AutoscaleManager::class);
+}
+
 function runOneEvaluation(): void
 {
     $manager = app(AutoscaleManager::class);
@@ -123,12 +152,14 @@ test('a discovered queue with real backlog still scales up', function (): void {
     // Withdrawing the floor must not stop a queue being served — it removes
     // the standing promise, not the response to demand.
     //
-    // Capacity is pinned generously because the engine clamps the target to
-    // measured CPU/memory BEFORE any floor. Without the floor there is nothing
-    // to raise it back, so on a loaded CI runner this would legitimately
-    // resolve to zero and the spec would be measuring the runner, not the fix.
-    config()->set('queue-autoscale.limits.worker_cpu_core_estimate', 0.001);
-    config()->set('queue-autoscale.limits.worker_memory_mb_estimate', 1);
+    // Capacity is stubbed rather than measured. The engine clamps a target to
+    // real CPU/memory BEFORE any floor, and without a floor there is nothing
+    // to raise it back — so on a runner already past max_cpu_percent this
+    // resolves to zero for reasons that have nothing to do with the fix.
+    // Tuning the per-worker estimates was not enough: available capacity is
+    // the headroom below the percentage ceiling, which a busy runner has none
+    // of at any estimate.
+    fakeAbundantCapacity();
     config()->set('queue-autoscale.queues', []);
 
     fakeDiscoveredQueues([
