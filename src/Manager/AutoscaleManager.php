@@ -43,6 +43,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingEngine;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingScope;
 use Cbox\LaravelQueueAutoscale\Scaling\WorkloadDiscovery;
+use Cbox\LaravelQueueAutoscale\Scaling\WorkloadStateTracker;
 use Cbox\LaravelQueueAutoscale\Support\Coerce;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
 use Cbox\LaravelQueueAutoscale\Support\WorkloadName;
@@ -55,7 +56,6 @@ use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerTerminator;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 use Composer\InstalledVersions;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Console\Output\OutputInterface;
 
@@ -72,21 +72,6 @@ class AutoscaleManager
      * is never truncated by the cleanup that exists to bound memory.
      */
     private const QUEUE_STATE_RETENTION_SECONDS = 3600;
-
-    /**
-     * @var array<string, Carbon>
-     */
-    private array $lastScaleTime = [];
-
-    /**
-     * @var array<string, string>
-     */
-    private array $lastScaleDirection = [];
-
-    /**
-     * @var array<string, bool>
-     */
-    private array $breachState = [];
 
     private ?OutputRendererContract $renderer = null;
 
@@ -109,6 +94,8 @@ class AutoscaleManager
     private readonly WorkerScaler $scaler;
 
     private readonly WorkloadDiscovery $discovery;
+
+    private readonly WorkloadStateTracker $workloadState;
 
     /** Whether this manager held the lease on the previous cycle. */
     private bool $wasLeader = false;
@@ -137,6 +124,7 @@ class AutoscaleManager
 
         $this->resourceCollector = $resourceCollector ?? new MeasuredResourceCollector($resolver);
         $this->discovery = new WorkloadDiscovery($metricsAdapter);
+        $this->workloadState = new WorkloadStateTracker;
 
         // The scaler shares this manager's pool and output buffer rather than
         // owning them: the read paths that size the next decision live here,
@@ -616,7 +604,7 @@ class AutoscaleManager
 
             // SLA breach/recovery tracking
             $breachKey = ($meta['type'] === 'group' ? 'group:' : '')."{$meta['connection']}:{$meta['name']}";
-            $wasBreaching = $this->breachState[$breachKey] ?? false;
+            $wasBreaching = $this->workloadState->wasBreaching($breachKey);
 
             if ($isBreaching && ! $wasBreaching) {
                 event(new SlaBreached(
@@ -638,7 +626,7 @@ class AutoscaleManager
                 ));
             }
 
-            $this->breachState[$breachKey] = $isBreaching;
+            $this->workloadState->setBreaching($breachKey, $isBreaching);
 
             if ($decision->isSlaBreachRisk()) {
                 event(new SlaBreachPredicted($decision));
@@ -1050,19 +1038,7 @@ class AutoscaleManager
      */
     private function forgetQueuesNotSeenRecently(): void
     {
-        $cutoff = now()->subSeconds(self::QUEUE_STATE_RETENTION_SECONDS);
-
-        foreach ($this->lastScaleTime as $key => $at) {
-            if ($at->greaterThanOrEqualTo($cutoff)) {
-                continue;
-            }
-
-            unset(
-                $this->lastScaleTime[$key],
-                $this->lastScaleDirection[$key],
-                $this->breachState[$key],
-            );
-        }
+        $this->workloadState->forgetQuietSince(now()->subSeconds(self::QUEUE_STATE_RETENTION_SECONDS));
     }
 
     private function evaluateAndScale(): void
@@ -1270,14 +1246,14 @@ class AutoscaleManager
         // Exception: scale-up during SLA breach is always allowed to protect SLA
         $key = "{$connection}:{$queue}";
         $currentDirection = $decision->shouldScaleUp() ? 'up' : ($decision->shouldScaleDown() ? 'down' : 'hold');
-        $lastDirection = $this->lastScaleDirection[$key] ?? null;
+        $lastDirection = $this->workloadState->lastDirection($key);
 
         // Clear stale direction: once cooldown has fully elapsed, the last direction
         // is no longer relevant. This prevents HOLD→HOLD→...→DOWN from being blocked
         // by an UP that happened minutes ago.
         $scaleCooldownSeconds = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
-        if ($lastDirection !== null && ! $this->inCooldown($key, $scaleCooldownSeconds)) {
-            unset($this->lastScaleDirection[$key]);
+        if ($lastDirection !== null && ! $this->workloadState->inCooldown($key, $scaleCooldownSeconds)) {
+            $this->workloadState->forgetDirection($key);
             $lastDirection = null;
         }
 
@@ -1286,8 +1262,8 @@ class AutoscaleManager
             // Always allow scale-up during SLA breach - protecting SLA takes priority over anti-flapping
             $isBreachScaleUp = $currentDirection === 'up' && $isBreaching;
 
-            if (! $isBreachScaleUp && $this->inCooldown($key, $scaleCooldownSeconds)) {
-                $remaining = $this->getCooldownRemaining($key, $scaleCooldownSeconds);
+            if (! $isBreachScaleUp && $this->workloadState->inCooldown($key, $scaleCooldownSeconds)) {
+                $remaining = $this->workloadState->cooldownRemaining($key, $scaleCooldownSeconds);
                 $this->verbose("  ⏸️  Anti-flapping: cannot reverse direction during cooldown ({$remaining}s remaining)", 'debug');
 
                 return;
@@ -1371,7 +1347,7 @@ class AutoscaleManager
         }
 
         // Track SLA breach state and fire breach/recovery events
-        $wasBreaching = $this->breachState[$key] ?? false;
+        $wasBreaching = $this->workloadState->wasBreaching($key);
 
         if ($isBreaching && ! $wasBreaching) {
             // Entering breach state - fire SlaBreached
@@ -1383,7 +1359,7 @@ class AutoscaleManager
                 pending: $metrics->pending,
                 activeWorkers: $metrics->activeWorkers,
             ));
-            $this->breachState[$key] = true;
+            $this->workloadState->setBreaching($key, true);
         } elseif (! $isBreaching && $wasBreaching) {
             // Recovering from breach - fire SlaRecovered
             event(new SlaRecovered(
@@ -1394,19 +1370,18 @@ class AutoscaleManager
                 pending: $metrics->pending,
                 activeWorkers: $metrics->activeWorkers,
             ));
-            $this->breachState[$key] = false;
+            $this->workloadState->setBreaching($key, false);
         } elseif ($isBreaching) {
             // Update breach state (still breaching)
-            $this->breachState[$key] = true;
+            $this->workloadState->setBreaching($key, true);
         } else {
             // Update breach state (not breaching)
-            $this->breachState[$key] = false;
+            $this->workloadState->setBreaching($key, false);
         }
 
         // 11. Update last scale time and direction
         if (! $finalDecision->shouldHold()) {
-            $this->lastScaleTime[$key] = now();
-            $this->lastScaleDirection[$key] = $currentDirection;
+            $this->workloadState->recordScale($key, $currentDirection);
         }
     }
 
@@ -1439,19 +1414,19 @@ class AutoscaleManager
 
         // Anti-flapping check (same semantics as per-queue).
         $currentDirection = $decision->shouldScaleUp() ? 'up' : ($decision->shouldScaleDown() ? 'down' : 'hold');
-        $lastDirection = $this->lastScaleDirection[$key] ?? null;
+        $lastDirection = $this->workloadState->lastDirection($key);
         $scaleCooldownSeconds = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
 
-        if ($lastDirection !== null && ! $this->inCooldown($key, $scaleCooldownSeconds)) {
-            unset($this->lastScaleDirection[$key]);
+        if ($lastDirection !== null && ! $this->workloadState->inCooldown($key, $scaleCooldownSeconds)) {
+            $this->workloadState->forgetDirection($key);
             $lastDirection = null;
         }
 
         if ($currentDirection !== 'hold' && $lastDirection !== null && $currentDirection !== $lastDirection) {
             $isBreachScaleUp = $currentDirection === 'up' && $isBreaching;
 
-            if (! $isBreachScaleUp && $this->inCooldown($key, $scaleCooldownSeconds)) {
-                $remaining = $this->getCooldownRemaining($key, $scaleCooldownSeconds);
+            if (! $isBreachScaleUp && $this->workloadState->inCooldown($key, $scaleCooldownSeconds)) {
+                $remaining = $this->workloadState->cooldownRemaining($key, $scaleCooldownSeconds);
                 $this->verbose("  ⏸️  Anti-flapping (group): cannot reverse direction during cooldown ({$remaining}s remaining)", 'debug');
 
                 return;
@@ -1491,7 +1466,7 @@ class AutoscaleManager
         }
 
         // SLA breach state for groups mirrors the per-queue event flow.
-        $wasBreaching = $this->breachState[$key] ?? false;
+        $wasBreaching = $this->workloadState->wasBreaching($key);
 
         if ($isBreaching && ! $wasBreaching) {
             event(new SlaBreached(
@@ -1513,11 +1488,10 @@ class AutoscaleManager
             ));
         }
 
-        $this->breachState[$key] = $isBreaching;
+        $this->workloadState->setBreaching($key, $isBreaching);
 
         if (! $finalDecision->shouldHold()) {
-            $this->lastScaleTime[$key] = now();
-            $this->lastScaleDirection[$key] = $currentDirection;
+            $this->workloadState->recordScale($key, $currentDirection);
         }
     }
 
@@ -1660,7 +1634,7 @@ class AutoscaleManager
         );
 
         // Fire SLA events even though we can't scale — operators need to know.
-        $wasBreaching = $this->breachState[$key] ?? false;
+        $wasBreaching = $this->workloadState->wasBreaching($key);
 
         if ($isBreaching && ! $wasBreaching) {
             event(new SlaBreached(
@@ -1682,7 +1656,7 @@ class AutoscaleManager
             ));
         }
 
-        $this->breachState[$key] = $isBreaching;
+        $this->workloadState->setBreaching($key, $isBreaching);
 
         $this->policies->afterScaling($decision);
     }
@@ -1832,30 +1806,5 @@ class AutoscaleManager
         ));
 
         $this->lastObservedManagerIds = $managerIds;
-    }
-
-    private function inCooldown(string $key, int $cooldownSeconds): bool
-    {
-        if (! isset($this->lastScaleTime[$key])) {
-            return false;
-        }
-
-        /** @var Carbon $lastScale */
-        $lastScale = $this->lastScaleTime[$key];
-
-        return $lastScale->diffInSeconds(now()) < $cooldownSeconds;
-    }
-
-    private function getCooldownRemaining(string $key, int $cooldownSeconds): int
-    {
-        if (! isset($this->lastScaleTime[$key])) {
-            return 0;
-        }
-
-        /** @var Carbon $lastScale */
-        $lastScale = $this->lastScaleTime[$key];
-        $elapsed = $lastScale->diffInSeconds(now());
-
-        return (int) max(0, $cooldownSeconds - $elapsed);
     }
 }

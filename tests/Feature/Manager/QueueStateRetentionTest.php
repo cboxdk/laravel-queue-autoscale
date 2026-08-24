@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Carbon\Carbon;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
+use Cbox\LaravelQueueAutoscale\Scaling\WorkloadStateTracker;
 
 /**
  * Per-queue bookkeeping is keyed by queue name in a process that runs for
@@ -14,18 +15,26 @@ use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
  * what stop a queue oscillating, so discarding them every cycle would defeat
  * both.
  */
-function managerState(AutoscaleManager $m, string $prop): array
+function managerTracker(AutoscaleManager $m): WorkloadStateTracker
 {
-    return (new ReflectionProperty($m, $prop))->getValue($m);
+    return (new ReflectionProperty($m, 'workloadState'))->getValue($m);
 }
 
+/**
+ * Record a scaling action as though it had happened at $at, so the retention
+ * cutoff sees a genuinely old entry rather than a hand-placed array key.
+ */
 function seedQueueState(AutoscaleManager $m, string $key, Carbon $at): void
 {
-    foreach ([['lastScaleTime', $at], ['lastScaleDirection', 'up'], ['breachState', true]] as [$prop, $value]) {
-        $p = new ReflectionProperty($m, $prop);
-        $existing = $p->getValue($m);
-        $existing[$key] = $value;
-        $p->setValue($m, $existing);
+    $tracker = managerTracker($m);
+
+    Carbon::setTestNow($at);
+
+    try {
+        $tracker->recordScale($key, 'up');
+        $tracker->setBreaching($key, true);
+    } finally {
+        Carbon::setTestNow();
     }
 }
 
@@ -41,9 +50,11 @@ test('state for a queue that went quiet is dropped', function (): void {
 
     beginCycle($manager);
 
-    expect(managerState($manager, 'lastScaleTime'))->not->toHaveKey('redis:tenant-gone')
-        ->and(managerState($manager, 'lastScaleDirection'))->not->toHaveKey('redis:tenant-gone')
-        ->and(managerState($manager, 'breachState'))->not->toHaveKey('redis:tenant-gone');
+    $tracker = managerTracker($manager);
+
+    expect($tracker->lastDirection('redis:tenant-gone'))->toBeNull()
+        ->and($tracker->wasBreaching('redis:tenant-gone'))->toBeFalse()
+        ->and($tracker->inCooldown('redis:tenant-gone', 86400))->toBeFalse();
 });
 
 test('a recently scaled queue keeps its anti-flapping window', function (): void {
@@ -55,8 +66,10 @@ test('a recently scaled queue keeps its anti-flapping window', function (): void
 
     beginCycle($manager);
 
-    expect(managerState($manager, 'lastScaleTime'))->toHaveKey('redis:busy')
-        ->and(managerState($manager, 'lastScaleDirection'))->toHaveKey('redis:busy');
+    $tracker = managerTracker($manager);
+
+    expect($tracker->lastDirection('redis:busy'))->toBe('up')
+        ->and($tracker->inCooldown('redis:busy', 60))->toBeTrue();
 });
 
 test('the rendered queue list does not keep vanished queues', function (): void {

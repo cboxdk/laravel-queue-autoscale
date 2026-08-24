@@ -48,6 +48,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fallbackSeconds` until it has collected `minSamples` again — short-lived and
   self-healing, not lost data.
 
+- **`AutoscaleManager` decomposed into collaborators.** It was 3090 lines across
+  67 methods with 20 mutable state fields, and six of the seven fixes in this
+  release added to it. Nine classes now own what used to be inlined there:
+  `Cluster\WorkerDistributor` (placement), `Cluster\ClusterCooldown` (damping),
+  `Cluster\ClusterSummaryBuilder` (reporting), `Workers\WorkerScaler` (every
+  change to the pool), `Scaling\QueueMetricsAdapter` (the boundary with
+  laravel-queue-metrics), `Scaling\MeasuredResourceCollector`,
+  `Scaling\WorkloadDiscovery`, `Scaling\WorkloadStateTracker` (per-workload
+  cooldown and breach memory) and `Output\ConsoleReporter`. The manager is now
+  1810 lines, 41 methods and 12 state fields. Behavior, log lines,
+  configuration and the public surface are unchanged; every collaborator is a
+  constructor default, so nothing a consumer wires up has to change.
 - **Cluster placement and anti-flapping damping moved out of `AutoscaleManager`**
   into `Cluster\WorkerDistributor` and `Cluster\ClusterCooldown`. Both were
   self-contained leader working memory living as four mutable arrays on a 3090-line
