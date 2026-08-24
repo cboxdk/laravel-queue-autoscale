@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+- **Redis Cluster support for cluster coordination.** The coordination and
+  spawn-latency paths assumed single-node phpredis: the leader-readiness check
+  called `RedisCluster::ping()` with no argument (a cluster has no keyless
+  PING), and the spawn-latency and recommendation-fencing scripts spanned keys
+  in different slots (`CROSSSLOT`). The `ping` is now key-routed on a
+  `\RedisCluster` client and the multi-key scripts share a hash tag, so cluster
+  mode works against a `\RedisCluster` connection. The single-node `\Redis`
+  path is unchanged. Covered by a cluster CI job that reruns the coordination
+  specs against a real three-master cluster.
+
 ### Changed
 - **Requires `cboxdk/laravel-queue-metrics` `^3.3`** (was `^3.0`). v3.3.0 fixes
   several defects in exactly the readings the autoscaler makes its decisions
@@ -17,6 +28,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   methods. It also eliminates the phantom `default` queue that discovery used
   to surface, and lets `getQueueDepth()` tolerate a queue the driver cannot
   read yet instead of throwing every cycle.
+
+- **Coordination key format.** Cluster coordination keys move from
+  `queue-autoscale:cluster:<appid>:*` to `queue-autoscale:cluster:{<appid>}:*`
+  so every key shares one slot. During a rolling deploy the old and new
+  managers read different leader keys, so you can briefly have two leaders,
+  each scaling its half of the fleet up to `workers.max`. It resolves itself
+  once every manager is on the new version, and each recommendation is
+  `setex`'d so nothing is stranded — but expect the window before you deploy.
+- **Spawn-latency key format.** Spawn-latency keys move from `autoscale:spawn:*`
+  to `{autoscale-spawn}:*` so the atomic EMA update stays in one slot. Existing
+  latency history becomes unreachable on upgrade, so each tracker returns
+  `fallbackSeconds` until it has collected `minSamples` again — short-lived and
+  self-healing, not lost data.
 
 ### Fixed
 - A manager that dies abruptly (for example SIGKILLed by the kernel OOM killer) no longer causes its replacement to double-provision. On startup the manager now scans procfs for workers stamped with this package's environment markers and its own manager id, SIGTERMs them, and logs a summary before the first spawn. Previously those orphans were invisible to the replacement (the worker pool is process-local), so it spawned a full new set on top of them and each doubled generation made the next OOM kill more likely. The reap is scoped to the same manager id (so deliberately co-hosted managers never touch each other's workers), skips on hosts without procfs, and can be disabled with `queue-autoscale.manager.reap_orphans_on_start`.

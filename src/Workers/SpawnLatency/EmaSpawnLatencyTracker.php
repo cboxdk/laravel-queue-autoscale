@@ -94,19 +94,21 @@ class EmaSpawnLatencyTracker implements SpawnLatencyTrackerContract
         return is_numeric($ema) ? (float) $ema : $config->fallbackSeconds;
     }
 
+    // The three keys share a {autoscale-spawn} hash tag so the atomic EMA EVAL touching
+    // all of them stays in one slot on a cluster; the tag is inert on a single node.
     private function pendingKey(string $workerId): string
     {
-        return sprintf('autoscale:spawn:pending:%s', $workerId);
+        return sprintf('{autoscale-spawn}:pending:%s', $workerId);
     }
 
     private function emaKey(string $connection, string $queue): string
     {
-        return sprintf('autoscale:spawn:ema:%s:%s', $connection, $queue);
+        return sprintf('{autoscale-spawn}:ema:%s:%s', $connection, $queue);
     }
 
     private function countKey(string $connection, string $queue): string
     {
-        return sprintf('autoscale:spawn:count:%s:%s', $connection, $queue);
+        return sprintf('{autoscale-spawn}:count:%s:%s', $connection, $queue);
     }
 
     private function recordLatencyAtomically(

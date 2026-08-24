@@ -287,7 +287,16 @@ LUA;
 
     public function ping(): mixed
     {
-        return $this->redis()->ping();
+        $connection = $this->redis();
+        $client = $connection->client();
+
+        // RedisCluster has no keyless PING; route by a key so phpredis follows live slot
+        // routing rather than naming a node address that goes stale as topology shifts.
+        if ($client instanceof \RedisCluster) {
+            return $client->ping($this->key('ping'));
+        }
+
+        return $connection->ping();
     }
 
     /**
@@ -423,7 +432,9 @@ LUA;
 
     private function key(string $suffix): string
     {
-        return sprintf('queue-autoscale:cluster:%s:%s', AutoscaleConfiguration::clusterAppId(), $suffix);
+        // Hash-tag the app id so every coordination key shares one slot, keeping the
+        // multi-key fencing EVAL legal on a cluster and inert on a single node.
+        return sprintf('queue-autoscale:cluster:{%s}:%s', AutoscaleConfiguration::clusterAppId(), $suffix);
     }
 
     private function redis(): Connection
