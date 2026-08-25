@@ -27,11 +27,35 @@ class ArrivalRateEstimator
      */
     private array $history = [];
 
+    /**
+     * Where "now" comes from, as a Unix timestamp with fractional seconds.
+     *
+     * Injectable because this class is the one place in the engine that reads
+     * the wall clock directly, and everything it produces is a RATE — a
+     * difference divided by an elapsed interval. A simulation that advances
+     * time in five-second steps while the process clock advances in
+     * microseconds therefore sees every interval as too short to measure, and
+     * the estimator falls back to the processing rate on every call. The
+     * forecaster downstream then never runs at all. Defaults to the process
+     * clock, so nothing changes outside a harness that supplies its own.
+     *
+     * @var callable(): float
+     */
+    private $clock;
+
     private ?ForecasterContract $forecaster = null;
 
     private ?ForecastPolicyContract $policy = null;
 
     private int $forecastHorizonSeconds = 60;
+
+    /**
+     * @param  (callable(): float)|null  $clock  Source of "now"; defaults to the process clock.
+     */
+    public function __construct(?callable $clock = null)
+    {
+        $this->clock = $clock ?? static fn (): float => microtime(true);
+    }
 
     /**
      * Maximum number of snapshots to retain per queue
@@ -65,7 +89,7 @@ class ArrivalRateEstimator
         int $currentBacklog,
         float $processingRate,
     ): array {
-        $now = microtime(true);
+        $now = ($this->clock)();
 
         // Get previous snapshots
         $snapshots = $this->history[$queueKey] ?? [];
