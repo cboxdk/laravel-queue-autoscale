@@ -7,6 +7,7 @@ use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
 use Cbox\LaravelQueueAutoscale\Contracts\ClusterStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
+use Cbox\LaravelQueueAutoscale\Events\ClusterScalingSignalUpdated;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Testing\FakeClusterStore;
 use Cbox\LaravelQueueMetrics\Actions\CalculateQueueMetricsAction;
@@ -641,4 +642,91 @@ test('a leader that stalled past its lease publishes with its own token, not the
 
     expect($published)->not->toBeNull()
         ->and($published->leaderToken)->toBe('token-ours');
+});
+
+test('a leader whose lease moved mid-cycle publishes no summary', function (): void {
+    // Recommendations are fenced by the store, but the summary write is a plain
+    // setex. A manager that stalled past its lease would have its
+    // recommendations rejected and still overwrite the real leader's summary —
+    // and fire the scale signal that autoscalers outside this package are
+    // documented to consume. A stale recommended_hosts is worse than none,
+    // because something acts on it.
+    config()->set('queue.default', 'redis');
+    config()->set('queue-autoscale.queues', ['exports' => ['workers' => ['min' => 1, 'max' => 20]]]);
+
+    $tracker = Mockery::mock(SpawnLatencyTrackerContract::class);
+    $tracker->shouldReceive('currentLatency')->andReturn(0.0);
+    app()->instance(SpawnLatencyTrackerContract::class, $tracker);
+
+    $pickupStore = Mockery::mock(PickupTimeStoreContract::class);
+    $pickupStore->shouldReceive('recentSamples')->andReturn([]);
+    app()->instance(PickupTimeStoreContract::class, $pickupStore);
+
+    Event::fake();
+
+    $store = new class extends FakeClusterStore
+    {
+        public function leaderToken(): ?string
+        {
+            // Somebody else holds the lease by the time we get to publishing.
+            return 'token-somebody-elses';
+        }
+    };
+
+    $store->withManager(cooldownManagerState('mgr-1'))->withLeader('mgr-1');
+    app()->instance(ClusterStoreContract::class, $store);
+    app()->forgetInstance(AutoscaleManager::class);
+
+    $manager = app(AutoscaleManager::class);
+
+    cooldownDiscovery(['redis:exports' => cooldownRawMetrics('redis', 'exports', pending: 50)]);
+
+    (new ReflectionMethod($manager, 'evaluateAndPublishClusterRecommendations'))
+        ->invoke($manager, 'token-ours');
+
+    expect($store->summary())->toBe([]);
+    Event::assertNotDispatched(ClusterScalingSignalUpdated::class);
+});
+
+test('a failure reading the decision history does not stop the leader scaling', function (): void {
+    // recentDecisions() sat outside the guard, so a wrong-type Redis key or a
+    // throwing custom store aborted the whole method AFTER recommendations were
+    // published but BEFORE the enclosing cycle applied this manager's own — the
+    // leader alone went unscaled, every cycle, for a reporting fault.
+    config()->set('queue.default', 'redis');
+    config()->set('queue-autoscale.queues', ['exports' => ['workers' => ['min' => 1, 'max' => 20]]]);
+
+    $tracker = Mockery::mock(SpawnLatencyTrackerContract::class);
+    $tracker->shouldReceive('currentLatency')->andReturn(0.0);
+    app()->instance(SpawnLatencyTrackerContract::class, $tracker);
+
+    $pickupStore = Mockery::mock(PickupTimeStoreContract::class);
+    $pickupStore->shouldReceive('recentSamples')->andReturn([]);
+    app()->instance(PickupTimeStoreContract::class, $pickupStore);
+
+    Event::fake();
+
+    $store = new class extends FakeClusterStore
+    {
+        public function recentDecisions(int $seconds): array
+        {
+            throw new RuntimeException('WRONGTYPE Operation against a key holding the wrong kind of value');
+        }
+    };
+
+    $store->withManager(cooldownManagerState('mgr-1'))->withLeader('mgr-1');
+    app()->instance(ClusterStoreContract::class, $store);
+    app()->forgetInstance(AutoscaleManager::class);
+
+    $manager = app(AutoscaleManager::class);
+
+    cooldownDiscovery(['redis:exports' => cooldownRawMetrics('redis', 'exports', pending: 50)]);
+
+    (new ReflectionMethod($manager, 'evaluateAndPublishClusterRecommendations'))
+        ->invoke($manager, $store->leaderToken());
+
+    // The recommendation — the actual work — survived the reporting failure,
+    // and the method returned rather than throwing past the caller.
+    expect($store->publishedRecommendations())->toHaveKey('mgr-1')
+        ->and($store->summary())->toBe([]);
 });

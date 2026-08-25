@@ -743,43 +743,59 @@ class AutoscaleManager
             );
         }
 
-        $recentDecisions = $this->clusterStore->recentDecisions(
-            AutoscaleConfiguration::decisionHistorySeconds()
-        );
-        // Isolated from the scaling it reports on. The summary is a reporting
-        // artifact; the recommendations above are the work. Letting a failure
-        // in the former abort the cycle means the leader never applies its own
-        // recommendation, so a reporting problem becomes a scaling outage.
+        // Everything from here down is reporting, and all of it lives inside
+        // the guard — reading the decision history included. The summary is an
+        // artifact ABOUT the scaling; the recommendations above are the work. A
+        // throw anywhere in here escapes to the cycle's catch-all, which leaves
+        // the enclosing method without applying this manager's OWN
+        // recommendation, so a reporting problem becomes a scaling outage on
+        // the leader itself.
         try {
+            // Fenced with the same token the recommendations were. A manager
+            // that stalled past its lease has its recommendation writes
+            // rejected by the store, but the summary write is a plain setex —
+            // so it would still overwrite the real leader's summary and fire
+            // the scale signal that autoscalers outside this package are
+            // documented to consume. A stale recommended_hosts is worse than
+            // none: something acts on it.
+            if ($leaderToken !== null && $this->clusterStore->leaderToken() !== $leaderToken) {
+                $this->verbose('  ⏭️  Lease moved during this cycle; not publishing a summary', 'debug');
+
+                return;
+            }
+
+            $recentDecisions = $this->clusterStore->recentDecisions(
+                AutoscaleConfiguration::decisionHistorySeconds()
+            );
+
             $summary = $this->summaryBuilder->build($activeManagers, $workloads, $recentDecisions);
             $this->clusterStore->publishSummary($summary);
+
+            event(new ClusterSummaryPublished(
+                clusterId: Coerce::toString($summary['cluster_id'] ?? null),
+                leaderId: Coerce::toString($summary['leader_id'] ?? null),
+                summary: $summary,
+                publishedAt: $this->currentTimestamp(),
+            ));
+
+            $scaleSignal = is_array($summary['scale_signal'] ?? null) ? $summary['scale_signal'] : [];
+
+            event(new ClusterScalingSignalUpdated(
+                clusterId: Coerce::toString($summary['cluster_id'] ?? null),
+                leaderId: Coerce::toString($summary['leader_id'] ?? null),
+                currentHosts: Coerce::toInt($scaleSignal['current_hosts'] ?? 0),
+                recommendedHosts: Coerce::toInt($scaleSignal['recommended_hosts'] ?? 0),
+                currentCapacity: Coerce::toInt($summary['total_worker_capacity'] ?? 0),
+                requiredWorkers: Coerce::toInt($summary['required_workers'] ?? 0),
+                action: Coerce::toString($scaleSignal['action'] ?? null, 'hold'),
+                reason: Coerce::toString($scaleSignal['reason'] ?? null),
+            ));
         } catch (\Throwable $e) {
             Log::channel(AutoscaleConfiguration::logChannel())->error(
                 'Cluster summary could not be published; scaling continues',
                 ['error' => $e->getMessage()]
             );
-
-            return;
         }
-
-        event(new ClusterSummaryPublished(
-            clusterId: Coerce::toString($summary['cluster_id'] ?? null),
-            leaderId: Coerce::toString($summary['leader_id'] ?? null),
-            summary: $summary,
-            publishedAt: $this->currentTimestamp(),
-        ));
-        $scaleSignal = is_array($summary['scale_signal'] ?? null) ? $summary['scale_signal'] : [];
-
-        event(new ClusterScalingSignalUpdated(
-            clusterId: Coerce::toString($summary['cluster_id'] ?? null),
-            leaderId: Coerce::toString($summary['leader_id'] ?? null),
-            currentHosts: Coerce::toInt($scaleSignal['current_hosts'] ?? 0),
-            recommendedHosts: Coerce::toInt($scaleSignal['recommended_hosts'] ?? 0),
-            currentCapacity: Coerce::toInt($summary['total_worker_capacity'] ?? 0),
-            requiredWorkers: Coerce::toInt($summary['required_workers'] ?? 0),
-            action: Coerce::toString($scaleSignal['action'] ?? null, 'hold'),
-            reason: Coerce::toString($scaleSignal['reason'] ?? null),
-        ));
     }
 
     private function applyClusterRecommendation(ClusterRecommendation $recommendation): void

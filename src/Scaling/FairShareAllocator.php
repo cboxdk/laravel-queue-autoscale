@@ -237,7 +237,11 @@ class FairShareAllocator
             $floors[$key] = $configs[$key]['min'];
         }
 
-        if (array_sum($floors) > $clusterCapacity) {
+        // Greater than OR EQUAL. A floor total that exactly fills the capacity
+        // leaves nothing to share, so allocateWithFairShare() hands back the
+        // floors verbatim and banks nothing — seeding in the demand currency
+        // there opens balances against a distribution that never happens.
+        if (array_sum($floors) >= $clusterCapacity) {
             return $this->floorEntitlements($floors, $clusterCapacity);
         }
 
