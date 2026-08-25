@@ -91,9 +91,29 @@ cannot, exactly once, after which normal accounting resumes. Measured across
 leadership changing every 5, 8, 11 and 20 cycles, no workload is left
 permanently unserved in any of them; with a stable leader nothing changes.
 
+The allocator is now one calculation with two projections: a single set of
+exact fractional shares, from which the integer targets are rounded and against
+which the ledger is settled. Both sides of the ledger therefore come from the
+same figure and cannot disagree.
+
+That structure is the fix, not a tidy-up. Entitlement used to be derived by a
+second set of formulas running parallel to the allocation, kept in agreement by
+hand across three payment rules and two branch predicates — and seven separate
+defects came out of that arrangement, each one a place where the two sides
+disagreed about a path, an input range or a boundary. Because the ledger is
+cumulative, a disagreement of any size integrates: balances reached 200,000
+while a workload received a fifth of what it was owed, permanently.
+
+The rule for sharing capacity is deliberately unchanged, and the specs that
+pinned it pass untouched. What changed is where the ledger attaches. Two
+properties now hold by construction and are asserted directly: the balances sum
+to zero, because capacity handed to one workload is capacity taken from another;
+and no balance moves by more than one worker in a cycle, because the rounding is
+all a cycle can leave unpaid. Either one, asserted earlier, would have caught all
+seven defects.
+
 Entitlement is measured in the currency the allocation actually pays in: the
-floor first, then a proportional slice of what is left, matching how capacity is
-handed out. Measured as a plain proportional share instead, a workload whose
+floor first, then what is left over, matching how capacity is handed out. Measured as a plain proportional share instead, a workload whose
 floor exceeds that share is paid its floor every cycle while its balance says it
 was owed less, and the difference banks forever as a debt nothing can settle —
 balances drifted 3.6 a cycle without limit, 180,000 apart after 50,000 cycles,
