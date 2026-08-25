@@ -5,26 +5,6 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v4.2.0 — the scaling guards stop fighting the fleet - 2026-08-25
-
-Three guards sit between the engine's demand figure and the workers that get spawned: the anti-flapping cooldown, the failure fuse, and cluster fair share. Each was correct alone. Composed, each could produce the outcome it exists to prevent.
-
-- **The cooldown manufactured the SLA breach it exists to prevent.** On demand whose period is a small multiple of its window, every change is a reversal, so every rise was deferred until the backlog breached — and the breach then released a target the delay had inflated. Damping is one-sided now.
-- **The fuse was damped.** A withdrawal from a queue whose jobs are failing was held as an ordinary reversal, leaving a full-size fleet against a dead dependency for the rest of the window.
-- **Fair share starved the same queues permanently.** Across randomised configurations, better than a quarter had a workload never served at all.
-
-Plus a stalled leader that could overwrite the real one, a single nonsense heartbeat that could stop the leader scaling itself, a manager that looked healthy while every cycle failed, and per-queue state on the leader that was never swept.
-
-### What you will feel on upgrade
-
-**Damping is one-sided.** A scale-up is never held, so the fleet rises sooner where a rise reversed a recent fall. The scale-down window is unchanged, but three situations now pass it: a fuse-forced withdrawal, a hold surrendering surplus when the cluster is at capacity, and a decision a scaling policy flipped.
-
-**A worker floor applies only to a queue you named.** Unnamed queues scale to zero when idle — and now wake on the first evaluation cycle rather than halfway through their SLA, which is what makes that safe. To restore the old behaviour: `'queues' => ['*' => ['workers' => ['min' => 1]]]`.
-
-Backward-compatible with v4.1.0: no public signature removed or narrowed, contracts and the testing fakes byte-identical, added parameters trailing and optional, no config key removed or defaulted differently.
-
-**[The full account, with the measurements behind every change, is in CHANGELOG.md](https://github.com/cboxdk/laravel-queue-autoscale/blob/main/CHANGELOG.md).**
-
 ## v4.2.0 - 2026-08-25
 
 **Behaviour change: the anti-flapping cooldown is one-sided.**
