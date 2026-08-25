@@ -15,15 +15,16 @@ use Illuminate\Support\Carbon;
  * own decisions, and the two are deliberately separate — a host must keep
  * absorbing reversals whether or not it currently holds the lease.
  *
- * Entries are dropped once a workload has been quiet for longer than the
- * retention window.
+ * Entries are dropped once a workload has not been SEEN for longer than the
+ * retention window — seen meaning anything was recorded about it, not that it
+ * was scaled.
  *
- * That sweep is driven by the last scaling ACTION, so it only bounds memory on
- * a host that actually scales. A cluster leader records breach state for every
- * discovered workload but never calls recordScale() — the scaling happens on
- * the followers — so on a leader the breach map is not currently bounded. That
- * predates this class and is tracked separately; do not read the sweep as a
- * guarantee for every caller.
+ * The distinction is the whole point. The sweep used to be driven by the last
+ * scaling action, which bounds memory only on a host that actually scales. A
+ * cluster leader records breach state for every workload it discovers and never
+ * calls recordScale(), because the scaling happens on the followers — so on a
+ * leader nothing was ever swept, and an application minting a queue name per
+ * tenant grew one permanent entry per tenant in a process that runs for weeks.
  */
 class WorkloadStateTracker
 {
@@ -35,6 +36,19 @@ class WorkloadStateTracker
 
     /** @var array<string, bool> */
     private array $breachState = [];
+
+    /**
+     * When anything was last recorded about each workload.
+     *
+     * Kept separately from lastScaleTime because the two answer different
+     * questions: one is "when did this last move", which the cooldown needs,
+     * and this one is "is this workload still a thing", which is what bounds
+     * the memory. A workload can be evaluated on every cycle for hours without
+     * ever moving.
+     *
+     * @var array<string, Carbon>
+     */
+    private array $lastSeen = [];
 
     public function inCooldown(string $key, int $cooldownSeconds): bool
     {
@@ -111,6 +125,7 @@ class WorkloadStateTracker
     {
         $this->lastScaleTime[$key] = now();
         $this->lastScaleDirection[$key] = $direction;
+        $this->lastSeen[$key] = now();
     }
 
     public function wasBreaching(string $key): bool
@@ -121,19 +136,27 @@ class WorkloadStateTracker
     public function setBreaching(string $key, bool $isBreaching): void
     {
         $this->breachState[$key] = $isBreaching;
+        $this->lastSeen[$key] = now();
     }
 
     /**
-     * Forget every workload whose last scaling action predates the cutoff.
+     * Forget every workload nothing has been recorded about since the cutoff.
+     *
+     * Driven by last-seen rather than last-scaled so it bounds a leader too,
+     * and so a workload that is still being evaluated keeps the memory that
+     * describes it. Sweeping a live workload would reset the breach edge that
+     * decides whether SlaBreached has already been reported, which is how a
+     * queue breaching quietly for an hour would announce itself twice.
      */
     public function forgetQuietSince(Carbon $cutoff): void
     {
-        foreach ($this->lastScaleTime as $key => $at) {
+        foreach ($this->lastSeen as $key => $at) {
             if ($at->greaterThanOrEqualTo($cutoff)) {
                 continue;
             }
 
             unset(
+                $this->lastSeen[$key],
                 $this->lastScaleTime[$key],
                 $this->lastScaleDirection[$key],
                 $this->breachState[$key],

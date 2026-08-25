@@ -57,6 +57,21 @@ bounded, and a workload already holding a leftover keeps it until a challenger
 has banked meaningfully more — without that margin the guarantee cost 2820
 worker moves per 720 cycles, with it, 156.
 
+**Fixed: a cluster leader no longer accumulates per-queue state forever.**
+Per-queue bookkeeping is swept once a workload has gone quiet, but the sweep
+was driven by the last scaling ACTION — and a leader records breach state for
+every workload it discovers while never scaling any of them itself, because the
+scaling happens on the followers. Its map was therefore never visited: an
+application minting a queue name per tenant grew one permanent entry per tenant
+in a process that runs for weeks. The sweep now runs on when a workload was
+last SEEN, which bounds a leader and a follower alike.
+
+It also stops a second, quieter problem. A queue evaluated on every cycle but
+not scaled for an hour used to have its breach state swept out from under it,
+resetting the edge that records whether its breach had already been reported —
+so a queue breaching all along could announce itself twice. State now survives
+for as long as the workload does.
+
 **Fixed: a new cluster leader no longer restarts fairness from nothing.**
 The fair-share ledger is per-manager, so a manager taking the lease opened every
 balance at zero and the ordering fell back to the workload key — where the

@@ -1285,8 +1285,12 @@ class AutoscaleManager
      *
      * Bounded rather than cleared: the anti-flapping window and the breach
      * state are what stop a queue oscillating, so discarding them every cycle
-     * would defeat both. A queue that has not been scaled within the retention
-     * window has nothing left worth remembering.
+     * would defeat both. A queue nothing has been recorded about within the
+     * retention window has nothing left worth remembering.
+     *
+     * Quiet means unseen, not unscaled. A leader records breach state for every
+     * workload it discovers and never scales any of them itself, so a sweep
+     * driven by the last scaling action skipped its map entirely.
      */
     private function forgetQueuesNotSeenRecently(): void
     {
