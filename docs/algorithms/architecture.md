@@ -390,6 +390,10 @@ So:
   costs a cycle. The manager warns when it sees three leadership changes inside one anti-flapping
   window, and `queue:autoscale:doctor` warns when the lease has no headroom over the evaluation
   cycle, which is the usual cause.
+- A workload asking for **less than its floor** is paid the lesser figure. `workers.min` is a
+  claim on capacity, and a queue demanding less is saying it cannot use that claim — which is what
+  the failure fuse makes it say. Paying the floor anyway hands workers to a queue every host will
+  refuse to spawn, and takes them from queues that would have run them.
 - Once the configured floors reach capacity — at it as well as over it — only the floors are
   shared. A queue with `workers.min` of zero has made no claim on the cluster and receives
   nothing for as long as that lasts, however much backlog it holds — serving it ahead of a floor that is itself

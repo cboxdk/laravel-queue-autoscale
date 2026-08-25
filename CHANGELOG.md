@@ -57,6 +57,23 @@ is bounded, and a workload already holding a leftover keeps it until a
 challenger has banked meaningfully more — without that margin the guarantee cost 2820
 worker moves per 720 cycles, with it, 156.
 
+**Fixed: a queue that cannot use its floor is no longer paid one.**
+`workers.min` is a claim on capacity, and a workload asking for less than its
+floor is telling us it cannot use that claim — the failure fuse does exactly
+that, returning a demand below the floor, down to zero, when a queue's jobs are
+failing. On a cluster whose floors together exceed capacity, the fused queue was
+still allocated its scaled share: workers every host would then refuse to spawn,
+taken from queues that would have run them. Measured on a capacity of eight
+against three floors of five with one queue fused, the fused queue took three
+workers it could not use while the two healthy queues dropped from four each to
+three and two. The trigger is a downstream dependency failing at the same moment
+the cluster is over-subscribed, which is the worst time to hold capacity idle.
+
+This also settles a disagreement between the two allocation paths: one clamped
+floors to demand and the other did not, so a one-worker change in capacity could
+move four workers between queues as the cluster crossed the boundary between
+them. Both clamp now, and the boundary is continuous.
+
 **Fixed: a cluster leader no longer accumulates per-queue state forever.**
 Per-queue bookkeeping is swept once a workload has gone quiet, but the sweep
 was driven by the last scaling ACTION — and a leader records breach state for
@@ -172,6 +189,14 @@ leaving the leader unscaled every cycle until that host aged out of the
 registry. Non-finite values are rejected at the heartbeat boundary now, and the
 summary is published inside its own guard: it reports on the scaling, and a
 reporting failure must not become a scaling outage.
+
+**Fixed: `FairShareAllocator` no longer reads a missing `workers.max` as zero.**
+Both bounds are required by the method's shape, but the two absences do not mean
+the same thing if one arrives anyway: no minimum is a workload making no claim,
+while no maximum is a workload with no configured ceiling. Reading the second as
+zero silently refused a workload that had asked for work. Unreachable through
+the manager, which always supplies both, but the class is a documented extension
+point.
 
 **Fixed: a manager whose every cycle fails no longer looks healthy.**
 A cycle that throws is caught so one bad workload cannot take the daemon down,
