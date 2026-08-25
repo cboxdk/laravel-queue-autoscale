@@ -70,6 +70,43 @@ class WorkloadStateTracker
         unset($this->lastScaleDirection[$key]);
     }
 
+    /**
+     * Whether a move must be damped as a direction reversal.
+     *
+     * Damping is ONE-SIDED: a scale-up is never held. Holding one instead lets
+     * the backlog grow until it breaches, and the breach then releases a target
+     * the delay itself inflated — the guard becomes the source of the
+     * oscillation it exists to absorb.
+     *
+     * A scale-down is held only while the window opened by a scale-up is still
+     * running. Consecutive withdrawals are never delayed, and a quiet stretch
+     * longer than the window releases the next one.
+     *
+     * Stated as `=== 'up'` rather than "not a scale-down" so it matches
+     * Cluster\ClusterCooldown exactly. That class cannot store a 'hold' at all
+     * — its remember() drops them — while recordScale() here will store
+     * whatever it is given, so the looser form would have made the two
+     * implementations of one rule disagree on an input only this one can see.
+     * ClusterCooldown carries the measurements behind both halves; the
+     * predicate lives here so the two single-host call sites cannot drift
+     * apart from each other.
+     *
+     * Clears a direction that has outlived its window as a side effect, so a
+     * quiet workload is not blocked by a move from minutes ago.
+     *
+     * @param  string  $direction  'up', 'down' or 'hold'
+     */
+    public function holdsReversal(string $key, string $direction, int $cooldownSeconds): bool
+    {
+        if ($this->lastDirection($key) !== null && ! $this->inCooldown($key, $cooldownSeconds)) {
+            $this->forgetDirection($key);
+        }
+
+        $lastDirection = $this->lastDirection($key);
+
+        return $direction === 'down' && $lastDirection === 'up';
+    }
+
     public function recordScale(string $key, string $direction): void
     {
         $this->lastScaleTime[$key] = now();

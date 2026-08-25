@@ -74,7 +74,7 @@ The output names the limiting factor for every queue.
 
 **Causes and fixes:**
 
-1. **Arrival rate is genuinely oscillating.** The autoscaler is responding correctly, but it's noisy. Raise `scaling.cooldown_seconds` (default 60) to dampen. Anti-flapping already suppresses direction-reversals within the cooldown unless there's an active SLA breach.
+1. **Arrival rate is genuinely oscillating.** The autoscaler is responding correctly, but it's noisy. Raise `scaling.cooldown_seconds` (default 60) to dampen. Anti-flapping already suppresses a scale-down that reverses a recent scale-up; scale-ups are never held, so raising the window slows how fast the fleet comes back down, not how fast it responds.
 2. **Your `workers.min` and target from strategy are close.** The strategy drops below min, gets clamped up, next cycle drops again. Lower `workers.min` to 0 or widen the gap between expected demand and min.
 3. **A flaky metric source.** If `laravel-queue-metrics` is reporting wildly different throughput values from one cycle to the next, the strategy will over-react. `queue:autoscale:debug` run multiple times in a row should show stable numbers when there's no real traffic.
 

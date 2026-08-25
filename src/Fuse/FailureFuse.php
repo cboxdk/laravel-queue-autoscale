@@ -108,6 +108,39 @@ readonly class FailureFuse
         };
     }
 
+    /**
+     * Whether the fuse currently imposes a worker ceiling, WITHOUT running the
+     * state machine.
+     *
+     * evaluate() is not a query: it trips, probes and recovers, resets the
+     * failure window and dispatches events, and its contract is that the
+     * manager runs it exactly once per evaluation cycle. Anything that merely
+     * wants to KNOW whether the fuse is holding a queue back — the anti-flapping
+     * damper, which must not delay a fuse-forced withdrawal — has to ask
+     * without transitioning, or a second call landing either side of the
+     * cooldown boundary would move the fuse and fire its event from inside a
+     * damping predicate.
+     *
+     * Closed is the only state with no ceiling, so this is exactly the
+     * condition FuseVerdict::workerCeiling() reports, minus the transitions.
+     */
+    public function isConstraining(QueueConfiguration $config): bool
+    {
+        if (! $config->fuse->enabled) {
+            return false;
+        }
+
+        try {
+            [$state] = $this->currentState($config);
+        } catch (\Throwable) {
+            // Fail open, exactly as evaluate() does: an unreadable store must
+            // never be more damaging than not having a fuse at all.
+            return false;
+        }
+
+        return $state !== FuseState::Closed;
+    }
+
     private function trip(
         QueueConfiguration $config,
         int $total,

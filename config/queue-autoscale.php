@@ -246,6 +246,14 @@ return [
     'scaling' => [
         'fallback_job_time_seconds' => env('QUEUE_AUTOSCALE_FALLBACK_JOB_TIME', 2.0),
         'breach_threshold' => 0.5,
+
+        /*
+         * Anti-flapping window. One-sided: it holds a scale-DOWN, never a
+         * scale-up, and only while the window opened by a recent scale-up is
+         * still running. Consecutive withdrawals are not delayed. Raising it
+         * makes an over-provisioned fleet stay that way for longer; it does
+         * not slow how fast the fleet responds to load.
+         */
         'cooldown_seconds' => 60,
     ],
 

@@ -229,7 +229,7 @@ T+5m5s Next cycle: 30 → 23, then 23 → 18, then 18 → 20 (clamped up by the 
 T+later Rate 2/s → target 4, then down to workers.min
 ```
 
-Cooldown does **not** slow this down: consecutive scale-downs are all in the same direction, and the cooldown only blocks direction *reversals*. The gradual shape comes from `ConservativeScaleDownPolicy` and the strategy's own smoothing.
+Cooldown does **not** slow this down: consecutive scale-downs are all in the same direction, and the cooldown only blocks the *first* scale-down after a recent scale-up. The gradual shape comes from `ConservativeScaleDownPolicy` and the strategy's own smoothing.
 
 ## SLA Target Behavior
 
@@ -438,7 +438,7 @@ System metrics are cached for 4 seconds because reading system metrics is not fr
 'scaling' => ['cooldown_seconds' => 60],  // global, top-level
 ```
 
-**Purpose:** prevent flapping. It blocks **direction reversals only**, per connection+queue:
+**Purpose:** prevent flapping. It blocks a **scale-down**, and only a scale-down, per connection+queue — and only while the window opened by a recent scale-up is still running:
 
 ```text
 10:00:00  scale up   5 → 10        (direction recorded: up)
@@ -447,7 +447,7 @@ System metrics are cached for 4 seconds because reading system metrics is not fr
 10:01:05  want to scale down       allowed — window elapsed, direction cleared
 ```
 
-Scaling up during an **active SLA breach** bypasses the cooldown entirely: protecting the SLA outranks anti-flapping.
+A **scale-up is never suppressed**, breach or no breach. The damping is deliberately one-sided: a held scale-down only costs money and is fully recoverable, while a held scale-up accumulates backlog that still has to be worked off — so the SLA would already be broken by the time anything released it.
 
 ## Metrics and Visibility
 
@@ -539,7 +539,7 @@ php artisan vendor:publish --tag=queue-metrics-config
 
 ### Q: Can I force faster scaling?
 
-**A**: Lower the daemon's `--interval`, lower `scaling.breach_threshold`, or raise `workers.min`. Reducing `scaling.cooldown_seconds` only helps if direction reversals are what is blocking you.
+**A**: Lower the daemon's `--interval`, lower `scaling.breach_threshold`, or raise `workers.min`. Reducing `scaling.cooldown_seconds` will not help a slow scale-**up** — the cooldown never holds one. It only shortens how long a scale-down waits after a recent rise.
 
 ### Q: What happens if the system runs out of resources?
 

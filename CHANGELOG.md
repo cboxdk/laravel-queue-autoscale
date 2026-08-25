@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+**Behaviour change: the anti-flapping cooldown is one-sided.**
+`scaling.cooldown_seconds` now holds only a scale-DOWN. A scale-up is never
+held, so the SLA-breach exception that used to release one is gone as a
+mechanism. A scale-down is still held while the window opened by a recent
+scale-up is running, unchanged. The direction remembered is now the one that
+actually happened rather than the one the engine proposed, so a scaling policy
+that flips a decision can no longer leave the guard damping the wrong way.
+A scale-down forced by the failure fuse now bypasses the damper entirely:
+failing jobs look like load, so the fleet has usually just scaled up when the
+fuse trips, and the withdrawal was being held as an ordinary reversal — leaving
+a full-size fleet against a dead dependency for the rest of the window. Damping both directions made the manager
+the source of the oscillation it exists to absorb: on demand whose period is a
+small multiple of the cooldown window every change is a reversal, so each rise
+was deferred until the backlog breached, the breach then released a target the
+delay itself had inflated, and the fall off that spike was deferred in turn.
+A rise arriving mid-drain was answered by *cutting* the fleet, because a hold
+republishes the last allowed target clamped to what is running. Measured
+against the real engine on a 120-second sine at `workers.max` 20: symmetric
+damping pinned the fleet to the 20-worker ceiling for a load needing about 5,
+averaged 9.2 workers and spent 109 of 3600 ticks breaching. One-sided peaks at
+8, averages 6.5 and never breaches; at a 90-second period symmetric holds the
+SLA but still sits at the ceiling. Noise around a constant mean, a sustained step and a
+periodic burst — the shapes the guard was written for — came out the same or
+better on every measure, and the result holds across cooldown windows from 30
+to 300 seconds. Nothing about scale-down damping changed; if you
+raised `cooldown_seconds` to suppress oscillation, it still does that, and it
+no longer delays the response to load.
+
+**Fixed: two ways a queue could be starved indefinitely.**
+When cluster capacity cannot satisfy every workload, the shortfall is shared
+proportionally and the leftover workers were handed out by largest fractional
+remainder. That is a fair way to round one allocation and an unfair way to
+repeat one. Identical floors give identical remainders, so a tie-break decided
+it — and being deterministic, it decided the same way every cycle forever;
+unequal floors are worse still, because the smallest share also has the
+smallest remainder and simply loses. Measured over 720 cycles, six queues into
+capacity for four left two of them at zero throughout while holding real
+backlog, and across randomised mixed floors better than a quarter of
+configurations had a workload that was never served at all. The same rule, and
+the same outcome, applied to the water-filling path.
+
+Entitlement a workload was owed and did not receive is now banked and carried
+forward, so the leftover goes to whoever is furthest behind. Proportionality
+holds over time instead of per cycle, which is what the rounding was
+approximating: a queue entitled to nine percent of the workers now receives
+nine percent of them rather than none. Every workload's time at zero is
+bounded, and a workload already holding a leftover keeps it until a challenger
+has banked meaningfully more — without that margin the guarantee cost 2820
+worker moves per 720 cycles, with it, 156.
+
+Separately, a damped scale-down could refuse to release capacity that fair
+share had already promised to another workload, so a scale-up the damper never
+touched was starved by a neighbour's hold. A hold now surrenders its surplus
+when the cluster total no longer fits. This makes anti-flapping conditional on
+spare capacity: on a cluster running at its ceiling, two workloads whose
+demands alternate will each surrender their hold to the other and move workers
+at the demand's own period. The alternative was publishing a total the hosts
+could not place, which did not prevent the move — it only stopped the manager
+predicting it.
+
 **Behaviour change: a worker floor now applies only to a queue you named.**
 Queues are discovered from metrics rather than registered, so an application
 minting a queue name per tenant was getting one permanently-running

@@ -9,6 +9,7 @@ use Cbox\LaravelQueueAutoscale\Cluster\ClusterCooldown;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterRecommendation;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterSummaryBuilder;
+use Cbox\LaravelQueueAutoscale\Cluster\CooldownDecision;
 use Cbox\LaravelQueueAutoscale\Cluster\EvaluatedWorkload;
 use Cbox\LaravelQueueAutoscale\Cluster\WorkerDistributor;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
@@ -119,6 +120,13 @@ class AutoscaleManager
         private readonly ConsoleReporter $reporter = new ConsoleReporter,
         private readonly ClusterSummaryBuilder $summaryBuilder = new ClusterSummaryBuilder,
         ?MeasuredResourceCollector $resourceCollector = null,
+        // Appended rather than slotted in beside the other leader-memory
+        // collaborators so no positional caller shifts. It carries the
+        // banked entitlement that keeps a workload from being starved
+        // forever, which only accumulates if the instance OUTLIVES the cycle —
+        // building one inside the evaluation, as this did, reset every balance
+        // each time and made the whole guarantee a no-op.
+        private readonly FairShareAllocator $allocator = new FairShareAllocator,
     ) {
         $this->pool = new WorkerPool;
         $this->outputBuffer = new WorkerOutputBuffer;
@@ -527,8 +535,7 @@ class AutoscaleManager
         }
 
         $scalableCapacity = max($clusterCapacity - array_sum($pinnedDemands), 0);
-        $allocator = new FairShareAllocator;
-        $scalableTargets = $allocator->allocate($scalableDemands, $scalableConfigs, $scalableCapacity);
+        $scalableTargets = $this->allocator->allocate($scalableDemands, $scalableConfigs, $scalableCapacity);
         $adjustedTargets = $pinnedDemands + $scalableTargets;
 
         // Phase C consumes this in iteration order and accumulates
@@ -543,20 +550,21 @@ class AutoscaleManager
         // summaries, and record scaling decisions + SLA events.
         $workloads = [];
 
+        $dampedDecisions = $this->dampClusterTargets($adjustedTargets, $workloadMeta, $clusterCapacity);
+
         foreach ($adjustedTargets as $workloadKey => $targetWorkers) {
             $meta = $workloadMeta[$workloadKey];
             $currentWorkers = $meta->currentWorkers;
             $slaTarget = $meta->config->sla->targetSeconds;
             $isBreaching = $meta->isBreaching();
-            $cooldownSeconds = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
-            $damped = $this->cooldown->apply($workloadKey, $currentWorkers, $targetWorkers, $isBreaching, $cooldownSeconds);
+            $damped = $dampedDecisions[$workloadKey];
 
             if ($damped->wasHeld) {
                 $this->verbose("  ⏸️  Anti-flapping: holding {$workloadKey} at {$damped->targetWorkers} during cooldown", 'debug');
             }
 
             if ($damped->breachOverride) {
-                $this->verbose('  🚨 SLA breach override: bypassing anti-flapping cooldown for cluster scale-up', 'warn');
+                $this->verbose("  🚨 SLA breach while {$workloadKey} reverses into a cluster scale-up", 'warn');
             }
 
             $targetWorkers = $damped->targetWorkers;
@@ -788,6 +796,98 @@ class AutoscaleManager
                 $this->reportWorkloadFailure('group', $group->connection, $group->name, $e);
             }
         }
+    }
+
+    /**
+     * Damp every workload's allocated target, without letting a hold squat on
+     * capacity another workload has been allocated.
+     *
+     * A hold republishes the last allowed target, which is by definition above
+     * the one fair share just handed out — that is what damping IS. Under
+     * contention that surplus is not free: fair share has already promised it
+     * to somebody else, the distributor hands out hosts in order and simply
+     * stops when they fill, and the workload at the end of the queue gets
+     * nothing. A scale-up is never held by the damper, so it would arrive at
+     * the distributor unblocked and still be starved by a neighbour's refusal
+     * to shrink.
+     *
+     * So the surplus is given back when, and only when, the total no longer
+     * fits. Anti-flapping is a preference about the shape of a change; the
+     * capacity ceiling is a fact about the hardware, and facts win.
+     *
+     * @param  array<string, int>  $adjustedTargets
+     * @param  array<string, EvaluatedWorkload>  $workloadMeta
+     * @return array<string, CooldownDecision>
+     */
+    private function dampClusterTargets(array $adjustedTargets, array $workloadMeta, int $clusterCapacity): array
+    {
+        $cooldownSeconds = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
+
+        $decisions = [];
+        $surpluses = [];
+
+        foreach ($adjustedTargets as $workloadKey => $targetWorkers) {
+            $meta = $workloadMeta[$workloadKey];
+
+            // A fuse-forced withdrawal is published immediately rather than
+            // damped, same as on the single-host paths. evaluateDemand()
+            // applies the fuse ceiling to cluster-wide demand too, so without
+            // this the leader keeps every host's share of a failing queue alive
+            // for the rest of the window.
+            $decisions[$workloadKey] = $this->engine->isFuseConstraining($meta->config)
+                ? new CooldownDecision($targetWorkers)
+                : $this->cooldown->apply(
+                    $workloadKey,
+                    $meta->currentWorkers,
+                    $targetWorkers,
+                    $meta->isBreaching(),
+                    $cooldownSeconds,
+                );
+
+            $surplus = $decisions[$workloadKey]->targetWorkers - $targetWorkers;
+
+            if ($surplus > 0) {
+                $surpluses[$workloadKey] = $surplus;
+            }
+        }
+
+        $overshoot = array_sum(array_map(
+            static fn (CooldownDecision $decision): int => $decision->targetWorkers,
+            $decisions,
+        )) - $clusterCapacity;
+
+        if ($overshoot <= 0 || $surpluses === []) {
+            return $decisions;
+        }
+
+        // Biggest squatter first, then by key so two identical clusters do not
+        // disagree about who yields.
+        uksort($surpluses, static function (string $a, string $b) use ($surpluses): int {
+            return ($surpluses[$b] <=> $surpluses[$a]) ?: strcmp($a, $b);
+        });
+
+        foreach ($surpluses as $workloadKey => $surplus) {
+            if ($overshoot <= 0) {
+                break;
+            }
+
+            $givenBack = min($surplus, $overshoot);
+            $overshoot -= $givenBack;
+
+            $held = $decisions[$workloadKey];
+            $decisions[$workloadKey] = new CooldownDecision(
+                $held->targetWorkers - $givenBack,
+                wasHeld: $held->wasHeld,
+                breachOverride: $held->breachOverride,
+            );
+
+            $this->verbose(
+                "  ⚖️  Anti-flapping yielded {$givenBack} worker(s) on {$workloadKey}: the cluster is at capacity",
+                'debug',
+            );
+        }
+
+        return $decisions;
     }
 
     private function clusterTargetWorkers(
@@ -1308,36 +1408,33 @@ class AutoscaleManager
             $this->verbose("  🚨 SLA BREACH: oldest_age={$metrics->oldestJobAge}s >= SLA={$config->sla->targetSeconds}s", 'error');
         }
 
-        // 5. Anti-flapping check: prevent direction reversals within cooldown
-        // Exception: scale-up during SLA breach is always allowed to protect SLA
+        // 5. Anti-flapping check: hold a scale-DOWN that reverses a recent
+        // scale-up. A scale-up is never held — see WorkloadStateTracker.
         $key = "{$connection}:{$queue}";
         $currentDirection = $decision->shouldScaleUp() ? 'up' : ($decision->shouldScaleDown() ? 'down' : 'hold');
-        $lastDirection = $this->workloadState->lastDirection($key);
-
-        // Clear stale direction: once cooldown has fully elapsed, the last direction
-        // is no longer relevant. This prevents HOLD→HOLD→...→DOWN from being blocked
-        // by an UP that happened minutes ago.
         $scaleCooldownSeconds = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
-        if ($lastDirection !== null && ! $this->workloadState->inCooldown($key, $scaleCooldownSeconds)) {
-            $this->workloadState->forgetDirection($key);
-            $lastDirection = null;
+
+        // A withdrawal the fuse forced is never damped. Failures look like load,
+        // so the fleet has usually just scaled UP when the fuse trips — exactly
+        // the state in which the damper would hold the withdrawal, leaving a
+        // full-size fleet hammering a dead dependency for the rest of the
+        // window on top of the fuse's own detection latency.
+        // holdsReversal() first: it clears a direction that has outlived its
+        // window as a side effect, and that has to happen every cycle. The fuse
+        // is only consulted when a hold is actually imminent.
+        if ($this->workloadState->holdsReversal($key, $currentDirection, $scaleCooldownSeconds)
+            && ! $this->engine->isFuseConstraining($config)) {
+            $remaining = $this->workloadState->cooldownRemaining($key, $scaleCooldownSeconds);
+            $this->verbose("  ⏸️  Anti-flapping: cannot reverse into a scale-down during cooldown ({$remaining}s remaining)", 'debug');
+
+            return;
         }
 
-        // Only apply cooldown if direction is reversing (prevents flapping)
-        if ($currentDirection !== 'hold' && $lastDirection !== null && $currentDirection !== $lastDirection) {
-            // Always allow scale-up during SLA breach - protecting SLA takes priority over anti-flapping
-            $isBreachScaleUp = $currentDirection === 'up' && $isBreaching;
-
-            if (! $isBreachScaleUp && $this->workloadState->inCooldown($key, $scaleCooldownSeconds)) {
-                $remaining = $this->workloadState->cooldownRemaining($key, $scaleCooldownSeconds);
-                $this->verbose("  ⏸️  Anti-flapping: cannot reverse direction during cooldown ({$remaining}s remaining)", 'debug');
-
-                return;
-            }
-
-            if ($isBreachScaleUp) {
-                $this->verbose('  🚨 SLA breach override: bypassing anti-flapping cooldown for scale-up', 'warn');
-            }
+        // Read AFTER the check, which drops a direction that has outlived its
+        // window. Reading first would report a reversal against a move from
+        // minutes ago, and disagree with the cluster path on the same facts.
+        if ($currentDirection === 'up' && $isBreaching && $this->workloadState->lastDirection($key) === 'down') {
+            $this->verbose('  🚨 SLA breach during a reversing scale-up', 'warn');
         }
 
         // Log scaling recommendation
@@ -1446,8 +1543,16 @@ class AutoscaleManager
         }
 
         // 11. Update last scale time and direction
+        //
+        // Record what the fleet ACTUALLY did, not what the engine proposed. A
+        // policy may flip the decision — a headroom rule turning a withdrawal
+        // into a rise, a cost cap doing the reverse, or either escalating a
+        // hold into a real move. Recording the engine's direction against the
+        // policy's outcome then damps the wrong thing: after a flipped
+        // down-to-up, the next genuine scale-down reads as same-direction and
+        // passes undamped, killing the workers just spawned.
         if (! $finalDecision->shouldHold()) {
-            $this->workloadState->recordScale($key, $currentDirection);
+            $this->workloadState->recordScale($key, $finalDecision->shouldScaleUp() ? 'up' : 'down');
         }
     }
 
@@ -1480,23 +1585,15 @@ class AutoscaleManager
 
         // Anti-flapping check (same semantics as per-queue).
         $currentDirection = $decision->shouldScaleUp() ? 'up' : ($decision->shouldScaleDown() ? 'down' : 'hold');
-        $lastDirection = $this->workloadState->lastDirection($key);
         $scaleCooldownSeconds = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
 
-        if ($lastDirection !== null && ! $this->workloadState->inCooldown($key, $scaleCooldownSeconds)) {
-            $this->workloadState->forgetDirection($key);
-            $lastDirection = null;
-        }
+        // Fuse-forced withdrawals bypass the damper — see evaluateQueue.
+        if ($this->workloadState->holdsReversal($key, $currentDirection, $scaleCooldownSeconds)
+            && ! $this->engine->isFuseConstraining($config)) {
+            $remaining = $this->workloadState->cooldownRemaining($key, $scaleCooldownSeconds);
+            $this->verbose("  ⏸️  Anti-flapping (group): cannot reverse into a scale-down during cooldown ({$remaining}s remaining)", 'debug');
 
-        if ($currentDirection !== 'hold' && $lastDirection !== null && $currentDirection !== $lastDirection) {
-            $isBreachScaleUp = $currentDirection === 'up' && $isBreaching;
-
-            if (! $isBreachScaleUp && $this->workloadState->inCooldown($key, $scaleCooldownSeconds)) {
-                $remaining = $this->workloadState->cooldownRemaining($key, $scaleCooldownSeconds);
-                $this->verbose("  ⏸️  Anti-flapping (group): cannot reverse direction during cooldown ({$remaining}s remaining)", 'debug');
-
-                return;
-            }
+            return;
         }
 
         $this->verbose("  📊 Group decision: {$currentWorkers} → {$decision->targetWorkers} workers", 'info');
@@ -1556,8 +1653,9 @@ class AutoscaleManager
 
         $this->workloadState->setBreaching($key, $isBreaching);
 
+        // The direction that actually happened — see evaluateQueue.
         if (! $finalDecision->shouldHold()) {
-            $this->workloadState->recordScale($key, $currentDirection);
+            $this->workloadState->recordScale($key, $finalDecision->shouldScaleUp() ? 'up' : 'down');
         }
     }
 

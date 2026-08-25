@@ -382,3 +382,149 @@ test('minimum scaling does not depend on discovery order', function (): void {
 
     expect($backward)->toBe($forward);
 });
+
+/**
+ * When the floors do not fit, somebody gets nothing. Who, and for how long, is
+ * the whole question.
+ *
+ * Making the tie-break deterministic stopped the zero-slot wandering between
+ * queues on discovery order, but it replaced a rotating victim with a permanent
+ * one: identical floors give identical remainders, so the alphabetically-first
+ * workloads won every cycle forever. Measured over 720 cycles with six queues
+ * and capacity for four, two queues were never served once while holding real
+ * backlog. Deterministic starvation is the worse kind, because nothing ends it.
+ */
+test('no workload is starved permanently when the floors do not fit', function (): void {
+    $allocator = new FairShareAllocator;
+
+    $demands = $configs = [];
+    foreach (['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot'] as $queue) {
+        $demands["queue:redis:{$queue}"] = 5;
+        $configs["queue:redis:{$queue}"] = ['min' => 5, 'max' => 20];
+    }
+
+    $everServed = array_fill_keys(array_keys($demands), false);
+
+    for ($cycle = 0; $cycle < 200; $cycle++) {
+        foreach ($allocator->allocate($demands, $configs, 4) as $key => $workers) {
+            if ($workers > 0) {
+                $everServed[$key] = true;
+            }
+        }
+    }
+
+    expect(array_keys(array_filter($everServed, static fn (bool $served): bool => ! $served)))->toBe([]);
+});
+
+test('the allocation holds still between hand-overs', function (): void {
+    // The other half: moving the slot every cycle would swap a starved queue
+    // for a fleet that spends its life being rebuilt. Consecutive cycles
+    // between hand-overs must be byte-identical, or nothing is gained. Measured
+    // without the incumbent's margin: 2820 worker moves over 720 cycles.
+    $allocator = new FairShareAllocator;
+
+    $demands = $configs = [];
+    foreach (['alpha', 'bravo', 'charlie'] as $queue) {
+        $demands["queue:redis:{$queue}"] = 4;
+        $configs["queue:redis:{$queue}"] = ['min' => 4, 'max' => 20];
+    }
+
+    $first = $allocator->allocate($demands, $configs, 2);
+    $unchanged = 0;
+
+    for ($cycle = 1; $cycle < 12; $cycle++) {
+        if ($allocator->allocate($demands, $configs, 2) === $first) {
+            $unchanged++;
+        }
+    }
+
+    expect($unchanged)->toBe(11);
+});
+
+test('each workload receives its proportional share over time', function (): void {
+    // Largest-remainder is a fair way to round ONE allocation and an unfair way
+    // to repeat one: the smallest share has the smallest remainder, so applied
+    // strictly on every cycle it loses the leftover forever. This asserts the
+    // property the rounding was approximating — proportionality over time —
+    // which is the one that can actually be kept.
+    $allocator = new FairShareAllocator;
+
+    // Floors 8/3/3 into capacity 5: exact shares 2.857 / 1.071 / 1.071.
+    $demands = [
+        'queue:redis:big' => 8,
+        'queue:redis:small-a' => 3,
+        'queue:redis:small-b' => 3,
+    ];
+    $configs = [
+        'queue:redis:big' => ['min' => 8, 'max' => 20],
+        'queue:redis:small-a' => ['min' => 3, 'max' => 20],
+        'queue:redis:small-b' => ['min' => 3, 'max' => 20],
+    ];
+
+    $received = ['queue:redis:big' => 0, 'queue:redis:small-a' => 0, 'queue:redis:small-b' => 0];
+
+    for ($cycle = 0; $cycle < 600; $cycle++) {
+        $allocation = $allocator->allocate($demands, $configs, 5);
+
+        expect(array_sum($allocation))->toBe(5);
+
+        foreach ($allocation as $key => $workers) {
+            $received[$key] += $workers;
+        }
+    }
+
+    $total = array_sum($received);
+
+    // Entitled to 57.1% / 21.4% / 21.4% of 3000 worker-cycles.
+    expect($received['queue:redis:big'] / $total)->toBeGreaterThan(0.55)
+        ->and($received['queue:redis:big'] / $total)->toBeLessThan(0.59)
+        ->and(abs($received['queue:redis:small-a'] - $received['queue:redis:small-b']))->toBeLessThan(120);
+});
+
+test('a workload owed a fraction of a worker is served eventually, not never', function (): void {
+    // The case a per-cycle largest-remainder rule cannot serve at all: one
+    // large floor and one small one, where the small share rounds to zero and
+    // its remainder is always the smaller of the two.
+    $allocator = new FairShareAllocator;
+
+    $demands = ['queue:redis:bulk' => 10, 'queue:redis:tiny' => 1];
+    $configs = [
+        'queue:redis:bulk' => ['min' => 10, 'max' => 20],
+        'queue:redis:tiny' => ['min' => 1, 'max' => 20],
+    ];
+
+    $servedCycles = 0;
+
+    for ($cycle = 0; $cycle < 400; $cycle++) {
+        if ($allocator->allocate($demands, $configs, 5)['queue:redis:tiny'] > 0) {
+            $servedCycles++;
+        }
+    }
+
+    // Floors of 10 and 1 into five workers: exact shares 4.545 and 0.4545, so
+    // the small queue's floor rounds to nothing and it lives entirely on the
+    // single leftover — which it is entitled to about 45% of the time. Before
+    // the shortfall was banked it received it exactly never.
+    expect($servedCycles)->toBeGreaterThan(150)
+        ->and($servedCycles)->toBeLessThan(220);
+});
+
+test('the leftover moves across separate allocate() calls on one instance', function (): void {
+    // The behavioural half: the guarantee is about repeated calls, not one.
+    $allocator = new FairShareAllocator;
+
+    $demands = $configs = [];
+    foreach (['alpha', 'bravo', 'charlie'] as $queue) {
+        $demands["queue:redis:{$queue}"] = 4;
+        $configs["queue:redis:{$queue}"] = ['min' => 4, 'max' => 20];
+    }
+
+    $seen = [];
+
+    for ($cycle = 0; $cycle < 60; $cycle++) {
+        $seen[json_encode($allocator->allocate($demands, $configs, 2))] = true;
+    }
+
+    // A frozen allocation yields exactly one distinct result forever.
+    expect(count($seen))->toBeGreaterThan(1);
+});

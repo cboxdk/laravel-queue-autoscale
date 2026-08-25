@@ -68,8 +68,8 @@ Evaluating queue: redis:default
 ```
 
 When the backlog drains, the manager scales back down. Because scaling down is a *reversal* of the
-previous direction, it waits out `scaling.cooldown_seconds` (default 60s) first — the cooldown only
-gates direction changes, never scaling further the same way.
+previous direction, it waits out `scaling.cooldown_seconds` (default 60s) first. The cooldown gates
+only that case: scaling further the same way is never delayed, and neither is a scale-up.
 
 ## Step 4 — Tune for your workload
 

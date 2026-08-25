@@ -273,9 +273,9 @@ scale-down to one worker per cycle while throughput is stable.
   `currentWorkers + additional headroom` and reduced by what other queues on the host already use
 - **Config bounds** — `workers.min` and `workers.max` from the queue's profile
 - **Failure fuse** — holds a queue at `workers.min` while its failure rate is above threshold
-- **Anti-flapping cooldown** — `scaling.cooldown_seconds` (default 60) blocks only a *reversal* of
-  scaling direction; scaling further in the same direction is always allowed, and an active SLA
-  breach overrides the cooldown for scale-up
+- **Anti-flapping cooldown** — `scaling.cooldown_seconds` (default 60) blocks only a *scale-down*,
+  and only while the window opened by a recent scale-up is still running; scaling further in the
+  same direction is always allowed, and a scale-up is never held
 
 See the [Architecture](docs/algorithms/architecture.md) deep dive for the full derivation.
 
@@ -292,7 +292,7 @@ The published `config/queue-autoscale.php` is documented inline. The keys most p
 'scaling' => [
     'fallback_job_time_seconds' => 2.0,     // used when metrics have no avg duration
     'breach_threshold' => 0.5,              // fraction of SLA budget before backlog drain engages
-    'cooldown_seconds' => 60,               // anti-flapping window for direction reversals
+    'cooldown_seconds' => 60,               // anti-flapping window for downward reversals
 ],
 
 'limits' => [
