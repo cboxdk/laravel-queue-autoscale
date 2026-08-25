@@ -861,3 +861,93 @@ test('a floor is still honoured when the queue can use it', function (): void {
     expect(array_sum($allocation))->toBe(8)
         ->and(min($allocation))->toBeGreaterThan(0);
 });
+
+/**
+ * A cycle where everything fits settles nothing, so it must not discharge the
+ * ledger.
+ *
+ * Discarding the balances there looks harmless — if every workload receives
+ * what it can use, nobody is owed anything that cycle — and it is not. Taking a
+ * contested worker from whoever holds it needs about a hysteresis window of
+ * banked credit, so a cluster that crosses the contention boundary more often
+ * than that never accumulates enough, and the alphabetical tie-break decides
+ * every contested cycle forever.
+ *
+ * Measured on the configuration below with a blip every five cycles: four
+ * queues took a worker every single cycle and two took none at all.
+ */
+test('a cycle where everything fits does not discharge the ledger', function (): void {
+    $allocator = new FairShareAllocator;
+
+    $demands = $configs = [];
+
+    foreach (['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot'] as $queue) {
+        $demands["queue:redis:{$queue}"] = 1;
+        $configs["queue:redis:{$queue}"] = ['min' => 0, 'max' => 1];
+    }
+
+    $current = array_fill_keys(array_keys($demands), 0);
+    $served = array_fill_keys(array_keys($demands), 0);
+
+    for ($cycle = 0; $cycle < 3000; $cycle++) {
+        // Six workloads sharing four workers, except every fifth cycle, when
+        // the cluster briefly holds all six.
+        $capacity = $cycle % 5 === 0 ? 6 : 4;
+
+        $current = $allocator->allocate($demands, $configs, $capacity, $current);
+
+        foreach ($current as $key => $workers) {
+            $served[$key] += $workers;
+        }
+    }
+
+    $shares = array_map(static fn (int $total): float => $total / 3000, $served);
+
+    // Every queue is entitled to the same share, and every queue gets it.
+    expect(max($shares) - min($shares))->toBeLessThan(0.05);
+});
+
+test('a departed workload does not keep a balance across a quiet stretch', function (): void {
+    // The reason the wipe looked attractive, handled without it: balances are
+    // pruned to the workloads still present, so nothing a tenant left behind
+    // can decide a contest it is no longer part of.
+    $allocator = new FairShareAllocator;
+
+    $demands = ['queue:redis:a' => 4, 'queue:redis:b' => 4, 'queue:redis:leaving' => 4];
+    $configs = [
+        'queue:redis:a' => ['min' => 0, 'max' => 4],
+        'queue:redis:b' => ['min' => 0, 'max' => 4],
+        'queue:redis:leaving' => ['min' => 0, 'max' => 4],
+    ];
+
+    for ($cycle = 0; $cycle < 40; $cycle++) {
+        $allocator->allocate($demands, $configs, 6);
+    }
+
+    expect((new ReflectionProperty($allocator, 'credits'))->getValue($allocator))
+        ->toHaveKey('queue:redis:leaving');
+
+    unset($demands['queue:redis:leaving'], $configs['queue:redis:leaving']);
+
+    // An uncontested cycle: everything fits, and the departed key goes.
+    $allocator->allocate($demands, $configs, 20);
+
+    expect((new ReflectionProperty($allocator, 'credits'))->getValue($allocator))
+        ->not->toHaveKey('queue:redis:leaving');
+});
+
+test('a negative capacity allocates nothing rather than something negative', function (): void {
+    // The manager clamps before this is reached, but the class is a documented
+    // extension point: scaling a floor by a negative total is arithmetically
+    // fine and operationally nonsense.
+    $allocator = new FairShareAllocator;
+
+    $demands = ['queue:redis:a' => 5, 'queue:redis:b' => 5];
+    $configs = [
+        'queue:redis:a' => ['min' => 5, 'max' => 10],
+        'queue:redis:b' => ['min' => 5, 'max' => 10],
+    ];
+
+    expect($allocator->allocate($demands, $configs, -5))
+        ->toBe(['queue:redis:a' => 0, 'queue:redis:b' => 0]);
+});

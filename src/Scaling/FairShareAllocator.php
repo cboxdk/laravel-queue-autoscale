@@ -129,6 +129,13 @@ class FairShareAllocator
             return [];
         }
 
+        // Never negative. The manager clamps before it gets here, but this is a
+        // public method on a class consumers are meant to extend and call, and
+        // a negative capacity otherwise produces negative targets: scaling a
+        // floor by a negative total is arithmetically fine and operationally
+        // nonsense.
+        $clusterCapacity = max(0, $clusterCapacity);
+
         $bounds = $this->boundsFor($demands, $configs);
         $usable = 0;
 
@@ -141,11 +148,24 @@ class FairShareAllocator
         // deciding otherwise opened a ledger against capacity it could never
         // use — a balance that grew without bound at five a cycle forever.
         if ($usable <= $clusterCapacity) {
-            // Everyone receives everything they can use, so nobody is owed
-            // anything and nobody holds a contested worker. Keeping stale
-            // balances here would let a departed tenant's history decide a
-            // contest much later against a workload that never met it.
-            $this->credits = [];
+            // Nobody holds a contested worker, so incumbency lapses. The
+            // BALANCES stay: they are the record of contests already fought,
+            // and a cycle where everything fits settles nothing.
+            //
+            // Discarding them looked harmless — if everyone gets what they can
+            // use, nobody is owed anything this cycle — and it is not. A hand
+            // -over needs about a hysteresis window of banked credit to take a
+            // worker from whoever holds it, so a cluster that crosses the
+            // contention boundary more often than that never accumulates
+            // enough, and the alphabetical tie-break decides every contested
+            // cycle forever. Measured on six identical queues sharing four
+            // workers with an uncontested blip every five cycles: four queues
+            // took a worker every cycle and two took none at all, where
+            // retaining the balances serves all six evenly.
+            //
+            // Stale entries are not a reason to wipe: they are pruned to the
+            // live set here, and again by settle() on the next contested cycle.
+            $this->credits = array_intersect_key($this->credits, $bounds);
             $this->incumbents = [];
 
             return array_map(static fn (array $bound): int => $bound['ceiling'], $bounds);

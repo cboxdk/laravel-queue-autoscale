@@ -65,8 +65,12 @@ test('the ledger conserves: what one workload is owed, another owes', function (
     // two different things — which is exactly what a second, parallel
     // entitlement formula does.
     //
-    // Asserted without observation seeding, which deliberately opens balances
-    // from outside the allocation and is the one thing allowed to move the sum.
+    // Scoped precisely, because two things legitimately move the sum and both
+    // are bounded events rather than a drift: opening a balance from an
+    // observation, which reconstructs history the allocation never saw, and
+    // pruning a workload that has left, which discards its balance along with
+    // it. Neither happens here — a fixed set of workloads, no observation —
+    // so the sum must be zero to the last floating-point bit.
     $worst = 0.0;
 
     for ($seed = 1; $seed <= 300; $seed++) {
