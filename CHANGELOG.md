@@ -5,7 +5,262 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v4.2.0 - 2026-08-25
+
+**Behaviour change: the anti-flapping cooldown is one-sided.**
+`scaling.cooldown_seconds` now holds only a scale-DOWN. A scale-up is never
+held, so the SLA-breach exception that used to release one is gone as a
+mechanism. A scale-down is still held while the window opened by a recent
+scale-up is running, unchanged. The direction remembered is now the one that
+actually happened rather than the one the engine proposed, so a scaling policy
+that flips a decision can no longer leave the guard damping the wrong way.
+A scale-down forced by the failure fuse now bypasses the damper entirely:
+failing jobs look like load, so the fleet has usually just scaled up when the
+fuse trips, and the withdrawal was being held as an ordinary reversal — leaving
+a full-size fleet against a dead dependency for the rest of the window. Damping both directions made the manager
+the source of the oscillation it exists to absorb: on demand whose period is a
+small multiple of the cooldown window every change is a reversal, so each rise
+was deferred until the backlog breached, the breach then released a target the
+delay itself had inflated, and the fall off that spike was deferred in turn.
+A rise arriving mid-drain was answered by *cutting* the fleet, because a hold
+republishes the last allowed target clamped to what is running. Measured
+against the real engine on a 120-second sine at `workers.max` 20: symmetric
+damping pinned the fleet to the 20-worker ceiling for a load needing about 5,
+averaged 9.2 workers and spent 109 of 3600 ticks breaching. One-sided peaks at
+8, averages 6.5 and never breaches; at a 90-second period symmetric holds the
+SLA but still sits at the ceiling. Noise around a constant mean, a sustained step and a
+periodic burst — the shapes the guard was written for — came out the same or
+better on every measure, and the result holds across cooldown windows from 30
+to 300 seconds. Nothing about scale-down damping changed; if you
+raised `cooldown_seconds` to suppress oscillation, it still does that, and it
+no longer delays the response to load.
+
+**Fixed: two ways a queue could be starved indefinitely.**
+When cluster capacity cannot satisfy every workload, the shortfall is shared
+proportionally and the leftover workers were handed out by largest fractional
+remainder. That is a fair way to round one allocation and an unfair way to
+repeat one. Identical floors give identical remainders, so a tie-break decided
+it — and being deterministic, it decided the same way every cycle forever;
+unequal floors are worse still, because the smallest share also has the
+smallest remainder and simply loses. Measured over 720 cycles, six queues into
+capacity for four left two of them at zero throughout while holding real
+backlog, and across randomised mixed floors better than a quarter of
+configurations had a workload that was never served at all. The same rule, and
+the same outcome, applied to the water-filling path.
+
+Entitlement a workload was owed and did not receive is now banked and carried
+forward, so the leftover goes to whoever is furthest behind. Proportionality
+holds over time instead of per cycle, which is what the rounding was
+approximating: a queue entitled to nine percent of the workers now receives
+nine percent of them rather than none. Every contending workload's time at zero
+is bounded, and a workload already holding a leftover keeps it until a
+challenger has banked meaningfully more — without that margin the guarantee cost 2820
+worker moves per 720 cycles, with it, 156.
+
+**Fixed: a queue that cannot use its floor is no longer paid one.**
+`workers.min` is a claim on capacity, and a workload asking for less than its
+floor is telling us it cannot use that claim — the failure fuse does exactly
+that, returning a demand below the floor, down to zero, when a queue's jobs are
+failing. On a cluster whose floors together exceed capacity, the fused queue was
+still allocated its scaled share: workers every host would then refuse to spawn,
+taken from queues that would have run them. Measured on a capacity of eight
+against three floors of five with one queue fused, the fused queue took three
+workers it could not use while the two healthy queues dropped from four each to
+three and two. The trigger is a downstream dependency failing at the same moment
+the cluster is over-subscribed, which is the worst time to hold capacity idle.
+
+This also settles a disagreement between the two allocation paths: one clamped
+floors to demand and the other did not, so a one-worker change in capacity could
+move four workers between queues as the cluster crossed the boundary between
+them. Both clamp now, and the boundary is continuous.
+
+**Fixed: a cluster leader no longer accumulates per-queue state forever.**
+Per-queue bookkeeping is swept once a workload has gone quiet, but the sweep
+was driven by the last scaling ACTION — and a leader records breach state for
+every workload it discovers while never scaling any of them itself, because the
+scaling happens on the followers. Its map was therefore never visited: an
+application minting a queue name per tenant grew one permanent entry per tenant
+in a process that runs for weeks. The sweep now runs on when a workload was
+last SEEN, which bounds a leader and a follower alike.
+
+It also stops a second, quieter problem. A queue evaluated on every cycle but
+not scaled for an hour used to have its breach state swept out from under it,
+resetting the edge that records whether its breach had already been reported —
+so a queue breaching all along could announce itself twice. State now survives
+for as long as the workload does.
+
+**Fixed: a new cluster leader no longer restarts fairness from nothing.**
+The fair-share ledger is per-manager, so a manager taking the lease opened every
+balance at zero and the ordering fell back to the workload key — where the
+alphabetically-first workloads win. A single failover costs little, because the
+balances diverge again within a hysteresis window; leadership that keeps moving
+never gets that far. Measured, leadership changing every eleven cycles put two of
+six contending queues back to never being served at all.
+
+The leader now opens an unknown balance from what the cluster can be seen to be
+doing. Every host's per-workload worker count already reaches it through the
+heartbeats it reads to size the next decision, and the gap between what a
+workload holds and what it is entitled to is the outcome of the history this
+manager missed. What is not observable is how long it has been that way, which
+is the unit the hysteresis margin is measured in, so the observed gap is scaled
+into that unit — letting what a new leader can see outrank the incumbency it
+cannot, exactly once, after which normal accounting resumes. Measured across
+leadership changing every 5, 8, 11 and 20 cycles, no workload is left
+permanently unserved in any of them; with a stable leader nothing changes.
+
+The allocator is now one calculation with two projections: a single set of
+exact fractional shares, from which the integer targets are rounded and against
+which the ledger is settled. Both sides of the ledger therefore come from the
+same figure and cannot disagree.
+
+That structure is the fix, not a tidy-up. Entitlement used to be derived by a
+second set of formulas running parallel to the allocation, kept in agreement by
+hand across three payment rules and two branch predicates — and seven separate
+defects came out of that arrangement, each one a place where the two sides
+disagreed about a path, an input range or a boundary. Because the ledger is
+cumulative, a disagreement of any size integrates: balances reached 200,000
+while a workload received a fifth of what it was owed, permanently.
+
+The rule for sharing capacity is deliberately unchanged, and the specs that
+pinned it pass untouched. What changed is where the ledger attaches. Two
+properties now hold by construction and are asserted directly: the balances sum
+to zero, because capacity handed to one workload is capacity taken from another;
+and no balance moves by more than one worker in a cycle, because the rounding is
+all a cycle can leave unpaid. Either one, asserted earlier, would have caught all
+seven defects.
+
+Entitlement is measured in the currency the allocation actually pays in: the
+floor first, then what is left over, matching how capacity is handed out. Measured as a plain proportional share instead, a workload whose
+floor exceeds that share is paid its floor every cycle while its balance says it
+was owed less, and the difference banks forever as a debt nothing can settle —
+balances drifted 3.6 a cycle without limit, 180,000 apart after 50,000 cycles,
+and a tenant joining a cluster saturated for a day then waited 41 hours for its
+first worker because the incumbents' history outweighed anything it could bank.
+It waits an ordinary hysteresis window now, whatever the cluster's uptime.
+
+A balance already being kept is never overwritten by a snapshot, and the
+observed count and the entitlement are both clamped before use — a corrupt
+heartbeat or a scaling policy that raises a target above `workers.max` would
+otherwise let a balance grow without limit, and a ledger that has drifted far
+enough stops serving anyone who joins later.
+
+The rate at which the cluster hands slots over no longer grows with the number
+of workloads sharing it. The margin a holder carries scales with the number of
+contenders, so a saturated two-hundred-queue fleet moves workers about as often
+as a six-queue one rather than thirty times as often: measured at constant
+demand, 154 moves an hour at six workloads and 5068 at two hundred and
+fifty-six before, against 100 to 212 across that whole range now. Each workload
+waits proportionally longer for its turn, which is the right way round — one
+sharing capacity with 255 others is entitled to less of it. A cluster of six is
+unchanged.
+
+Two smaller repairs in the same area: the ledger is pruned on every contested
+path rather than only the ones that bank it, so a cluster statically pinned at
+exactly the sum of its worker floors no longer keeps one entry per queue name
+ever seen; and elapsed time in both cooldown windows is now absolute, so a clock
+stepping backwards — an NTP correction, a virtual machine resuming from a
+snapshot — cannot extend a hold. A thirty-minute backward step held a scale-down
+for thirty-one minutes instead of sixty seconds.
+
+`FairShareAllocator` is therefore stateful across calls, which it was not
+before: the same inputs no longer produce the same output on consecutive
+`allocate()` calls, because the ledger between them has moved. That is the
+point — it is what stops the same workload losing every round — but anyone
+calling the allocator directly rather than through the manager should know it.
+
+**Fixed: a stalled leader could overwrite the real leader's recommendations.**
+The fencing token was read when the recommendations were published, at the end
+of the cycle, rather than beside the check that said this manager held the
+lease. An evaluation takes as long as it takes, and a manager that stalls past
+its lease — a long pause, a slow metrics read, a virtual machine frozen and
+resumed — comes back into a cluster somebody else now leads. Reading the token
+then handed it the NEW leader's token, which satisfies the fence and let the
+stale manager publish its own out-of-date assignments under its own id. The
+token is now captured where leadership is confirmed, so the fence rejects the
+stale publish instead, which is what a fence is for.
+
+**Fixed: one nonsense heartbeat could stop the leader scaling itself.**
+`is_numeric()` accepts INF and NAN, and JSON carries them in without complaint:
+`{"cpu_percent": 1e999}` decodes to INF. That value travelled into the cluster
+summary and reached `json_encode(..., JSON_THROW_ON_ERROR)`, which refuses it —
+so one host writing a nonsense heartbeat threw inside the leader's cycle after
+recommendations had been published but before the leader applied its own,
+leaving the leader unscaled every cycle until that host aged out of the
+registry. Non-finite values are rejected at the heartbeat boundary now, and the
+summary is published inside its own guard: it reports on the scaling, and a
+reporting failure must not become a scaling outage.
+
+**Fixed: `FairShareAllocator` no longer reads a missing `workers.max` as zero.**
+Both bounds are required by the method's shape, but the two absences do not mean
+the same thing if one arrives anyway: no minimum is a workload making no claim,
+while no maximum is a workload with no configured ceiling. Reading the second as
+zero silently refused a workload that had asked for work. Unreachable through
+the manager, which always supplies both, but the class is a documented extension
+point.
+
+**Fixed: a manager whose every cycle fails no longer looks healthy.**
+A cycle that throws is caught so one bad workload cannot take the daemon down,
+and the failure went to the configured log channel alone. Console reporting is
+gated on `-v`, which is right for narration and wrong for a failure — so a
+manager that could not reach its cache, or whose metrics package could not read
+its database, printed its start-up banner and then nothing at all while doing
+nothing at all. That is also the likeliest moment for it to happen, because it
+is what a fresh misconfiguration looks like. The failure is now written to the
+console at any verbosity, naming the exception, and throttled to once a minute
+so a daemon failing on a five-second interval does not bury everything else.
+The throttle is kept in the process rather than through the cache-backed alert
+limiter, because an unreachable cache is one of the things it has to report.
+
+**Added: the cluster says when its leadership is unstable.**
+Worker placement, the anti-flapping window and the fair-share ledger are all
+leader working memory, discarded when the lease moves because each describes a
+cluster the new leader has not observed. A single failover costs a cycle;
+leadership that keeps moving means none of them ever completes, and the
+workload starved longest keeps losing its claim to be served next — measured,
+leadership changing every eleven cycles put two of six contending queues back
+to never being served at all. Until now a change was a debug line and an event
+nobody is obliged to listen to. The manager now warns when it observes three
+leadership changes inside one anti-flapping window, and `queue:autoscale:doctor`
+warns when `cluster.leader_lease_seconds` leaves no headroom over
+`manager.evaluation_interval_seconds`, which is the usual reason a leader keeps
+missing its renewal. The shipped defaults — a 15-second lease against a
+5-second interval — pass the check.
+
+Separately, a damped scale-down could refuse to release capacity that fair
+share had already promised to another workload, so a scale-up the damper never
+touched was starved by a neighbour's hold. A hold now surrenders its surplus
+when the cluster total no longer fits. This makes anti-flapping conditional on
+spare capacity: on a cluster running at its ceiling, two workloads whose
+demands alternate will each surrender their hold to the other and move workers
+at the demand's own period. The alternative was publishing a total the hosts
+could not place, which did not prevent the move — it only stopped the manager
+predicting it.
+
+**Fixed: a queue at zero workers now wakes on the first cycle, not halfway
+through its SLA.**
+Both of the engine's calculations are rate calculations, and both answer zero
+for a small backlog on an idle queue: Little's Law sees no arrival rate, and the
+backlog drain deliberately waits until the oldest job has spent
+`scaling.breach_threshold` of its SLA before acting. That patience is right when
+workers are already running and wrong when none are — nothing is absorbing the
+backlog, and the only thing happening is the clock running down. Measured: one
+job arriving at a queue sitting at zero waited 15 seconds against a 30-second
+SLA, 60 against 120, and longer still at 300 — always half the target, whatever
+the evaluation interval; dropping the interval to one second still cost
+fourteen. Three jobs got a worker on the next cycle. The difference was the
+threshold, not the work.
+
+A queue holding work with nothing draining it now asks for one worker straight
+away, so the wait is the evaluation interval and nothing more. It is stated as a
+need rather than a floor, so everything downstream still applies: a host with no
+spare capacity, a queue capped at `workers.max` of zero, and a queue whose
+failure fuse has tripped each still resolve to no workers, and an idle queue with
+no backlog still gets nothing. That last one is what keeps this from quietly
+restoring the floor withdrawn below — it is a response to work, not a standing
+promise.
+
+This matters more BECAUSE of that withdrawal: scaling to zero is only safe if
+coming back is quick.
 
 **Behaviour change: a worker floor now applies only to a queue you named.**
 Queues are discovered from metrics rather than registered, so an application
@@ -35,8 +290,12 @@ implicit floor, name the queues, or restore it wholesale with
 
 ### Fixed
 
-- **The manager id changes on upgrade.** It now carries an application scope,
-  which is what stops two apps on one host from reaping each other's workers.
+- **The manager id changes on upgrade.** It has carried an application scope
+  since v4.1.0 — that is what stops two apps on one host reaping each other's
+  workers — but the scope was derived from a hash of `base_path()`, which
+  differs between two checkouts of the same application and between a symlinked
+  release directory and its target. It is now derived from `app.name` and
+  `app.env`, length-prefixed so two different pairs cannot collide.
   The consequence for an existing deployment: workers orphaned by the
   pre-upgrade manager are no longer recognised and will exit on their own
   `--max-time` rather than being reaped once, and during a rolling upgrade a

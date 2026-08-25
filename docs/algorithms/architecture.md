@@ -351,8 +351,8 @@ outcomes, so the fuse could never close again.
 
 ## Anti-flapping cooldown
 
-`scaling.cooldown_seconds` (default 60) does **not** block all scaling. It blocks **direction
-reversals only**.
+`scaling.cooldown_seconds` (default 60) does **not** block all scaling. It blocks a
+**scale-down that reverses a recent scale-up**, and nothing else.
 
 The manager records `lastScaleTime` and `lastScaleDirection` per queue key. On each evaluation:
 
@@ -362,25 +362,100 @@ currentDirection = up | down | hold
 if lastDirection is set and the cooldown has fully elapsed:
     clear lastDirection            # a scale-up from minutes ago must not block a scale-down now
 
-if currentDirection != 'hold'
+if currentDirection == 'down'
    and lastDirection is set
-   and currentDirection != lastDirection:
+   and lastDirection != 'down':
 
-       isBreachScaleUp = currentDirection == 'up' and oldestJobAge >= sla.target_seconds
-
-       if not isBreachScaleUp and still in cooldown:
-           skip this queue this cycle
+       skip this queue this cycle
 ```
 
 So:
 
 - Scaling **further in the same direction** is always allowed, however recently it happened.
-- A **reversal** within the window is suppressed.
-- A **scale-up during an active SLA breach overrides the cooldown** — protecting the SLA outranks
-  anti-flapping.
-- A `hold` never records a direction and never blocks anything.
+- A **scale-up is never suppressed**, breach or no breach.
+- A **scale-down is suppressed** only while the window opened by a scale-up is still
+  running. Consecutive withdrawals are never delayed, and a `hold` is not recorded at all —
+  a quiet cycle neither opens the window nor refreshes it, so a workload that has been
+  steady for longer than `cooldown_seconds` withdraws immediately.
+- The direction recorded is the one that **actually happened**, after any scaling policy has
+  had its say — not the one the engine proposed.
+- Contested leftovers go to whoever is **owed the most**, not to the largest fractional part.
+  Largest-remainder is a fair way to round one allocation and an unfair way to repeat one:
+  identical floors give identical remainders so a tie-break decides forever, and unequal
+  floors give the smallest share the smallest remainder so it loses outright. Unreceived
+  entitlement is banked and carried forward instead, which keeps proportionality over time
+  and bounds every workload's time at zero.
+- Worker placement and the anti-flapping window are **leader working memory**, discarded when
+  the lease moves because both describe a cluster the new leader has not observed. One failover
+  costs a cycle. The manager warns when it sees three leadership changes inside one anti-flapping
+  window, and `queue:autoscale:doctor` warns when the lease has no headroom over the evaluation
+  cycle, which is the usual cause.
+- A workload asking for **less than its floor** is paid the lesser figure. `workers.min` is a
+  claim on capacity, and a queue demanding less is saying it cannot use that claim — which is what
+  the failure fuse makes it say. Paying the floor anyway hands workers to a queue every host will
+  refuse to spawn, and takes them from queues that would have run them.
+- Once the configured floors reach capacity — at it as well as over it — only the floors are
+  shared. A queue with `workers.min` of zero has made no claim on the cluster and receives
+  nothing for as long as that lasts, however much backlog it holds — serving it ahead of a floor that is itself
+  being scaled down would break the promise to the queue that asked for one. The rotation
+  shares the loss among the workloads that have a claim; it does not invent one for a workload
+  that has none.
+- The **hand-over rate is per cluster, not per workload.** The margin a holder carries grows
+  with the number of workloads contesting, so a fleet of two hundred queues hands slots over at
+  roughly the same rate as a fleet of six rather than two hundred times as often — measured on a
+  saturated cluster at constant demand, 154 worker moves an hour at six workloads against 5068 at
+  two hundred and fifty-six under a fixed margin. Each workload waits proportionally longer for
+  its turn, which is the right way round: one sharing capacity with 255 others is entitled to
+  less of it.
+- The **fairness ledger opens from observation**, not from zero. A manager taking the lease has
+  no balances, and starting them empty throws the ordering back to the key — so leadership that
+  kept moving never let a hand-over complete, and with a change every eleven cycles two of six
+  contending queues went back to never being served. The gap between what a workload holds and
+  what it is entitled to already reaches the leader through the heartbeats it reads anyway, and
+  that gap is the outcome of the history it missed. What it cannot see is how long, which is the
+  unit the hysteresis is measured in — so the observed gap is scaled into that unit, letting what
+  a new leader can see outrank the incumbency it cannot, exactly once.
+- A hold **gives capacity back** rather than starving a neighbour. Damping republishes a target
+  above the one fair share allocated, which under contention is capacity already promised to
+  another workload; the surplus is surrendered when, and only when, the total no longer fits.
+  Anti-flapping is a preference about the shape of a change, and the capacity ceiling is a fact.
+  The consequence is worth stating plainly: **damping is conditional on spare capacity.** On a
+  cluster running at its ceiling, two workloads whose demands alternate will each surrender their
+  hold to the other and move workers at the demand's own period. The alternative is publishing a
+  total the hosts cannot place, which does not prevent the move — it only makes the manager stop
+  predicting it.
+- A withdrawal the **failure fuse** forced is never damped. Failing jobs look like load, so the
+  fleet has usually just scaled up at the moment the fuse trips — exactly the state that would
+  make the withdrawal a damped reversal, leaving a full-size fleet hammering a dead dependency
+  for the rest of the window on top of the fuse's own detection latency.
 
 Groups use the same semantics with a `group:` prefixed key.
+
+### Why the damping is one-sided
+
+The two costs are not symmetric. A held scale-down wastes money for the rest of the window
+and is fully recoverable. A held scale-up accumulates backlog that still has to be worked
+off, so the SLA is already broken by the time anything releases it.
+
+Damping both directions made the manager the source of the oscillation it exists to absorb.
+On demand whose period is a small multiple of the cooldown window, *every* change is a
+reversal — so every rise was deferred until the backlog breached, the breach exception then
+released a target the delay itself had inflated, and the fall off that spike was deferred in
+turn. Worse, because a hold republished the last allowed target clamped to what was running,
+a rise arriving mid-drain was answered by *cutting* the fleet.
+
+Measured against the real engine on a 120-second sine wave at `workers.max` 20 — the
+scenario in `CooldownResonanceSimulationTest`, so you can run it yourself — symmetric
+damping pinned the fleet to the 20-worker ceiling for a load needing about 5, averaged
+9.2 workers and spent 109 of 3600 ticks breaching its SLA. One-sided peaks at 8, averages
+6.5 and never breaches. At a 90-second period symmetric holds the SLA but still sits at
+the ceiling with a mean of 9.8, against 6.4. The workloads the guard was written for —
+noise around a constant mean, a sustained step, a periodic burst — came out the same or
+better on every measure, and the result holds across cooldown windows from 30 to 300
+seconds.
+
+Earlier releases allowed a scale-up through the cooldown only during an active SLA breach.
+That exception is gone as a mechanism, because a scale-up no longer needs one.
 
 ## Worker lifecycle
 

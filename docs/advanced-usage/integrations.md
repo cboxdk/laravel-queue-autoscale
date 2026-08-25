@@ -140,7 +140,10 @@ Each `workloads[]` entry:
 - `action` — `'scale_up' | 'scale_down' | 'hold'`
 
 `demand` is the raw per-workload requirement before fair-share allocation; `target_workers` is what
-the allocator granted. A persistent gap between them means the cluster is capacity-bound.
+the leader finally published, after both fair-share allocation and anti-flapping damping — so it can
+sit above the allocation while a scale-down is being damped, and below the demand when the cluster is
+capacity-bound. A persistent gap between `demand` and `target_workers` means the cluster is
+capacity-bound.
 
 ## Laravel Events
 

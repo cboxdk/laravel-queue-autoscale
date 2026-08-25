@@ -175,12 +175,16 @@ run — `composer qa` runs the first five in order.
 
 ```bash
 vendor/bin/pint --test                 # composer lint
-vendor/bin/phpstan analyse             # composer analyse — level max, larastan
+vendor/bin/phpstan analyse --memory-limit=1G   # composer analyse — level max, larastan
 vendor/bin/pest                        # composer test
 php bin/check-licenses.php             # composer license-check
 composer audit --no-dev
 php bin/generate-sbom.php              # composer sbom — commit the result when deps change
 ```
+
+PHPStan needs the raised memory limit — `composer analyse` passes it, but the bare
+`vendor/bin/phpstan analyse` crashes on PHP's default 128M partway through the parallel
+workers, which reads as a broken analysis rather than a missing flag.
 
 PHPStan runs at **level max** with no baseline and no `@phpstan-ignore`. Fix the
 underlying cause rather than silencing it: no `assert()` or inline `@var` to override

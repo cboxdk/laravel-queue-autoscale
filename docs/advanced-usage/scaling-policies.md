@@ -73,8 +73,9 @@ metrics (QueueMetricsData)
 Two consequences worth internalising:
 
 - **The anti-flapping cooldown runs before the policies.** `AutoscaleManager::evaluateQueue()`
-  returns early when a decision would reverse direction inside
-  `queue-autoscale.scaling.cooldown_seconds`, so on a suppressed cycle neither hook is called at all.
+  returns early when a decision would reverse a recent scale-up into a **scale-down** inside
+  `queue-autoscale.scaling.cooldown_seconds`, so on a suppressed cycle neither hook is called at
+  all. A scale-up is never suppressed, so it always reaches your hooks.
 - **`ScalingDecisionMade` and `SlaBreachPredicted` carry the post-policy decision.** They are
   dispatched after `afterScaling()`, so listeners see what a policy actually produced.
 
@@ -123,9 +124,17 @@ Mechanics:
   as above.
 - Use `withTargetWorkers()` to adjust a target: it copies every other field, including the scope,
   so the next policy in the chain still sees a cluster decision.
-- Under capacity contention the fair-share allocator still guarantees each workload's
-  `workers.min` floor, so a cluster cap below a workload's configured minimum is raised back to
-  that minimum, the same arbitration every workload gets when capacity does not fit.
+- Under capacity contention the fair-share allocator satisfies every workload's `workers.min`
+  floor first, so a cluster cap below a workload's configured minimum is raised back to that
+  minimum — as long as the floors fit. When the floors together exceed capacity they cannot all
+  be honoured, and are scaled down proportionally instead; `workers.min` is a claim on a fair
+  share of the cluster, not a reservation the hardware can be made to produce.
+- When capacity cannot satisfy everyone, the shortfall is shared proportionally and the
+  leftover workers go to whoever is **owed the most**. Entitlement a workload did not receive
+  is banked and carried forward, so proportionality holds over time rather than per cycle —
+  no workload can be left at zero indefinitely, not even one whose share rounds to nothing.
+  A workload already holding a leftover keeps it until a challenger has banked meaningfully
+  more, so the guarantee does not turn into churn.
 - Single-host mode is unaffected: no cluster decisions exist there, and a cluster-scoped policy
   simply sees the same host-scoped decisions as any other policy.
 

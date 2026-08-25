@@ -44,10 +44,11 @@ use Cbox\LaravelQueueAutoscale\Scaling\Forecasting\Policies\DisabledForecastPoli
  *     ],
  *
  * When more queues want workers than the hosts can carry, the cluster's
- * fair-share allocator holds every queue's minimum first and then water-fills
- * the remainder, so a thousand tenants degrade into slower progress for
- * everyone rather than full speed for the first few and starvation for the
- * rest.
+ * fair-share allocator satisfies every queue's minimum first and then
+ * water-fills the remainder — and when even the minimums do not fit, scales
+ * them down proportionally rather than paying some in full. Either way a
+ * thousand tenants degrade into slower progress for everyone rather than full
+ * speed for the first few and starvation for the rest.
  *
  * The fuse is on. A queue that exists because a third party is slow is exactly
  * the one that should stop calling when that third party starts failing.

@@ -85,6 +85,16 @@ if slaProgress < breachThreshold:
 window), read through `AutoscaleConfiguration::breachThreshold()`. Below it, the calculator abstains
 entirely and Little's Law alone decides the target.
 
+**One exception, applied by the strategy rather than here.** Abstaining is right when workers are
+already running: it stops the fleet reacting to every transient blip on a queue that is being
+served. With no workers running, nothing is absorbing the backlog and the only thing happening is
+the clock running down — so a queue holding work with nothing draining it asks for one worker
+straight away, whatever this calculator says. Without it, a single job arriving at a queue sitting
+at zero waited half its SLA before a worker was even requested: 15 seconds against a 30-second
+target, 60 against 120, and the evaluation interval made no difference. It is stated as a need
+rather than a floor, so the capacity clamp, `workers.max` and the failure fuse all still apply
+after it.
+
 The 1.5 cap keeps a badly breached queue from producing an unbounded multiplier.
 
 ### 5. Base workers

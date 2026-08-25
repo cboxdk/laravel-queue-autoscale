@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Tests\Simulation;
 
+use Carbon\Carbon;
+use Cbox\LaravelQueueAutoscale\Cluster\ClusterCooldown;
 use Cbox\LaravelQueueAutoscale\Configuration\ForecastConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\SlaConfiguration;
@@ -53,6 +55,25 @@ final class ScalingSimulation
 
     private int $pendingChangeAtTick = 0;
 
+    private ?ClusterCooldown $cooldown = null;
+
+    private int $cooldownSeconds = 60;
+
+    private ?Carbon $clockOrigin = null;
+
+    /**
+     * Simulated wall clock, in seconds, shared with the arrival-rate estimator.
+     *
+     * Without it the estimator reads the process clock while the simulation
+     * advances in five-second ticks, so every measurement interval looks
+     * sub-millisecond, the estimator falls back to the processing rate on every
+     * call, and the forecaster never runs — the simulation would exercise less
+     * of the engine than it appears to.
+     */
+    private float $simulatedNow = 0.0;
+
+    private bool $useSimulatedClock = false;
+
     public function __construct(
         ?WorkloadSimulator $simulator = null,
         ?QueueConfiguration $config = null,
@@ -94,7 +115,9 @@ final class ScalingSimulation
         );
 
         // Use provided estimator or create a fresh one for this simulation
-        $this->arrivalEstimator = $arrivalEstimator ?? new ArrivalRateEstimator;
+        $this->arrivalEstimator = $arrivalEstimator ?? new ArrivalRateEstimator(
+            fn (): float => $this->useSimulatedClock ? $this->simulatedNow : microtime(true),
+        );
 
         // Use provided spawn tracker or fall back to a zero-latency stub for backward compat
         $spawnTracker = $spawnTracker ?? new class implements SpawnLatencyTrackerContract
@@ -164,6 +187,43 @@ final class ScalingSimulation
     }
 
     /**
+     * Let the arrival-rate estimator see simulated time instead of the process
+     * clock.
+     *
+     * OFF by default, deliberately. Turning it on changes what every existing
+     * simulation measures: with the process clock the estimator's measurement
+     * interval is sub-millisecond, so it returns 'interval_too_short' on every
+     * call, falls back to the processing rate, and the forecaster downstream
+     * never runs. Those specs were written against that behaviour and pass
+     * against it; flipping the default would silently rewrite what a dozen
+     * unrelated assertions mean.
+     *
+     * Switch it on for anything that needs the forecasting path to be real.
+     */
+    public function withSimulatedClock(bool $enabled = true): self
+    {
+        $this->useSimulatedClock = $enabled;
+
+        return $this;
+    }
+
+    /**
+     * Route every decision through the anti-flapping damper.
+     *
+     * The engine and the damper were only ever simulated apart, which is how a
+     * band of demand periods where the damper turned a workload it could have
+     * tracked into a breaching, oscillating one went unnoticed: each half is
+     * correct on its own and only the composition misbehaves.
+     */
+    public function withCooldown(ClusterCooldown $cooldown, int $cooldownSeconds = 60): self
+    {
+        $this->cooldown = $cooldown;
+        $this->cooldownSeconds = max(1, $cooldownSeconds);
+
+        return $this;
+    }
+
+    /**
      * Set initial workers
      */
     public function setInitialWorkers(int $workers): self
@@ -183,11 +243,36 @@ final class ScalingSimulation
         $this->simulator->reset();
         $this->decisions = [];
         $this->arrivalEstimator->reset();
+        $this->simulatedNow = 0.0;
+
+        // The damper reads wall-clock time, so a tick has to advance it.
+        $this->clockOrigin = $this->cooldown !== null ? Carbon::now() : null;
 
         // Set initial workers to minimum
         $this->simulator->setWorkers($this->config->workers->min);
 
+        try {
+            $this->runTicks($durationTicks);
+        } finally {
+            // Frozen time must not survive a failed run into the next spec.
+            if ($this->cooldown !== null) {
+                Carbon::setTestNow();
+            }
+        }
+
+        return new SimulationResult(
+            simulator: $this->simulator,
+            decisions: $this->decisions,
+            config: $this->config,
+            durationTicks: $durationTicks,
+        );
+    }
+
+    private function runTicks(int $durationTicks): void
+    {
         for ($tick = 1; $tick <= $durationTicks; $tick++) {
+            $this->simulatedNow = (float) $tick;
+
             // Apply pending worker changes
             if ($this->pendingWorkerChange !== 0 && $tick >= $this->pendingChangeAtTick) {
                 $currentWorkers = $this->simulator->getActiveWorkers();
@@ -207,13 +292,6 @@ final class ScalingSimulation
                 $this->evaluateScaling($tick);
             }
         }
-
-        return new SimulationResult(
-            simulator: $this->simulator,
-            decisions: $this->decisions,
-            config: $this->config,
-            durationTicks: $durationTicks,
-        );
     }
 
     /**
@@ -248,6 +326,22 @@ final class ScalingSimulation
         $currentWorkers = $this->simulator->getActiveWorkers();
 
         $decision = $this->engine->evaluate($metrics, $this->config, $currentWorkers);
+
+        if ($this->cooldown !== null && $this->clockOrigin !== null) {
+            Carbon::setTestNow($this->clockOrigin->copy()->addSeconds($tick));
+
+            $damped = $this->cooldown->apply(
+                "queue:{$this->config->connection}:{$this->config->queue}",
+                $currentWorkers,
+                $decision->targetWorkers,
+                $this->simulator->getOldestJobAge() >= $this->config->sla->targetSeconds,
+                $this->cooldownSeconds,
+            );
+
+            if ($damped->targetWorkers !== $decision->targetWorkers) {
+                $decision = $decision->withTargetWorkers($damped->targetWorkers, 'anti-flapping hold');
+            }
+        }
 
         $this->decisions[$tick] = [
             'tick' => $tick,

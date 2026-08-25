@@ -25,6 +25,12 @@ final class WorkloadSimulator
 
     private float $oldestJobAge = 0;
 
+    /** Fractional job carried from one tick to the next, arriving side. */
+    private float $arrivalRemainder = 0;
+
+    /** Fractional job carried from one tick to the next, processed side. */
+    private float $processedRemainder = 0;
+
     private int $activeWorkers = 0;
 
     private float $totalProcessed = 0;
@@ -54,6 +60,8 @@ final class WorkloadSimulator
         $this->currentTick = 0;
         $this->backlog = 0;
         $this->oldestJobAge = 0;
+        $this->arrivalRemainder = 0;
+        $this->processedRemainder = 0;
         $this->activeWorkers = 0;
         $this->totalProcessed = 0;
         $this->jobQueue = [];
@@ -80,8 +88,18 @@ final class WorkloadSimulator
         // Calculate arrivals this tick
         $arrivals = $this->baseArrivalRate * $arrivalMultiplier;
 
-        // Add jobs to queue
-        for ($i = 0; $i < (int) ceil($arrivals); $i++) {
+        // Whole jobs enter and leave the queue, but arrivals and throughput are
+        // both fractional, so each side carries its remainder to the next tick.
+        // Rounding them independently — ceil() in, floor() out — let the job
+        // list grow by up to one phantom job per tick at any non-integer rate,
+        // while $backlog drained correctly. Nothing failed loudly: oldestJobAge
+        // is read off the list, so a simulation would report an ever-growing
+        // breach that the backlog figure denied.
+        $this->arrivalRemainder += $arrivals;
+        $arrivingJobs = (int) floor($this->arrivalRemainder);
+        $this->arrivalRemainder -= $arrivingJobs;
+
+        for ($i = 0; $i < $arrivingJobs; $i++) {
             $this->jobQueue[] = $this->currentTick;
         }
         $this->backlog += $arrivals;
@@ -91,7 +109,10 @@ final class WorkloadSimulator
         $processed = min($processingCapacity, $this->backlog);
 
         // Remove processed jobs (oldest first)
-        $jobsToRemove = (int) floor($processed);
+        $this->processedRemainder += $processed;
+        $jobsToRemove = (int) floor($this->processedRemainder);
+        $this->processedRemainder -= $jobsToRemove;
+
         for ($i = 0; $i < $jobsToRemove && count($this->jobQueue) > 0; $i++) {
             array_shift($this->jobQueue);
         }

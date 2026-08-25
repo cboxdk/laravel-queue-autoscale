@@ -89,7 +89,8 @@ use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
 return [
     'enabled' => env('QUEUE_AUTOSCALE_ENABLED', true),
 
-    // Every queue discovered at runtime gets this profile unless overridden.
+    // Every queue discovered at runtime gets this profile unless overridden —
+    // minus its worker floor, which applies only to a queue you named.
     'sla_defaults' => BalancedProfile::class,
 
     // Per-queue overrides. See "Queue Configuration" below.

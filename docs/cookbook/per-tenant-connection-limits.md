@@ -130,9 +130,12 @@ the general one:
 ## When there are more tenants than the hosts can carry
 
 A thousand tenants wanting five workers each is five thousand workers, which is not going to fit. The
-cluster's fair-share allocator holds every workload's minimum first and then water-fills what is
-left, so contention produces slower progress for everyone rather than full speed for whoever was
-evaluated first and nothing for the rest. No tenant is ever handed more than its cap while this
+cluster's fair-share allocator satisfies every workload's minimum first and then water-fills what is
+left; when even the minimums do not fit it scales them down proportionally rather than paying some in
+full. Either way contention produces slower progress for everyone rather than full speed for whoever
+was evaluated first and nothing for the rest. A tenant whose proportional share rounds to less than a
+whole worker is served intermittently rather than never — the shortfall is banked and it takes its
+turn. No tenant is ever handed more than its cap while this
 happens — the cap is a limit imposed by a third party, not a preference the allocator may trade away.
 
 Set [`limits.max_total_workers`](../basic-usage/configuration.md) as the backstop. With queue names

@@ -190,6 +190,31 @@ class HybridStrategy implements ScalingStrategyContract
         // 3. COMBINE: Take maximum (most conservative)
         $targetWorkers = max($steadyStateWorkers, $backlogDrainWorkers);
 
+        // A queue holding work with nothing draining it needs a worker NOW.
+        //
+        // Both calculations above are rate calculations, and both answer zero
+        // for a small backlog on an idle queue: Little's Law sees no arrival
+        // rate, and the backlog drain deliberately waits until the oldest job
+        // has spent breach_threshold of its SLA before it acts. That patience
+        // is right when workers are already running — it stops the fleet
+        // reacting to every transient blip — and wrong when none are, because
+        // nothing is absorbing the backlog and the only thing happening is the
+        // clock running down.
+        //
+        // Measured before this: one job arriving at a queue sitting at zero
+        // waited half its SLA before a worker was even requested — 15 seconds
+        // against a 30-second target, and 60 against 120. Three jobs got a
+        // worker on the next cycle. The difference was the threshold, not the
+        // work.
+        //
+        // Stated as a need, not a floor: the capacity clamp, workers.max and
+        // the failure fuse all still apply afterwards, so a host with nothing
+        // spare, a queue capped at zero, and a queue whose jobs are failing
+        // each still resolve to no workers.
+        if ($backlogSize > 0 && $metrics->activeWorkers === 0) {
+            $targetWorkers = max($targetWorkers, 1.0);
+        }
+
         // 4. UTILIZATION ADJUSTMENT: Use worker utilization as a real-time signal
         // Utilization rate from metrics tells us how busy current workers actually are,
         // providing ground truth that complements the algorithmic calculations.

@@ -27,11 +27,50 @@ class ArrivalRateEstimator
      */
     private array $history = [];
 
+    /**
+     * Where "now" comes from, as a Unix timestamp with fractional seconds.
+     *
+     * Injectable because this class is the one place in the engine that reads
+     * the wall clock directly, and everything it produces is a RATE — a
+     * difference divided by an elapsed interval. A simulation that advances
+     * time in five-second steps while the process clock advances in
+     * microseconds therefore sees every interval as too short to measure, and
+     * the estimator falls back to the processing rate on every call. The
+     * forecaster downstream then never runs at all. Defaults to the process
+     * clock, so nothing changes outside a harness that supplies its own.
+     *
+     * Nullable, and read through a helper rather than called directly. This
+     * class had no constructor before the clock existed, so a consumer subclass
+     * that declares its own cannot be calling parent::__construct() — that was
+     * a fatal error in the version they wrote it against. Depending on the
+     * constructor having run would therefore break every such subclass on
+     * upgrade, with "value of type null is not callable" from inside estimate().
+     *
+     * @var (callable(): float)|null
+     */
+    private $clock = null;
+
     private ?ForecasterContract $forecaster = null;
 
     private ?ForecastPolicyContract $policy = null;
 
     private int $forecastHorizonSeconds = 60;
+
+    /**
+     * @param  (callable(): float)|null  $clock  Source of "now"; defaults to the process clock.
+     */
+    public function __construct(?callable $clock = null)
+    {
+        $this->clock = $clock;
+    }
+
+    /**
+     * Now, from the injected clock or the process clock.
+     */
+    private function now(): float
+    {
+        return ($this->clock ?? static fn (): float => microtime(true))();
+    }
 
     /**
      * Maximum number of snapshots to retain per queue
@@ -65,7 +104,7 @@ class ArrivalRateEstimator
         int $currentBacklog,
         float $processingRate,
     ): array {
-        $now = microtime(true);
+        $now = $this->now();
 
         // Get previous snapshots
         $snapshots = $this->history[$queueKey] ?? [];

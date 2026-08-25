@@ -29,6 +29,26 @@ readonly class ScalingEngine
     ) {}
 
     /**
+     * Whether the failure fuse is currently constraining this queue.
+     *
+     * Exposed because the anti-flapping damper has to know. The fuse withdraws
+     * workers from a queue whose jobs are failing, and damping that withdrawal
+     * as an ordinary direction reversal leaves the fleet hammering a dead
+     * dependency for the rest of the cooldown window — the one thing the fuse
+     * exists to stop. A decision's limitingFactor is not a usable substitute:
+     * it names the constraint that BOUND, so a tripped fuse is invisible there
+     * whenever CPU or memory happens to bind tighter.
+     *
+     * Delegates to the fuse's transition-free query rather than evaluate(),
+     * which is a state machine and not a question: running it twice in a cycle
+     * can trip, probe or recover a second time and fire the event to match.
+     */
+    public function isFuseConstraining(QueueConfiguration $config): bool
+    {
+        return $this->fuse->isConstraining($config);
+    }
+
+    /**
      * Evaluate scaling decision for a single-host queue.
      *
      * Uses LOCAL system capacity (CPU/memory on this host) to constrain the

@@ -7,6 +7,7 @@ use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
 use Cbox\LaravelQueueAutoscale\Contracts\ClusterStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\PickupTimeStoreContract;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
+use Cbox\LaravelQueueAutoscale\Events\ClusterScalingSignalUpdated;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Testing\FakeClusterStore;
 use Cbox\LaravelQueueMetrics\Actions\CalculateQueueMetricsAction;
@@ -164,7 +165,10 @@ test('same-direction changes are never damped', function (): void {
     expect(applyCooldown($manager, 'queue:redis:exports', current: 22, target: 30))->toBe(30);
 });
 
-test('a hold keeps the last direction from being overwritten', function (): void {
+test('a quiet cycle neither opens nor refreshes the window', function (): void {
+    // remember() drops a 'hold', so the cycle in the middle records nothing and
+    // the withdrawal below is damped by the scale-up at the start — with the
+    // window still measured from that scale-up, not from the quiet cycle.
     $manager = app(AutoscaleManager::class);
 
     applyCooldown($manager, 'queue:redis:exports', current: 8, target: 22);
@@ -314,4 +318,415 @@ test('a transient dip in running workers does not permanently lower the hold', f
 
     expect($dip->targetWorkers)->toBe(3, 'never publishes above what is running')
         ->and($recovered->targetWorkers)->toBe(10, 'the remembered target survives the dip');
+});
+
+/**
+ * The damping is one-sided, and these are the specs that were missing.
+ *
+ * Every reversal spec above drives a scale-DOWN. The only rising reversal
+ * covered passed `isBreaching: true`, so the case that actually mattered — a
+ * scale-up held because the last move happened to be a scale-down, with no
+ * breach yet — was never asserted. That untested branch is what let the guard
+ * become the source of the oscillation: it deferred every rise on an
+ * oscillating workload until the backlog breached, then released a target the
+ * delay had itself inflated.
+ */
+test('a scale-up reversing a recent scale-down is never held', function (): void {
+    $manager = app(AutoscaleManager::class);
+
+    applyCooldown($manager, 'queue:redis:exports', current: 22, target: 8);
+
+    Carbon::setTestNow(now()->addSeconds(5));
+
+    expect(applyCooldown($manager, 'queue:redis:exports', current: 8, target: 22))->toBe(22);
+});
+
+test('a rise is published in full on every cycle of an oscillating demand', function (): void {
+    $manager = app(AutoscaleManager::class);
+    $cooldown = (new ReflectionProperty($manager, 'cooldown'))->getValue($manager);
+
+    $current = 12;
+    $rises = 0;
+    $heldRises = [];
+
+    // Alternating demand well inside the cooldown window: every change is a
+    // reversal, which is precisely the shape that used to breach. It has to
+    // OPEN on the scale-down — a held scale-down pins `current` at the high
+    // figure, so the demand that follows is no longer a rise and the branch
+    // under test is never reached.
+    foreach ([4, 12, 4, 12, 4, 12] as $index => $target) {
+        Carbon::setTestNow(now()->addSeconds(5));
+
+        $isRise = $target > $current;
+        $decision = $cooldown->apply('queue:redis:exports', $current, $target, false, 60);
+
+        if ($isRise) {
+            $rises++;
+
+            if ($decision->targetWorkers !== $target) {
+                $heldRises[] = $index;
+            }
+        }
+
+        $current = $decision->targetWorkers;
+    }
+
+    expect($rises)->toBeGreaterThan(0)
+        ->and($heldRises)->toBe([]);
+});
+
+test('a scale-down is still damped after a scale-up', function (): void {
+    // The other half of the asymmetry: withdrawing capacity stays damped,
+    // because a held scale-down only costs money and is fully recoverable.
+    $manager = app(AutoscaleManager::class);
+
+    applyCooldown($manager, 'queue:redis:exports', current: 8, target: 22);
+
+    Carbon::setTestNow(now()->addSeconds(5));
+
+    expect(applyCooldown($manager, 'queue:redis:exports', current: 22, target: 8))->toBe(22);
+});
+
+test('a breaching scale-up is still reported as a breach override', function (): void {
+    // The signal operators see is unchanged; the scale-up simply no longer
+    // needs an exception to get through.
+    $manager = app(AutoscaleManager::class);
+    $cooldown = (new ReflectionProperty($manager, 'cooldown'))->getValue($manager);
+
+    $cooldown->apply('queue:redis:exports', 22, 8, false, 60);
+
+    Carbon::setTestNow(now()->addSeconds(5));
+
+    $decision = $cooldown->apply('queue:redis:exports', 8, 22, true, 60);
+
+    expect($decision->breachOverride)->toBeTrue()
+        ->and($decision->wasHeld)->toBeFalse();
+});
+
+test('a reversing scale-up with no breach reports no override', function (): void {
+    // The combination that separates the flag's meaning from "any reversal":
+    // the scale-up passes either way, so only this case shows that the flag
+    // still tracks the breach rather than the reversal.
+    $manager = app(AutoscaleManager::class);
+    $cooldown = (new ReflectionProperty($manager, 'cooldown'))->getValue($manager);
+
+    $cooldown->apply('queue:redis:exports', 22, 8, false, 60);
+
+    Carbon::setTestNow(now()->addSeconds(5));
+
+    $decision = $cooldown->apply('queue:redis:exports', 8, 22, false, 60);
+
+    expect($decision->targetWorkers)->toBe(22)
+        ->and($decision->breachOverride)->toBeFalse()
+        ->and($decision->wasHeld)->toBeFalse();
+});
+
+test('a rise arriving mid-drain is not answered by cutting the fleet', function (): void {
+    // The sharpest form of the old behaviour. A scale-down is allowed and the
+    // fleet starts draining; before it lands, demand turns around. The hold
+    // republished the remembered scale-down target clamped to what was
+    // running, so a request for MORE workers was published as fewer: 8 running,
+    // 15 wanted, 5 published.
+    $manager = app(AutoscaleManager::class);
+    $cooldown = (new ReflectionProperty($manager, 'cooldown'))->getValue($manager);
+
+    $cooldown->apply('queue:redis:exports', 12, 5, false, 60);
+
+    Carbon::setTestNow(now()->addSeconds(5));
+
+    expect($cooldown->apply('queue:redis:exports', 8, 15, false, 60)->targetWorkers)->toBe(15);
+});
+
+test('a scale-up with no breach and no reversal reports no override', function (): void {
+    $manager = app(AutoscaleManager::class);
+    $cooldown = (new ReflectionProperty($manager, 'cooldown'))->getValue($manager);
+
+    $decision = $cooldown->apply('queue:redis:exports', 8, 22, false, 60);
+
+    expect($decision->breachOverride)->toBeFalse()
+        ->and($decision->wasHeld)->toBeFalse();
+});
+
+test('consecutive withdrawals are never delayed', function (): void {
+    // The other half of the rule: damping applies to the FIRST scale-down, so a
+    // fleet that is genuinely draining is not made to wait a window per step.
+    $manager = app(AutoscaleManager::class);
+
+    applyCooldown($manager, 'queue:redis:exports', current: 22, target: 16);
+
+    Carbon::setTestNow(now()->addSeconds(5));
+
+    expect(applyCooldown($manager, 'queue:redis:exports', current: 16, target: 9))->toBe(9);
+
+    Carbon::setTestNow(now()->addSeconds(5));
+
+    expect(applyCooldown($manager, 'queue:redis:exports', current: 9, target: 4))->toBe(4);
+});
+
+test('a quiet stretch longer than the window releases the next withdrawal', function (): void {
+    // The consequence of remember() dropping a hold: quiet cycles do not keep
+    // the window alive, so a workload that has been steady for longer than
+    // cooldown_seconds withdraws immediately.
+    $manager = app(AutoscaleManager::class);
+
+    applyCooldown($manager, 'queue:redis:exports', current: 8, target: 22);
+
+    Carbon::setTestNow(now()->addSeconds(30));
+    applyCooldown($manager, 'queue:redis:exports', current: 22, target: 22);
+
+    Carbon::setTestNow(now()->addSeconds(31));
+
+    expect(applyCooldown($manager, 'queue:redis:exports', current: 22, target: 10))->toBe(10);
+});
+
+test('the leader carries its fair-share credits from one cycle to the next', function (): void {
+    // The banked entitlement that stops a workload being starved forever lives
+    // in the allocator, so it only accumulates if the instance outlives the
+    // evaluation. This was built with `new FairShareAllocator` INSIDE the
+    // cluster evaluation — which runs every cycle — so every balance reset to
+    // zero each time and the guarantee was a no-op in production, while its own
+    // unit test passed because that test reuses one instance across cycles.
+    config()->set('queue.default', 'redis');
+    // Floors that cannot all fit: the single manager offers 32 workers of
+    // capacity and these ask for 42, which is the only situation the banked
+    // entitlement exists for.
+    // Seven, not eight: eight floors of six divide the 32 available workers
+    // exactly, leaving no remainder to hand out and nothing to bank, so the
+    // spec would pass while measuring nothing.
+    $queues = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf'];
+    $rules = $discovered = [];
+
+    foreach ($queues as $queue) {
+        $rules[$queue] = ['workers' => ['min' => 6, 'max' => 20]];
+        $discovered["redis:{$queue}"] = cooldownRawMetrics('redis', $queue, pending: 200);
+    }
+
+    config()->set('queue-autoscale.queues', $rules);
+
+    $tracker = Mockery::mock(SpawnLatencyTrackerContract::class);
+    $tracker->shouldReceive('currentLatency')->andReturn(0.0);
+    app()->instance(SpawnLatencyTrackerContract::class, $tracker);
+
+    $pickupStore = Mockery::mock(PickupTimeStoreContract::class);
+    $pickupStore->shouldReceive('recentSamples')->andReturn([]);
+    app()->instance(PickupTimeStoreContract::class, $pickupStore);
+
+    Event::fake();
+
+    $store = (new FakeClusterStore)
+        ->withManager(cooldownManagerState('mgr-1'))
+        ->withLeader('mgr-1');
+    app()->instance(ClusterStoreContract::class, $store);
+    app()->forgetInstance(AutoscaleManager::class);
+
+    $manager = app(AutoscaleManager::class);
+    $evaluate = new ReflectionMethod($manager, 'evaluateAndPublishClusterRecommendations');
+    $allocator = (new ReflectionProperty($manager, 'allocator'))->getValue($manager);
+    $credits = new ReflectionProperty($allocator, 'credits');
+
+    cooldownDiscovery($discovered);
+
+    $evaluate->invoke($manager);
+    $afterFirst = $credits->getValue($allocator);
+
+    Carbon::setTestNow(now()->addSeconds(5));
+    $evaluate->invoke($manager);
+
+    $afterSecond = $credits->getValue($allocator);
+
+    expect($afterFirst)->not->toBe([])
+        ->and($afterSecond)->not->toBe($afterFirst);
+});
+
+test('the leader opens the fairness ledger from what the cluster is running', function (): void {
+    // The allocator can only seed from an observation the leader passes it.
+    // Without that argument a manager taking the lease starts every balance at
+    // zero, the ordering falls back to the key, and leadership that keeps
+    // moving re-starves the same alphabetically-first workloads — which is the
+    // whole failure the seeding exists to prevent.
+    config()->set('queue.default', 'redis');
+
+    $queues = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf'];
+    $rules = $discovered = [];
+
+    foreach ($queues as $queue) {
+        $rules[$queue] = ['workers' => ['min' => 6, 'max' => 20]];
+        $discovered["redis:{$queue}"] = cooldownRawMetrics('redis', $queue, pending: 200);
+    }
+
+    config()->set('queue-autoscale.queues', $rules);
+
+    $tracker = Mockery::mock(SpawnLatencyTrackerContract::class);
+    $tracker->shouldReceive('currentLatency')->andReturn(0.0);
+    app()->instance(SpawnLatencyTrackerContract::class, $tracker);
+
+    $pickupStore = Mockery::mock(PickupTimeStoreContract::class);
+    $pickupStore->shouldReceive('recentSamples')->andReturn([]);
+    app()->instance(PickupTimeStoreContract::class, $pickupStore);
+
+    Event::fake();
+
+    // One workload is already running workers and the rest are at nothing —
+    // a lopsided cluster the seeding must be able to see.
+    $store = (new FakeClusterStore)
+        ->withManager(cooldownManagerState('mgr-1', totalWorkers: 9, queueWorkers: ['redis:alpha' => 9]))
+        ->withLeader('mgr-1');
+    app()->instance(ClusterStoreContract::class, $store);
+    app()->forgetInstance(AutoscaleManager::class);
+
+    $manager = app(AutoscaleManager::class);
+    $allocator = (new ReflectionProperty($manager, 'allocator'))->getValue($manager);
+
+    cooldownDiscovery($discovered);
+    (new ReflectionMethod($manager, 'evaluateAndPublishClusterRecommendations'))->invoke($manager);
+
+    $ledger = (new ReflectionProperty($allocator, 'credits'))->getValue($allocator);
+
+    // alpha holds nine workers against a share of a few, so it opens in debit
+    // while everything else opens in credit. All-equal balances would mean the
+    // observation never arrived.
+    expect($ledger)->toHaveKey('queue:redis:alpha')
+        ->and($ledger['queue:redis:alpha'])->toBeLessThan(min(array_diff_key($ledger, ['queue:redis:alpha' => true])));
+});
+
+test('a leader that stalled past its lease publishes with its own token, not the new leader\'s', function (): void {
+    // The token was read at PUBLISH time, after the whole evaluation. An
+    // evaluation takes as long as it takes, and a manager that stalls past its
+    // lease — a long pause, a slow metrics read, a virtual machine frozen and
+    // resumed — comes back into a cluster somebody else now leads. Reading the
+    // token then handed it the NEW leader's token, which satisfies the fencing
+    // check in the store and let a stale leader overwrite the real one's
+    // recommendations under its own id. The fence is supposed to reject it.
+    config()->set('queue.default', 'redis');
+    config()->set('queue-autoscale.queues', ['exports' => ['workers' => ['min' => 1, 'max' => 20]]]);
+
+    $tracker = Mockery::mock(SpawnLatencyTrackerContract::class);
+    $tracker->shouldReceive('currentLatency')->andReturn(0.0);
+    app()->instance(SpawnLatencyTrackerContract::class, $tracker);
+
+    $pickupStore = Mockery::mock(PickupTimeStoreContract::class);
+    $pickupStore->shouldReceive('recentSamples')->andReturn([]);
+    app()->instance(PickupTimeStoreContract::class, $pickupStore);
+
+    Event::fake();
+
+    // A store whose lease moves to somebody else after the first read, which
+    // is what a stalled leader comes back to.
+    $store = new class extends FakeClusterStore
+    {
+        public int $tokenReads = 0;
+
+        public function leaderToken(): ?string
+        {
+            $this->tokenReads++;
+
+            return $this->tokenReads === 1 ? 'token-ours' : 'token-somebody-elses';
+        }
+    };
+
+    $store->withManager(cooldownManagerState('mgr-1'))->withLeader('mgr-1');
+    app()->instance(ClusterStoreContract::class, $store);
+    app()->forgetInstance(AutoscaleManager::class);
+
+    $manager = app(AutoscaleManager::class);
+
+    cooldownDiscovery(['redis:exports' => cooldownRawMetrics('redis', 'exports', pending: 50)]);
+
+    // Captured beside the leadership check, as the cycle does.
+    $ownToken = $store->leaderToken();
+
+    (new ReflectionMethod($manager, 'evaluateAndPublishClusterRecommendations'))
+        ->invoke($manager, $ownToken);
+
+    $published = $store->publishedRecommendations()['mgr-1'] ?? null;
+
+    expect($published)->not->toBeNull()
+        ->and($published->leaderToken)->toBe('token-ours');
+});
+
+test('a leader whose lease moved mid-cycle publishes no summary', function (): void {
+    // Recommendations are fenced by the store, but the summary write is a plain
+    // setex. A manager that stalled past its lease would have its
+    // recommendations rejected and still overwrite the real leader's summary —
+    // and fire the scale signal that autoscalers outside this package are
+    // documented to consume. A stale recommended_hosts is worse than none,
+    // because something acts on it.
+    config()->set('queue.default', 'redis');
+    config()->set('queue-autoscale.queues', ['exports' => ['workers' => ['min' => 1, 'max' => 20]]]);
+
+    $tracker = Mockery::mock(SpawnLatencyTrackerContract::class);
+    $tracker->shouldReceive('currentLatency')->andReturn(0.0);
+    app()->instance(SpawnLatencyTrackerContract::class, $tracker);
+
+    $pickupStore = Mockery::mock(PickupTimeStoreContract::class);
+    $pickupStore->shouldReceive('recentSamples')->andReturn([]);
+    app()->instance(PickupTimeStoreContract::class, $pickupStore);
+
+    Event::fake();
+
+    $store = new class extends FakeClusterStore
+    {
+        public function leaderToken(): ?string
+        {
+            // Somebody else holds the lease by the time we get to publishing.
+            return 'token-somebody-elses';
+        }
+    };
+
+    $store->withManager(cooldownManagerState('mgr-1'))->withLeader('mgr-1');
+    app()->instance(ClusterStoreContract::class, $store);
+    app()->forgetInstance(AutoscaleManager::class);
+
+    $manager = app(AutoscaleManager::class);
+
+    cooldownDiscovery(['redis:exports' => cooldownRawMetrics('redis', 'exports', pending: 50)]);
+
+    (new ReflectionMethod($manager, 'evaluateAndPublishClusterRecommendations'))
+        ->invoke($manager, 'token-ours');
+
+    expect($store->summary())->toBe([]);
+    Event::assertNotDispatched(ClusterScalingSignalUpdated::class);
+});
+
+test('a failure reading the decision history does not stop the leader scaling', function (): void {
+    // recentDecisions() sat outside the guard, so a wrong-type Redis key or a
+    // throwing custom store aborted the whole method AFTER recommendations were
+    // published but BEFORE the enclosing cycle applied this manager's own — the
+    // leader alone went unscaled, every cycle, for a reporting fault.
+    config()->set('queue.default', 'redis');
+    config()->set('queue-autoscale.queues', ['exports' => ['workers' => ['min' => 1, 'max' => 20]]]);
+
+    $tracker = Mockery::mock(SpawnLatencyTrackerContract::class);
+    $tracker->shouldReceive('currentLatency')->andReturn(0.0);
+    app()->instance(SpawnLatencyTrackerContract::class, $tracker);
+
+    $pickupStore = Mockery::mock(PickupTimeStoreContract::class);
+    $pickupStore->shouldReceive('recentSamples')->andReturn([]);
+    app()->instance(PickupTimeStoreContract::class, $pickupStore);
+
+    Event::fake();
+
+    $store = new class extends FakeClusterStore
+    {
+        public function recentDecisions(int $seconds): array
+        {
+            throw new RuntimeException('WRONGTYPE Operation against a key holding the wrong kind of value');
+        }
+    };
+
+    $store->withManager(cooldownManagerState('mgr-1'))->withLeader('mgr-1');
+    app()->instance(ClusterStoreContract::class, $store);
+    app()->forgetInstance(AutoscaleManager::class);
+
+    $manager = app(AutoscaleManager::class);
+
+    cooldownDiscovery(['redis:exports' => cooldownRawMetrics('redis', 'exports', pending: 50)]);
+
+    (new ReflectionMethod($manager, 'evaluateAndPublishClusterRecommendations'))
+        ->invoke($manager, $store->leaderToken());
+
+    // The recommendation — the actual work — survived the reporting failure,
+    // and the method returned rather than throwing past the caller.
+    expect($store->publishedRecommendations())->toHaveKey('mgr-1')
+        ->and($store->summary())->toBe([]);
 });

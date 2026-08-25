@@ -9,6 +9,7 @@ use Cbox\LaravelQueueAutoscale\Cluster\ClusterCooldown;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterRecommendation;
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterSummaryBuilder;
+use Cbox\LaravelQueueAutoscale\Cluster\CooldownDecision;
 use Cbox\LaravelQueueAutoscale\Cluster\EvaluatedWorkload;
 use Cbox\LaravelQueueAutoscale\Cluster\WorkerDistributor;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
@@ -99,7 +100,42 @@ class AutoscaleManager
     private readonly WorkloadStateTracker $workloadState;
 
     /** Whether this manager held the lease on the previous cycle. */
+    /**
+     * Leadership changes inside one anti-flapping window that count as unstable.
+     *
+     * Two allows for an ordinary failover and the handover that follows it. A
+     * third inside the same window is no longer a transition, it is a pattern.
+     */
+    private const UNSTABLE_LEADERSHIP_CHANGES = 3;
+
+    /**
+     * How often a repeatedly failing cycle is announced on the console. The
+     * first failure is always shown; a daemon that fails every few seconds must
+     * not fill the terminal with the same line.
+     */
+    private const CYCLE_FAILURE_REPORT_INTERVAL_SECONDS = 60.0;
+
     private bool $wasLeader = false;
+
+    /**
+     * When this manager last saw the cluster's leader change, as Unix seconds.
+     *
+     * Gaining the lease discards the placement cache, the damping window and
+     * the fairness ledger's accumulated position, because all three describe a
+     * cluster the new leader has not observed. One failover costs a cycle;
+     * leadership that keeps moving costs those guards permanently, and nothing
+     * said so — a change was a debug line and an event nobody is obliged to
+     * listen to.
+     *
+     * @var list<float>
+     */
+    private array $leaderChanges = [];
+
+    /**
+     * When a failing cycle was last announced on the console, as a Unix
+     * timestamp with fractional seconds.
+     */
+    private ?float $cycleFailureReportedAt = null;
 
     public function __construct(
         private readonly ScalingEngine $engine,
@@ -119,6 +155,13 @@ class AutoscaleManager
         private readonly ConsoleReporter $reporter = new ConsoleReporter,
         private readonly ClusterSummaryBuilder $summaryBuilder = new ClusterSummaryBuilder,
         ?MeasuredResourceCollector $resourceCollector = null,
+        // Appended rather than slotted in beside the other leader-memory
+        // collaborators so no positional caller shifts. It carries the
+        // banked entitlement that keeps a workload from being starved
+        // forever, which only accumulates if the instance OUTLIVES the cycle —
+        // building one inside the evaluation, as this did, reset every balance
+        // each time and made the whole guarantee a no-op.
+        private readonly FairShareAllocator $allocator = new FairShareAllocator,
     ) {
         $this->pool = new WorkerPool;
         $this->outputBuffer = new WorkerOutputBuffer;
@@ -334,6 +377,8 @@ class AutoscaleManager
                         'trace' => $e->getTraceAsString(),
                     ]
                 );
+
+                $this->reportCycleFailureToConsole($e);
             }
 
             $executionTime = microtime(true) - $startTime;
@@ -392,7 +437,17 @@ class AutoscaleManager
             $currentLeaderId = $state->managerId;
             $this->dispatchLeaderChanged($currentLeaderId);
             $this->verbose('Cluster leader lease active on this manager', 'debug');
-            $this->evaluateAndPublishClusterRecommendations();
+
+            // Captured HERE, next to the check that says we hold the lease —
+            // not down in the publish. An evaluation takes as long as it takes,
+            // and a manager that stalls past its lease expiry resumes into a
+            // cluster somebody else now leads. Reading the token at publish
+            // time hands that manager the NEW leader's token, which satisfies
+            // the fencing check in the store and lets a stale leader overwrite
+            // the real one's recommendations under its own id. Holding the
+            // token we were issued means the fence rejects us instead, which is
+            // the whole point of having one.
+            $this->evaluateAndPublishClusterRecommendations($this->clusterStore->leaderToken());
         } else {
             $currentLeaderId = $this->clusterStore->leaderId();
             $this->dispatchLeaderChanged($currentLeaderId);
@@ -411,7 +466,7 @@ class AutoscaleManager
         $this->applyClusterRecommendation($recommendation);
     }
 
-    private function evaluateAndPublishClusterRecommendations(): void
+    private function evaluateAndPublishClusterRecommendations(?string $leaderToken = null): void
     {
         $this->reportMeasuredResources($this->resourceCollector->collect());
 
@@ -527,8 +582,21 @@ class AutoscaleManager
         }
 
         $scalableCapacity = max($clusterCapacity - array_sum($pinnedDemands), 0);
-        $allocator = new FairShareAllocator;
-        $scalableTargets = $allocator->allocate($scalableDemands, $scalableConfigs, $scalableCapacity);
+        // What each workload is running right now, so a manager that has just
+        // taken the lease opens its fairness ledger from what it can observe
+        // rather than from zero — see FairShareAllocator.
+        $observedWorkers = [];
+
+        foreach ($scalableDemands as $workloadKey => $demand) {
+            $observedWorkers[$workloadKey] = $workloadMeta[$workloadKey]->currentWorkers;
+        }
+
+        $scalableTargets = $this->allocator->allocate(
+            $scalableDemands,
+            $scalableConfigs,
+            $scalableCapacity,
+            $observedWorkers,
+        );
         $adjustedTargets = $pinnedDemands + $scalableTargets;
 
         // Phase C consumes this in iteration order and accumulates
@@ -543,20 +611,21 @@ class AutoscaleManager
         // summaries, and record scaling decisions + SLA events.
         $workloads = [];
 
+        $dampedDecisions = $this->dampClusterTargets($adjustedTargets, $workloadMeta, $clusterCapacity);
+
         foreach ($adjustedTargets as $workloadKey => $targetWorkers) {
             $meta = $workloadMeta[$workloadKey];
             $currentWorkers = $meta->currentWorkers;
             $slaTarget = $meta->config->sla->targetSeconds;
             $isBreaching = $meta->isBreaching();
-            $cooldownSeconds = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
-            $damped = $this->cooldown->apply($workloadKey, $currentWorkers, $targetWorkers, $isBreaching, $cooldownSeconds);
+            $damped = $dampedDecisions[$workloadKey];
 
             if ($damped->wasHeld) {
                 $this->verbose("  ⏸️  Anti-flapping: holding {$workloadKey} at {$damped->targetWorkers} during cooldown", 'debug');
             }
 
             if ($damped->breachOverride) {
-                $this->verbose('  🚨 SLA breach override: bypassing anti-flapping cooldown for cluster scale-up', 'warn');
+                $this->verbose("  🚨 SLA breach while {$workloadKey} reverses into a cluster scale-up", 'warn');
             }
 
             $targetWorkers = $damped->targetWorkers;
@@ -661,7 +730,6 @@ class AutoscaleManager
         $this->cooldown->pruneTo($adjustedTargets);
 
         $issuedAt = $this->currentTimestamp();
-        $leaderToken = $this->clusterStore->leaderToken();
 
         foreach ($managerIds as $managerId) {
             $this->clusterStore->publishRecommendation(
@@ -675,29 +743,59 @@ class AutoscaleManager
             );
         }
 
-        $recentDecisions = $this->clusterStore->recentDecisions(
-            AutoscaleConfiguration::decisionHistorySeconds()
-        );
-        $summary = $this->summaryBuilder->build($activeManagers, $workloads, $recentDecisions);
-        $this->clusterStore->publishSummary($summary);
-        event(new ClusterSummaryPublished(
-            clusterId: Coerce::toString($summary['cluster_id'] ?? null),
-            leaderId: Coerce::toString($summary['leader_id'] ?? null),
-            summary: $summary,
-            publishedAt: $this->currentTimestamp(),
-        ));
-        $scaleSignal = is_array($summary['scale_signal'] ?? null) ? $summary['scale_signal'] : [];
+        // Everything from here down is reporting, and all of it lives inside
+        // the guard — reading the decision history included. The summary is an
+        // artifact ABOUT the scaling; the recommendations above are the work. A
+        // throw anywhere in here escapes to the cycle's catch-all, which leaves
+        // the enclosing method without applying this manager's OWN
+        // recommendation, so a reporting problem becomes a scaling outage on
+        // the leader itself.
+        try {
+            // Fenced with the same token the recommendations were. A manager
+            // that stalled past its lease has its recommendation writes
+            // rejected by the store, but the summary write is a plain setex —
+            // so it would still overwrite the real leader's summary and fire
+            // the scale signal that autoscalers outside this package are
+            // documented to consume. A stale recommended_hosts is worse than
+            // none: something acts on it.
+            if ($leaderToken !== null && $this->clusterStore->leaderToken() !== $leaderToken) {
+                $this->verbose('  ⏭️  Lease moved during this cycle; not publishing a summary', 'debug');
 
-        event(new ClusterScalingSignalUpdated(
-            clusterId: Coerce::toString($summary['cluster_id'] ?? null),
-            leaderId: Coerce::toString($summary['leader_id'] ?? null),
-            currentHosts: Coerce::toInt($scaleSignal['current_hosts'] ?? 0),
-            recommendedHosts: Coerce::toInt($scaleSignal['recommended_hosts'] ?? 0),
-            currentCapacity: Coerce::toInt($summary['total_worker_capacity'] ?? 0),
-            requiredWorkers: Coerce::toInt($summary['required_workers'] ?? 0),
-            action: Coerce::toString($scaleSignal['action'] ?? null, 'hold'),
-            reason: Coerce::toString($scaleSignal['reason'] ?? null),
-        ));
+                return;
+            }
+
+            $recentDecisions = $this->clusterStore->recentDecisions(
+                AutoscaleConfiguration::decisionHistorySeconds()
+            );
+
+            $summary = $this->summaryBuilder->build($activeManagers, $workloads, $recentDecisions);
+            $this->clusterStore->publishSummary($summary);
+
+            event(new ClusterSummaryPublished(
+                clusterId: Coerce::toString($summary['cluster_id'] ?? null),
+                leaderId: Coerce::toString($summary['leader_id'] ?? null),
+                summary: $summary,
+                publishedAt: $this->currentTimestamp(),
+            ));
+
+            $scaleSignal = is_array($summary['scale_signal'] ?? null) ? $summary['scale_signal'] : [];
+
+            event(new ClusterScalingSignalUpdated(
+                clusterId: Coerce::toString($summary['cluster_id'] ?? null),
+                leaderId: Coerce::toString($summary['leader_id'] ?? null),
+                currentHosts: Coerce::toInt($scaleSignal['current_hosts'] ?? 0),
+                recommendedHosts: Coerce::toInt($scaleSignal['recommended_hosts'] ?? 0),
+                currentCapacity: Coerce::toInt($summary['total_worker_capacity'] ?? 0),
+                requiredWorkers: Coerce::toInt($summary['required_workers'] ?? 0),
+                action: Coerce::toString($scaleSignal['action'] ?? null, 'hold'),
+                reason: Coerce::toString($scaleSignal['reason'] ?? null),
+            ));
+        } catch (\Throwable $e) {
+            Log::channel(AutoscaleConfiguration::logChannel())->error(
+                'Cluster summary could not be published; scaling continues',
+                ['error' => $e->getMessage()]
+            );
+        }
     }
 
     private function applyClusterRecommendation(ClusterRecommendation $recommendation): void
@@ -788,6 +886,98 @@ class AutoscaleManager
                 $this->reportWorkloadFailure('group', $group->connection, $group->name, $e);
             }
         }
+    }
+
+    /**
+     * Damp every workload's allocated target, without letting a hold squat on
+     * capacity another workload has been allocated.
+     *
+     * A hold republishes the last allowed target, which is by definition above
+     * the one fair share just handed out — that is what damping IS. Under
+     * contention that surplus is not free: fair share has already promised it
+     * to somebody else, the distributor hands out hosts in order and simply
+     * stops when they fill, and the workload at the end of the queue gets
+     * nothing. A scale-up is never held by the damper, so it would arrive at
+     * the distributor unblocked and still be starved by a neighbour's refusal
+     * to shrink.
+     *
+     * So the surplus is given back when, and only when, the total no longer
+     * fits. Anti-flapping is a preference about the shape of a change; the
+     * capacity ceiling is a fact about the hardware, and facts win.
+     *
+     * @param  array<string, int>  $adjustedTargets
+     * @param  array<string, EvaluatedWorkload>  $workloadMeta
+     * @return array<string, CooldownDecision>
+     */
+    private function dampClusterTargets(array $adjustedTargets, array $workloadMeta, int $clusterCapacity): array
+    {
+        $cooldownSeconds = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
+
+        $decisions = [];
+        $surpluses = [];
+
+        foreach ($adjustedTargets as $workloadKey => $targetWorkers) {
+            $meta = $workloadMeta[$workloadKey];
+
+            // A fuse-forced withdrawal is published immediately rather than
+            // damped, same as on the single-host paths. evaluateDemand()
+            // applies the fuse ceiling to cluster-wide demand too, so without
+            // this the leader keeps every host's share of a failing queue alive
+            // for the rest of the window.
+            $decisions[$workloadKey] = $this->engine->isFuseConstraining($meta->config)
+                ? new CooldownDecision($targetWorkers)
+                : $this->cooldown->apply(
+                    $workloadKey,
+                    $meta->currentWorkers,
+                    $targetWorkers,
+                    $meta->isBreaching(),
+                    $cooldownSeconds,
+                );
+
+            $surplus = $decisions[$workloadKey]->targetWorkers - $targetWorkers;
+
+            if ($surplus > 0) {
+                $surpluses[$workloadKey] = $surplus;
+            }
+        }
+
+        $overshoot = array_sum(array_map(
+            static fn (CooldownDecision $decision): int => $decision->targetWorkers,
+            $decisions,
+        )) - $clusterCapacity;
+
+        if ($overshoot <= 0 || $surpluses === []) {
+            return $decisions;
+        }
+
+        // Biggest squatter first, then by key so two identical clusters do not
+        // disagree about who yields.
+        uksort($surpluses, static function (string $a, string $b) use ($surpluses): int {
+            return ($surpluses[$b] <=> $surpluses[$a]) ?: strcmp($a, $b);
+        });
+
+        foreach ($surpluses as $workloadKey => $surplus) {
+            if ($overshoot <= 0) {
+                break;
+            }
+
+            $givenBack = min($surplus, $overshoot);
+            $overshoot -= $givenBack;
+
+            $held = $decisions[$workloadKey];
+            $decisions[$workloadKey] = new CooldownDecision(
+                $held->targetWorkers - $givenBack,
+                wasHeld: $held->wasHeld,
+                breachOverride: $held->breachOverride,
+            );
+
+            $this->verbose(
+                "  ⚖️  Anti-flapping yielded {$givenBack} worker(s) on {$workloadKey}: the cluster is at capacity",
+                'debug',
+            );
+        }
+
+        return $decisions;
     }
 
     private function clusterTargetWorkers(
@@ -1032,6 +1222,88 @@ class AutoscaleManager
         $this->wasLeader = $isLeader;
     }
 
+    /**
+     * Warn when leadership is moving faster than the guards can rebuild.
+     *
+     * Measured against the anti-flapping window, because that is the yardstick
+     * every piece of discarded state is sized in: the damping window is exactly
+     * that long, and the fairness ledger needs a comparable stretch to reach
+     * its first hand-over. Leadership changing several times inside one such
+     * window means none of them ever completes — placement restarts from
+     * nothing, scale-downs stop being damped, and the workload that has been
+     * starved longest loses its claim to be served next. Measured: with
+     * leadership moving every eleven cycles, two of six contending queues went
+     * back to never being served at all.
+     *
+     * This is the disease; the guards degrading are the symptom. Saying so is
+     * cheaper and more useful than making each guard survive independently.
+     */
+    /**
+     * Say on the console that a cycle failed, not only in the log file.
+     *
+     * A cycle that throws is caught so one bad workload cannot take the daemon
+     * down, and the failure went to the configured log channel alone. That
+     * makes the worst case invisible: a manager whose EVERY cycle fails —
+     * an unreachable cache, a database the metrics package cannot read — prints
+     * its start-up banner and then nothing, looks entirely healthy, and does
+     * nothing at all. It is also the likeliest moment for it to happen, because
+     * that is what a fresh misconfiguration looks like.
+     *
+     * Throttled in-process rather than through the alert limiter, which is
+     * backed by the cache: a cache failure is one of the things this has to be
+     * able to report, and a reporter that depends on the failing component
+     * reports nothing.
+     */
+    private function reportCycleFailureToConsole(\Throwable $e): void
+    {
+        $now = microtime(true);
+
+        if ($this->cycleFailureReportedAt !== null
+            && ($now - $this->cycleFailureReportedAt) < self::CYCLE_FAILURE_REPORT_INTERVAL_SECONDS) {
+            return;
+        }
+
+        $this->cycleFailureReportedAt = $now;
+
+        // Not verbose(): that is gated on -v, and this is exactly the message
+        // an operator needs when they did not think to ask for detail.
+        $this->reporter->error('⚠️  Evaluation cycle failed: '.$e->getMessage().' ('.$e::class.')');
+    }
+
+    private function noteLeadershipChange(): void
+    {
+        $window = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
+        $now = microtime(true);
+
+        $this->leaderChanges[] = $now;
+        $this->leaderChanges = array_values(array_filter(
+            $this->leaderChanges,
+            static fn (float $observedAt): bool => ($now - $observedAt) <= $window,
+        ));
+
+        if (count($this->leaderChanges) < self::UNSTABLE_LEADERSHIP_CHANGES) {
+            return;
+        }
+
+        if (! $this->alerts->allow('cluster_leadership_unstable')) {
+            return;
+        }
+
+        Log::channel(AutoscaleConfiguration::logChannel())->warning(
+            'Cluster leadership is changing faster than the scaling guards can rebuild',
+            [
+                'changes_observed' => count($this->leaderChanges),
+                'window_seconds' => $window,
+                'current_leader' => $this->lastObservedLeaderId,
+                'observed_by' => AutoscaleConfiguration::managerId(),
+                'consequence' => 'worker placement, anti-flapping damping and fair-share rotation '
+                    .'each restart on every change, so none of them completes',
+                'remedy' => 'raise cluster.leader_lease_seconds above the time a slow evaluation '
+                    .'cycle can take, or find why the leader keeps missing its renewal',
+            ]
+        );
+    }
+
     private function currentTimestamp(): int
     {
         return (int) round(microtime(true) * 1000);
@@ -1099,8 +1371,12 @@ class AutoscaleManager
      *
      * Bounded rather than cleared: the anti-flapping window and the breach
      * state are what stop a queue oscillating, so discarding them every cycle
-     * would defeat both. A queue that has not been scaled within the retention
-     * window has nothing left worth remembering.
+     * would defeat both. A queue nothing has been recorded about within the
+     * retention window has nothing left worth remembering.
+     *
+     * Quiet means unseen, not unscaled. A leader records breach state for every
+     * workload it discovers and never scales any of them itself, so a sweep
+     * driven by the last scaling action skipped its map entirely.
      */
     private function forgetQueuesNotSeenRecently(): void
     {
@@ -1308,36 +1584,33 @@ class AutoscaleManager
             $this->verbose("  🚨 SLA BREACH: oldest_age={$metrics->oldestJobAge}s >= SLA={$config->sla->targetSeconds}s", 'error');
         }
 
-        // 5. Anti-flapping check: prevent direction reversals within cooldown
-        // Exception: scale-up during SLA breach is always allowed to protect SLA
+        // 5. Anti-flapping check: hold a scale-DOWN that reverses a recent
+        // scale-up. A scale-up is never held — see WorkloadStateTracker.
         $key = "{$connection}:{$queue}";
         $currentDirection = $decision->shouldScaleUp() ? 'up' : ($decision->shouldScaleDown() ? 'down' : 'hold');
-        $lastDirection = $this->workloadState->lastDirection($key);
-
-        // Clear stale direction: once cooldown has fully elapsed, the last direction
-        // is no longer relevant. This prevents HOLD→HOLD→...→DOWN from being blocked
-        // by an UP that happened minutes ago.
         $scaleCooldownSeconds = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
-        if ($lastDirection !== null && ! $this->workloadState->inCooldown($key, $scaleCooldownSeconds)) {
-            $this->workloadState->forgetDirection($key);
-            $lastDirection = null;
+
+        // A withdrawal the fuse forced is never damped. Failures look like load,
+        // so the fleet has usually just scaled UP when the fuse trips — exactly
+        // the state in which the damper would hold the withdrawal, leaving a
+        // full-size fleet hammering a dead dependency for the rest of the
+        // window on top of the fuse's own detection latency.
+        // holdsReversal() first: it clears a direction that has outlived its
+        // window as a side effect, and that has to happen every cycle. The fuse
+        // is only consulted when a hold is actually imminent.
+        if ($this->workloadState->holdsReversal($key, $currentDirection, $scaleCooldownSeconds)
+            && ! $this->engine->isFuseConstraining($config)) {
+            $remaining = $this->workloadState->cooldownRemaining($key, $scaleCooldownSeconds);
+            $this->verbose("  ⏸️  Anti-flapping: cannot reverse into a scale-down during cooldown ({$remaining}s remaining)", 'debug');
+
+            return;
         }
 
-        // Only apply cooldown if direction is reversing (prevents flapping)
-        if ($currentDirection !== 'hold' && $lastDirection !== null && $currentDirection !== $lastDirection) {
-            // Always allow scale-up during SLA breach - protecting SLA takes priority over anti-flapping
-            $isBreachScaleUp = $currentDirection === 'up' && $isBreaching;
-
-            if (! $isBreachScaleUp && $this->workloadState->inCooldown($key, $scaleCooldownSeconds)) {
-                $remaining = $this->workloadState->cooldownRemaining($key, $scaleCooldownSeconds);
-                $this->verbose("  ⏸️  Anti-flapping: cannot reverse direction during cooldown ({$remaining}s remaining)", 'debug');
-
-                return;
-            }
-
-            if ($isBreachScaleUp) {
-                $this->verbose('  🚨 SLA breach override: bypassing anti-flapping cooldown for scale-up', 'warn');
-            }
+        // Read AFTER the check, which drops a direction that has outlived its
+        // window. Reading first would report a reversal against a move from
+        // minutes ago, and disagree with the cluster path on the same facts.
+        if ($currentDirection === 'up' && $isBreaching && $this->workloadState->lastDirection($key) === 'down') {
+            $this->verbose('  🚨 SLA breach during a reversing scale-up', 'warn');
         }
 
         // Log scaling recommendation
@@ -1446,8 +1719,16 @@ class AutoscaleManager
         }
 
         // 11. Update last scale time and direction
+        //
+        // Record what the fleet ACTUALLY did, not what the engine proposed. A
+        // policy may flip the decision — a headroom rule turning a withdrawal
+        // into a rise, a cost cap doing the reverse, or either escalating a
+        // hold into a real move. Recording the engine's direction against the
+        // policy's outcome then damps the wrong thing: after a flipped
+        // down-to-up, the next genuine scale-down reads as same-direction and
+        // passes undamped, killing the workers just spawned.
         if (! $finalDecision->shouldHold()) {
-            $this->workloadState->recordScale($key, $currentDirection);
+            $this->workloadState->recordScale($key, $finalDecision->shouldScaleUp() ? 'up' : 'down');
         }
     }
 
@@ -1480,23 +1761,15 @@ class AutoscaleManager
 
         // Anti-flapping check (same semantics as per-queue).
         $currentDirection = $decision->shouldScaleUp() ? 'up' : ($decision->shouldScaleDown() ? 'down' : 'hold');
-        $lastDirection = $this->workloadState->lastDirection($key);
         $scaleCooldownSeconds = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
 
-        if ($lastDirection !== null && ! $this->workloadState->inCooldown($key, $scaleCooldownSeconds)) {
-            $this->workloadState->forgetDirection($key);
-            $lastDirection = null;
-        }
+        // Fuse-forced withdrawals bypass the damper — see evaluateQueue.
+        if ($this->workloadState->holdsReversal($key, $currentDirection, $scaleCooldownSeconds)
+            && ! $this->engine->isFuseConstraining($config)) {
+            $remaining = $this->workloadState->cooldownRemaining($key, $scaleCooldownSeconds);
+            $this->verbose("  ⏸️  Anti-flapping (group): cannot reverse into a scale-down during cooldown ({$remaining}s remaining)", 'debug');
 
-        if ($currentDirection !== 'hold' && $lastDirection !== null && $currentDirection !== $lastDirection) {
-            $isBreachScaleUp = $currentDirection === 'up' && $isBreaching;
-
-            if (! $isBreachScaleUp && $this->workloadState->inCooldown($key, $scaleCooldownSeconds)) {
-                $remaining = $this->workloadState->cooldownRemaining($key, $scaleCooldownSeconds);
-                $this->verbose("  ⏸️  Anti-flapping (group): cannot reverse direction during cooldown ({$remaining}s remaining)", 'debug');
-
-                return;
-            }
+            return;
         }
 
         $this->verbose("  📊 Group decision: {$currentWorkers} → {$decision->targetWorkers} workers", 'info');
@@ -1556,8 +1829,9 @@ class AutoscaleManager
 
         $this->workloadState->setBreaching($key, $isBreaching);
 
+        // The direction that actually happened — see evaluateQueue.
         if (! $finalDecision->shouldHold()) {
-            $this->workloadState->recordScale($key, $currentDirection);
+            $this->workloadState->recordScale($key, $finalDecision->shouldScaleUp() ? 'up' : 'down');
         }
     }
 
@@ -1833,6 +2107,8 @@ class AutoscaleManager
             return;
         }
 
+        $previousLeaderId = $this->lastObservedLeaderId;
+
         event(new ClusterLeaderChanged(
             clusterId: AutoscaleConfiguration::clusterAppId(),
             previousLeaderId: $this->lastObservedLeaderId,
@@ -1842,6 +2118,12 @@ class AutoscaleManager
         ));
 
         $this->lastObservedLeaderId = $currentLeaderId;
+
+        // Not the first sighting. Starting up and discovering who leads is not
+        // a change, and counting it would make every restart look unstable.
+        if ($previousLeaderId !== null) {
+            $this->noteLeadershipChange();
+        }
     }
 
     /**

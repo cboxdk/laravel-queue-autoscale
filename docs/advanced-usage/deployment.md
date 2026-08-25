@@ -494,10 +494,11 @@ ps -o rss= -C php --sort=-rss | head
 
 ### Flapping
 
-`scaling.cooldown_seconds` (default `60`) does not suppress scaling in general — it blocks
-**direction reversals**. Scaling further in the same direction is always allowed, and a scale-up
-during an SLA breach bypasses the cooldown entirely. Raise it if you see up/down oscillation;
-see [Troubleshooting](../basic-usage/troubleshooting.md).
+`scaling.cooldown_seconds` (default `60`) does not suppress scaling in general — it blocks a
+**scale-down that reverses a recent scale-up**. Scaling further in the same direction is always
+allowed, and a scale-up is never held. Raise it if you see up/down oscillation, but raise it
+carefully: the window is also how long an over-provisioned fleet stays that way. See
+[Troubleshooting](../basic-usage/troubleshooting.md).
 
 ## Operational runbook
 

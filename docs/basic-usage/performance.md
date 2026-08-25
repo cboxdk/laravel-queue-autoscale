@@ -73,9 +73,10 @@ What it actually does, per connection+queue key:
 
 - The manager records the time and direction of the last scaling action.
 - Scaling **in the same direction** is always allowed — up, up, up on consecutive cycles is fine.
-- A **direction reversal** within the cooldown window is suppressed, logged as `Anti-flapping: cannot reverse direction during cooldown`.
+- A **scale-down** is suppressed only while the window opened by a recent scale-up is still running, logged as `Anti-flapping: cannot reverse into a scale-down during cooldown`. Consecutive withdrawals are never delayed.
 - Once the window fully elapses, the stored direction is cleared and the next action in either direction is free.
-- **An SLA breach overrides it for scale-up.** A scale-up during an active breach bypasses the cooldown entirely, so protecting the SLA always wins over anti-flapping.
+- A scale-down forced by the **failure fuse** is never delayed — withdrawing workers from a failing queue outranks anti-flapping.
+- **A scale-up is never suppressed**, breach or no breach. Holding one only lets the backlog grow until it breaches, so the guard would manufacture the very problem it exists to prevent.
 
 **Shorter cooldown (30-45s):** faster reversals, better for genuinely variable traffic, more oscillation risk.
 
@@ -367,7 +368,7 @@ Spawn latency is unavoidable when a queue has to grow from cold. Two ways to avo
 
 **Solutions:**
 1. Reduce `manager.evaluation_interval_seconds` (default 5s), or `--interval` on a single daemon.
-2. Reduce `scaling.cooldown_seconds` (default 60s) if the block is a direction reversal
+2. Reduce `scaling.cooldown_seconds` (default 60s) if a **scale-down** is being held longer than you want — the cooldown never blocks a scale-up, so it is not the cause of a slow rise
 3. Lower `scaling.breach_threshold` (default 0.5) so backlog-drain engages earlier in the SLA window
 4. Swap to a profile with a more aggressive forecast policy (`CriticalProfile` or `BurstyProfile`)
 5. Raise `workers.min` so cold-start latency is not a factor
