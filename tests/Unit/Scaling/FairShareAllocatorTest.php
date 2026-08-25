@@ -951,3 +951,21 @@ test('a negative capacity allocates nothing rather than something negative', fun
     expect($allocator->allocate($demands, $configs, -5))
         ->toBe(['queue:redis:a' => 0, 'queue:redis:b' => 0]);
 });
+
+test('a config without a ceiling is not read as a ceiling of zero', function (): void {
+    // Both keys are required by the method's shape, but the two absences do not
+    // mean the same thing if one arrives anyway. No minimum is a workload
+    // making no claim. No maximum is a workload with no configured ceiling —
+    // reading it as zero silently refuses a workload that asked for work.
+    $allocator = new FairShareAllocator;
+
+    expect(@$allocator->allocate(['queue:redis:a' => 3], ['queue:redis:a' => ['min' => 1]], 10))
+        ->toBe(['queue:redis:a' => 3]);
+});
+
+test('a config without a floor claims nothing and still runs', function (): void {
+    $allocator = new FairShareAllocator;
+
+    expect(@$allocator->allocate(['queue:redis:a' => 3], ['queue:redis:a' => ['max' => 5]], 10))
+        ->toBe(['queue:redis:a' => 3]);
+});

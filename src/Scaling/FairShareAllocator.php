@@ -202,7 +202,13 @@ class FairShareAllocator
         $bounds = [];
 
         foreach ($demands as $key => $demand) {
-            $ceiling = max(0, min($demand, $configs[$key]['max'] ?? 0));
+            // A missing max is not a ceiling of zero. Both keys are required by
+            // the shape above, but the two absences do not mean the same thing
+            // if one arrives anyway: no minimum is a workload making no claim,
+            // while no maximum is a workload with no configured ceiling — so
+            // reading it as zero silently refuses a workload that asked for
+            // work, which is what the implementation this replaced did not do.
+            $ceiling = max(0, min($demand, $configs[$key]['max'] ?? $demand));
 
             $bounds[$key] = [
                 'floor' => max(0, min($configs[$key]['min'] ?? 0, $ceiling)),
