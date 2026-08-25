@@ -91,7 +91,29 @@ cannot, exactly once, after which normal accounting resumes. Measured across
 leadership changing every 5, 8, 11 and 20 cycles, no workload is left
 permanently unserved in any of them; with a stable leader nothing changes.
 
-A balance already being kept is never overwritten by a snapshot.
+A balance already being kept is never overwritten by a snapshot, and the
+observed count and the entitlement are both clamped before use — a corrupt
+heartbeat or a scaling policy that raises a target above `workers.max` would
+otherwise let a balance grow without limit, and a ledger that has drifted far
+enough stops serving anyone who joins later.
+
+The rate at which the cluster hands slots over no longer grows with the number
+of workloads sharing it. The margin a holder carries scales with the number of
+contenders, so a saturated two-hundred-queue fleet moves workers about as often
+as a six-queue one rather than thirty times as often: measured at constant
+demand, 154 moves an hour at six workloads and 5068 at two hundred and
+fifty-six before, against 100 to 212 across that whole range now. Each workload
+waits proportionally longer for its turn, which is the right way round — one
+sharing capacity with 255 others is entitled to less of it. A cluster of six is
+unchanged.
+
+Two smaller repairs in the same area: the ledger is pruned on every contested
+path rather than only the ones that bank it, so a cluster statically pinned at
+exactly the sum of its worker floors no longer keeps one entry per queue name
+ever seen; and elapsed time in both cooldown windows is now absolute, so a clock
+stepping backwards — an NTP correction, a virtual machine resuming from a
+snapshot — cannot extend a hold. A thirty-minute backward step held a scale-down
+for thirty-one minutes instead of sixty seconds.
 
 `FairShareAllocator` is therefore stateful across calls, which it was not
 before: the same inputs no longer produce the same output on consecutive

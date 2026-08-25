@@ -617,3 +617,72 @@ test('omitting the observation leaves the allocation unchanged', function (): vo
             ->toBe($withEmpty->allocate($demands, $configs, 2, []));
     }
 });
+
+/**
+ * The margin sets how often ONE workload hands its slot over, so with a fixed
+ * margin the number of hand-overs across the CLUSTER grows with the number of
+ * workloads sharing it. Measured on a saturated cluster at constant demand: 154
+ * worker moves an hour at six workloads, 1368 at sixty-four, 5068 at two
+ * hundred and fifty-six — better than one worker restart a second, at a load
+ * that never changed. A tenant-per-queue deployment is exactly that shape.
+ */
+test('hand-over cost does not grow with the size of the fleet', function (int $workloads, int $capacity): void {
+    $allocator = new FairShareAllocator;
+    $demands = $configs = [];
+
+    for ($index = 0; $index < $workloads; $index++) {
+        $key = 'queue:redis:q'.str_pad((string) $index, 4, '0', STR_PAD_LEFT);
+        $demands[$key] = 2;
+        $configs[$key] = ['min' => 2, 'max' => 20];
+    }
+
+    $current = array_fill_keys(array_keys($demands), 0);
+    $moves = 0;
+
+    // 1440 cycles is two hours at the default five-second interval.
+    for ($cycle = 0; $cycle < 1440; $cycle++) {
+        $allocation = $allocator->allocate($demands, $configs, $capacity, $current);
+
+        foreach ($allocation as $key => $workers) {
+            $moves += abs($workers - $current[$key]);
+        }
+
+        $current = $allocation;
+    }
+
+    // A fixed margin puts 256 workloads at roughly ten thousand moves here.
+    expect($moves)->toBeLessThan(1000);
+})->with([
+    'six workloads' => [6, 4],
+    'sixty-four workloads' => [64, 48],
+    'two hundred and fifty-six workloads' => [256, 200],
+]);
+
+test('a larger fleet waits longer for its turn, and still gets one', function (): void {
+    // The other side of the trade, and the right way round: a workload sharing
+    // capacity with 255 others is entitled to less of it and needs its turn
+    // less often. What must not happen is never getting one.
+    $allocator = new FairShareAllocator;
+    $demands = $configs = [];
+
+    for ($index = 0; $index < 64; $index++) {
+        $key = 'queue:redis:q'.str_pad((string) $index, 4, '0', STR_PAD_LEFT);
+        $demands[$key] = 2;
+        $configs[$key] = ['min' => 2, 'max' => 20];
+    }
+
+    $current = array_fill_keys(array_keys($demands), 0);
+    $everServed = array_fill_keys(array_keys($demands), false);
+
+    for ($cycle = 0; $cycle < 2000; $cycle++) {
+        $current = $allocator->allocate($demands, $configs, 48, $current);
+
+        foreach ($current as $key => $workers) {
+            if ($workers > 0) {
+                $everServed[$key] = true;
+            }
+        }
+    }
+
+    expect(array_keys(array_filter($everServed, static fn (bool $served): bool => ! $served)))->toBe([]);
+});

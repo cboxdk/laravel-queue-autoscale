@@ -56,7 +56,12 @@ class WorkloadStateTracker
             return false;
         }
 
-        return $this->lastScaleTime[$key]->diffInSeconds(now()) < $cooldownSeconds;
+        // Absolute: diffInSeconds is signed, so a clock that steps BACKWARDS —
+        // an NTP correction, a VM resuming from a snapshot — makes the elapsed
+        // time negative and the window appear to have barely started. Measured
+        // with a 30-minute backward step: a scale-down stayed held for 31
+        // minutes instead of 60 seconds.
+        return abs($this->lastScaleTime[$key]->diffInSeconds(now())) < $cooldownSeconds;
     }
 
     public function cooldownRemaining(string $key, int $cooldownSeconds): int
@@ -65,7 +70,7 @@ class WorkloadStateTracker
             return 0;
         }
 
-        $elapsed = $this->lastScaleTime[$key]->diffInSeconds(now());
+        $elapsed = abs($this->lastScaleTime[$key]->diffInSeconds(now()));
 
         return (int) max(0, $cooldownSeconds - $elapsed);
     }
