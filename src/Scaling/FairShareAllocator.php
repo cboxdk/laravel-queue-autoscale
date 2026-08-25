@@ -176,11 +176,25 @@ class FairShareAllocator
      */
     private function allocateWithFairShare(array $demands, array $configs, int $clusterCapacity): array
     {
-        // Phase 1: guarantee every workload gets its min
+        // Phase 1: guarantee every workload gets its min — but never more than
+        // it could actually use.
+        //
+        // A floor is a claim on capacity, and a workload asking for less than
+        // its floor is telling us it cannot use that claim. The failure fuse
+        // does exactly that: when a queue's jobs are failing, evaluateDemand()
+        // returns BELOW workers.min, down to zero. Paying the raw floor anyway
+        // hands workers to a queue every host will then refuse to spawn, and
+        // takes them from queues that would have run them — measured on a
+        // capacity of eight with three floors of five, the fused queue was
+        // allocated three workers it could not use while the two healthy
+        // queues dropped from four each to three and two. That is a downstream
+        // outage and an over-subscribed cluster at the same moment, which is
+        // the worst time to be holding capacity idle.
         $targets = [];
 
         foreach ($demands as $key => $demand) {
-            $targets[$key] = $configs[$key]['min'];
+            $ceiling = max(0, min($demand, $configs[$key]['max']));
+            $targets[$key] = max(0, min($configs[$key]['min'], $ceiling));
         }
 
         $remainingCapacity = $clusterCapacity - array_sum($targets);

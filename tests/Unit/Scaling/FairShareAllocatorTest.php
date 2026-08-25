@@ -809,3 +809,55 @@ test('a workload joining a long-saturated cluster waits its ordinary turn', func
     // One hysteresis window, not a function of how long the cluster has run.
     expect($waited)->toBeLessThan(200);
 });
+
+/**
+ * A floor is a claim on capacity, and a workload asking for less than its floor
+ * is telling us it cannot use that claim.
+ *
+ * The failure fuse does exactly that: when a queue's jobs are failing,
+ * evaluateDemand() returns BELOW workers.min, down to zero. Paying the raw
+ * floor anyway hands workers to a queue every host will then refuse to spawn,
+ * and takes them from queues that would have run them — at the moment a
+ * downstream dependency is failing AND the cluster is over-subscribed on
+ * floors, which is the worst time to hold capacity idle.
+ */
+test('a queue that cannot use its floor is not paid it', function (): void {
+    $allocator = new FairShareAllocator;
+
+    $demands = [
+        'queue:redis:fused' => 0,
+        'queue:redis:healthy-a' => 8,
+        'queue:redis:healthy-b' => 8,
+    ];
+    $configs = [
+        'queue:redis:fused' => ['min' => 5, 'max' => 10],
+        'queue:redis:healthy-a' => ['min' => 5, 'max' => 10],
+        'queue:redis:healthy-b' => ['min' => 5, 'max' => 10],
+    ];
+
+    // Floors total 15 against a capacity of 8, so the floors path runs.
+    $allocation = $allocator->allocate($demands, $configs, 8);
+
+    expect($allocation['queue:redis:fused'])->toBe(0)
+        ->and($allocation['queue:redis:healthy-a'])->toBe(4)
+        ->and($allocation['queue:redis:healthy-b'])->toBe(4)
+        ->and(array_sum($allocation))->toBe(8);
+});
+
+test('a floor is still honoured when the queue can use it', function (): void {
+    // The clamp must not become a general withdrawal of floors: a queue asking
+    // for at least its floor still gets its proportional share of it.
+    $allocator = new FairShareAllocator;
+
+    $demands = ['queue:redis:a' => 8, 'queue:redis:b' => 8, 'queue:redis:c' => 8];
+    $configs = [
+        'queue:redis:a' => ['min' => 5, 'max' => 10],
+        'queue:redis:b' => ['min' => 5, 'max' => 10],
+        'queue:redis:c' => ['min' => 5, 'max' => 10],
+    ];
+
+    $allocation = $allocator->allocate($demands, $configs, 8);
+
+    expect(array_sum($allocation))->toBe(8)
+        ->and(min($allocation))->toBeGreaterThan(0);
+});
