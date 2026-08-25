@@ -89,9 +89,10 @@ class FairShareAllocator
      * @param  array<string, int>  $demands  workloadKey => raw demand from evaluateDemand()
      * @param  array<string, array{min: int, max: int}>  $configs  workloadKey => worker bounds
      * @param  int  $clusterCapacity  total capacity available for scalable workloads
+     * @param  array<string, int>  $currentWorkers  workloadKey => workers running cluster-wide
      * @return array<string, int> workloadKey => adjusted target
      */
-    public function allocate(array $demands, array $configs, int $clusterCapacity): array
+    public function allocate(array $demands, array $configs, int $clusterCapacity, array $currentWorkers = []): array
     {
         if ($demands === []) {
             return [];
@@ -107,6 +108,8 @@ class FairShareAllocator
         }
 
         $this->pendingAwards = [];
+
+        $this->seedLedgerFromObservation($demands, $configs, $clusterCapacity, $currentWorkers);
 
         $allocation = $this->allocateWithFairShare($demands, $configs, $clusterCapacity);
 
@@ -401,5 +404,67 @@ class FairShareAllocator
         // A workload that stopped being contested — removed, excluded, or no
         // longer over capacity — must not keep a balance forever.
         $this->credits = array_intersect_key($this->credits, $entitlements);
+    }
+
+    /**
+     * Open a workload's ledger from what the cluster can be SEEN to be doing,
+     * rather than from zero.
+     *
+     * A manager that has just taken the lease has no ledger, and starting every
+     * balance at zero throws the ordering back to the fractional part and then
+     * the key — which is where the alphabetically-first workloads win. One
+     * failover costs little, because the balances diverge again within a
+     * hysteresis window. Leadership that keeps moving never gets that far:
+     * measured, leadership changing every eleven cycles put two of six
+     * contending queues back to never being served at all, and every eleven
+     * cycles is a cluster in trouble but not an impossible one.
+     *
+     * It does not have to be guessed at. Every host's per-workload worker count
+     * already reaches the leader through the heartbeats it reads to size the
+     * next decision, and the gap between what a workload holds and what it is
+     * entitled to IS the outcome of whatever history this manager missed. A
+     * workload sitting at zero under sustained contention is behind; one
+     * holding a leftover is ahead. That much is observable, and it is the part
+     * that matters.
+     *
+     * What is NOT observable is how long it has been that way, which is the
+     * unit the hysteresis margin is measured in. Scaling the observed gap by
+     * that margin is what converts one into the other: it lets what a new
+     * leader can see outrank the incumbency it cannot, exactly once, and normal
+     * accounting resumes from the next allocation. Measured across leadership
+     * changing every 5, 8, 11 and 20 cycles, no workload is left permanently
+     * unserved in any of them; with a stable leader nothing changes at all.
+     *
+     * @param  array<string, int>  $demands
+     * @param  array<string, array{min: int, max: int}>  $configs
+     * @param  array<string, int>  $currentWorkers
+     */
+    private function seedLedgerFromObservation(
+        array $demands,
+        array $configs,
+        int $clusterCapacity,
+        array $currentWorkers,
+    ): void {
+        if ($currentWorkers === []) {
+            return;
+        }
+
+        $entitlements = $this->proportionalEntitlements($demands, $configs, $clusterCapacity);
+
+        foreach ($entitlements as $key => $entitlement) {
+            // Only an unopened ledger. A balance already being kept is the
+            // real history and must never be overwritten by a snapshot.
+            if (isset($this->credits[$key])) {
+                continue;
+            }
+
+            $held = $currentWorkers[$key] ?? 0;
+
+            $this->credits[$key] = ($entitlement - $held) * self::CREDIT_HYSTERESIS;
+
+            if ($held > (int) floor($entitlement)) {
+                $this->incumbents[$key] = true;
+            }
+        }
     }
 }

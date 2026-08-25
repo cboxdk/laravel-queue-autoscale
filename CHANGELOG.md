@@ -57,6 +57,27 @@ bounded, and a workload already holding a leftover keeps it until a challenger
 has banked meaningfully more — without that margin the guarantee cost 2820
 worker moves per 720 cycles, with it, 156.
 
+**Fixed: a new cluster leader no longer restarts fairness from nothing.**
+The fair-share ledger is per-manager, so a manager taking the lease opened every
+balance at zero and the ordering fell back to the workload key — where the
+alphabetically-first workloads win. A single failover costs little, because the
+balances diverge again within a hysteresis window; leadership that keeps moving
+never gets that far. Measured, leadership changing every eleven cycles put two of
+six contending queues back to never being served at all.
+
+The leader now opens an unknown balance from what the cluster can be seen to be
+doing. Every host's per-workload worker count already reaches it through the
+heartbeats it reads to size the next decision, and the gap between what a
+workload holds and what it is entitled to is the outcome of the history this
+manager missed. What is not observable is how long it has been that way, which
+is the unit the hysteresis margin is measured in, so the observed gap is scaled
+into that unit — letting what a new leader can see outrank the incumbency it
+cannot, exactly once, after which normal accounting resumes. Measured across
+leadership changing every 5, 8, 11 and 20 cycles, no workload is left
+permanently unserved in any of them; with a stable leader nothing changes.
+
+A balance already being kept is never overwritten by a snapshot.
+
 **Added: the cluster says when its leadership is unstable.**
 Worker placement, the anti-flapping window and the fair-share ledger are all
 leader working memory, discarded when the lease moves because each describes a

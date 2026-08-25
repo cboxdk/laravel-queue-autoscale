@@ -385,13 +385,19 @@ So:
   floors give the smallest share the smallest remainder so it loses outright. Unreceived
   entitlement is banked and carried forward instead, which keeps proportionality over time
   and bounds every workload's time at zero.
-- All three guards are **leader working memory**, discarded when the lease moves: worker
-  placement, the anti-flapping window, and the fair-share ledger's accumulated position each
-  describe a cluster the new leader has not observed. One failover costs a cycle. Leadership
-  that keeps moving means none of them ever completes — with leadership changing every eleven
-  cycles, two of six contending queues went back to never being served at all. The manager
-  warns when it sees three changes inside one anti-flapping window, and `queue:autoscale:doctor`
-  warns when the lease has no headroom over the evaluation cycle, which is the usual cause.
+- Worker placement and the anti-flapping window are **leader working memory**, discarded when
+  the lease moves because both describe a cluster the new leader has not observed. One failover
+  costs a cycle. The manager warns when it sees three leadership changes inside one anti-flapping
+  window, and `queue:autoscale:doctor` warns when the lease has no headroom over the evaluation
+  cycle, which is the usual cause.
+- The **fairness ledger opens from observation**, not from zero. A manager taking the lease has
+  no balances, and starting them empty throws the ordering back to the key — so leadership that
+  kept moving never let a hand-over complete, and with a change every eleven cycles two of six
+  contending queues went back to never being served. The gap between what a workload holds and
+  what it is entitled to already reaches the leader through the heartbeats it reads anyway, and
+  that gap is the outcome of the history it missed. What it cannot see is how long, which is the
+  unit the hysteresis is measured in — so the observed gap is scaled into that unit, letting what
+  a new leader can see outrank the incumbency it cannot, exactly once.
 - A hold **gives capacity back** rather than starving a neighbour. Damping republishes a target
   above the one fair share allocated, which under contention is capacity already promised to
   another workload; the surplus is surrendered when, and only when, the total no longer fits.

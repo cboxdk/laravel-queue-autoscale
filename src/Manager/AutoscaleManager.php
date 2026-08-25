@@ -557,7 +557,21 @@ class AutoscaleManager
         }
 
         $scalableCapacity = max($clusterCapacity - array_sum($pinnedDemands), 0);
-        $scalableTargets = $this->allocator->allocate($scalableDemands, $scalableConfigs, $scalableCapacity);
+        // What each workload is running right now, so a manager that has just
+        // taken the lease opens its fairness ledger from what it can observe
+        // rather than from zero — see FairShareAllocator.
+        $observedWorkers = [];
+
+        foreach ($scalableDemands as $workloadKey => $demand) {
+            $observedWorkers[$workloadKey] = $workloadMeta[$workloadKey]->currentWorkers;
+        }
+
+        $scalableTargets = $this->allocator->allocate(
+            $scalableDemands,
+            $scalableConfigs,
+            $scalableCapacity,
+            $observedWorkers,
+        );
         $adjustedTargets = $pinnedDemands + $scalableTargets;
 
         // Phase C consumes this in iteration order and accumulates

@@ -536,3 +536,54 @@ test('the leader carries its fair-share credits from one cycle to the next', fun
     expect($afterFirst)->not->toBe([])
         ->and($afterSecond)->not->toBe($afterFirst);
 });
+
+test('the leader opens the fairness ledger from what the cluster is running', function (): void {
+    // The allocator can only seed from an observation the leader passes it.
+    // Without that argument a manager taking the lease starts every balance at
+    // zero, the ordering falls back to the key, and leadership that keeps
+    // moving re-starves the same alphabetically-first workloads — which is the
+    // whole failure the seeding exists to prevent.
+    config()->set('queue.default', 'redis');
+
+    $queues = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf'];
+    $rules = $discovered = [];
+
+    foreach ($queues as $queue) {
+        $rules[$queue] = ['workers' => ['min' => 6, 'max' => 20]];
+        $discovered["redis:{$queue}"] = cooldownRawMetrics('redis', $queue, pending: 200);
+    }
+
+    config()->set('queue-autoscale.queues', $rules);
+
+    $tracker = Mockery::mock(SpawnLatencyTrackerContract::class);
+    $tracker->shouldReceive('currentLatency')->andReturn(0.0);
+    app()->instance(SpawnLatencyTrackerContract::class, $tracker);
+
+    $pickupStore = Mockery::mock(PickupTimeStoreContract::class);
+    $pickupStore->shouldReceive('recentSamples')->andReturn([]);
+    app()->instance(PickupTimeStoreContract::class, $pickupStore);
+
+    Event::fake();
+
+    // One workload is already running workers and the rest are at nothing —
+    // a lopsided cluster the seeding must be able to see.
+    $store = (new FakeClusterStore)
+        ->withManager(cooldownManagerState('mgr-1', totalWorkers: 9, queueWorkers: ['redis:alpha' => 9]))
+        ->withLeader('mgr-1');
+    app()->instance(ClusterStoreContract::class, $store);
+    app()->forgetInstance(AutoscaleManager::class);
+
+    $manager = app(AutoscaleManager::class);
+    $allocator = (new ReflectionProperty($manager, 'allocator'))->getValue($manager);
+
+    cooldownDiscovery($discovered);
+    (new ReflectionMethod($manager, 'evaluateAndPublishClusterRecommendations'))->invoke($manager);
+
+    $ledger = (new ReflectionProperty($allocator, 'credits'))->getValue($allocator);
+
+    // alpha holds nine workers against a share of a few, so it opens in debit
+    // while everything else opens in credit. All-equal balances would mean the
+    // observation never arrived.
+    expect($ledger)->toHaveKey('queue:redis:alpha')
+        ->and($ledger['queue:redis:alpha'])->toBeLessThan(min(array_diff_key($ledger, ['queue:redis:alpha' => true])));
+});

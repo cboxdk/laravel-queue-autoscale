@@ -528,3 +528,92 @@ test('the leftover moves across separate allocate() calls on one instance', func
     // A frozen allocation yields exactly one distinct result forever.
     expect(count($seen))->toBeGreaterThan(1);
 });
+
+/**
+ * A manager that has just taken the lease has no ledger. Opening every balance
+ * at zero throws the ordering back to the fractional part and then the key —
+ * which is where the alphabetically-first workloads win — so leadership that
+ * keeps moving never lets a hand-over complete. Measured with leadership
+ * changing every eleven cycles: two of six contending queues went back to never
+ * being served at all.
+ *
+ * The gap between what a workload holds and what it is entitled to is already
+ * visible to the leader, and it is the outcome of the history it missed.
+ */
+test('a fresh ledger opened from observation does not restart the ordering', function (): void {
+    $demands = $configs = [];
+
+    foreach (['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot'] as $queue) {
+        $demands["queue:redis:{$queue}"] = 5;
+        $configs["queue:redis:{$queue}"] = ['min' => 5, 'max' => 20];
+    }
+
+    // Leadership moves every eleven cycles: each new manager starts with an
+    // empty ledger and is handed what the cluster is currently running.
+    $allocator = new FairShareAllocator;
+    $current = array_fill_keys(array_keys($demands), 0);
+    $everServed = array_fill_keys(array_keys($demands), false);
+
+    for ($cycle = 0; $cycle < 600; $cycle++) {
+        if ($cycle > 0 && $cycle % 11 === 0) {
+            $allocator = new FairShareAllocator;
+        }
+
+        $current = $allocator->allocate($demands, $configs, 4, $current);
+
+        foreach ($current as $key => $workers) {
+            if ($workers > 0) {
+                $everServed[$key] = true;
+            }
+        }
+    }
+
+    expect(array_keys(array_filter($everServed, static fn (bool $served): bool => ! $served)))->toBe([]);
+});
+
+test('an observation never overwrites a ledger already being kept', function (): void {
+    // The snapshot is a starting point, not a correction. A balance that has
+    // been accumulating is the real history, and letting a single cycle's
+    // observation replace it would erase exactly what stops the starvation.
+    $allocator = new FairShareAllocator;
+
+    $demands = ['queue:redis:a' => 4, 'queue:redis:b' => 4];
+    $configs = [
+        'queue:redis:a' => ['min' => 4, 'max' => 20],
+        'queue:redis:b' => ['min' => 4, 'max' => 20],
+    ];
+
+    for ($cycle = 0; $cycle < 30; $cycle++) {
+        $allocator->allocate($demands, $configs, 3);
+    }
+
+    $ledger = (new ReflectionProperty($allocator, 'credits'))->getValue($allocator);
+
+    // A wildly contradictory snapshot arrives; the ledger must ignore it.
+    $allocator->allocate($demands, $configs, 3, ['queue:redis:a' => 99, 'queue:redis:b' => 0]);
+
+    $after = (new ReflectionProperty($allocator, 'credits'))->getValue($allocator);
+
+    foreach ($ledger as $key => $balance) {
+        expect(abs($after[$key] - $balance))->toBeLessThan(2.0);
+    }
+});
+
+test('omitting the observation leaves the allocation unchanged', function (): void {
+    // The parameter is optional, and a caller that does not pass it must get
+    // exactly what it got before the parameter existed.
+    $demands = ['queue:redis:a' => 5, 'queue:redis:b' => 5, 'queue:redis:c' => 5];
+    $configs = [
+        'queue:redis:a' => ['min' => 5, 'max' => 20],
+        'queue:redis:b' => ['min' => 5, 'max' => 20],
+        'queue:redis:c' => ['min' => 5, 'max' => 20],
+    ];
+
+    $withNothing = new FairShareAllocator;
+    $withEmpty = new FairShareAllocator;
+
+    for ($cycle = 0; $cycle < 40; $cycle++) {
+        expect($withNothing->allocate($demands, $configs, 2))
+            ->toBe($withEmpty->allocate($demands, $configs, 2, []));
+    }
+});
