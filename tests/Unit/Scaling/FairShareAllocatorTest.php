@@ -686,3 +686,41 @@ test('a larger fleet waits longer for its turn, and still gets one', function ()
 
     expect(array_keys(array_filter($everServed, static fn (bool $served): bool => ! $served)))->toBe([]);
 });
+
+test('a workload with no floor gets nothing while the floors do not fit', function (): void {
+    // Deliberate, and sharp enough to pin. workers.min is a claim on the
+    // cluster; when the claims exceed what exists, capacity goes to those who
+    // made one. Serving a floorless queue ahead of a floor that is itself being
+    // scaled down would break the promise to the queue that asked for one.
+    //
+    // The cost is real: this queue holds backlog and gets no worker at all for
+    // as long as the cluster stays over-committed. That is a configuration to
+    // fix, not a rotation to widen.
+    $allocator = new FairShareAllocator;
+
+    $demands = [
+        'queue:redis:claimed-a' => 8,
+        'queue:redis:claimed-b' => 8,
+        'queue:redis:floorless' => 20,
+    ];
+    $configs = [
+        'queue:redis:claimed-a' => ['min' => 8, 'max' => 20],
+        'queue:redis:claimed-b' => ['min' => 8, 'max' => 20],
+        'queue:redis:floorless' => ['min' => 0, 'max' => 20],
+    ];
+
+    $current = array_fill_keys(array_keys($demands), 0);
+    $floorlessEverServed = false;
+
+    for ($cycle = 0; $cycle < 500; $cycle++) {
+        $current = $allocator->allocate($demands, $configs, 10, $current);
+
+        expect(array_sum($current))->toBe(10);
+
+        if ($current['queue:redis:floorless'] > 0) {
+            $floorlessEverServed = true;
+        }
+    }
+
+    expect($floorlessEverServed)->toBeFalse();
+});

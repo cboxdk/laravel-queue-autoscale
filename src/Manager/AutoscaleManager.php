@@ -437,7 +437,17 @@ class AutoscaleManager
             $currentLeaderId = $state->managerId;
             $this->dispatchLeaderChanged($currentLeaderId);
             $this->verbose('Cluster leader lease active on this manager', 'debug');
-            $this->evaluateAndPublishClusterRecommendations();
+
+            // Captured HERE, next to the check that says we hold the lease —
+            // not down in the publish. An evaluation takes as long as it takes,
+            // and a manager that stalls past its lease expiry resumes into a
+            // cluster somebody else now leads. Reading the token at publish
+            // time hands that manager the NEW leader's token, which satisfies
+            // the fencing check in the store and lets a stale leader overwrite
+            // the real one's recommendations under its own id. Holding the
+            // token we were issued means the fence rejects us instead, which is
+            // the whole point of having one.
+            $this->evaluateAndPublishClusterRecommendations($this->clusterStore->leaderToken());
         } else {
             $currentLeaderId = $this->clusterStore->leaderId();
             $this->dispatchLeaderChanged($currentLeaderId);
@@ -456,7 +466,7 @@ class AutoscaleManager
         $this->applyClusterRecommendation($recommendation);
     }
 
-    private function evaluateAndPublishClusterRecommendations(): void
+    private function evaluateAndPublishClusterRecommendations(?string $leaderToken = null): void
     {
         $this->reportMeasuredResources($this->resourceCollector->collect());
 
@@ -720,7 +730,6 @@ class AutoscaleManager
         $this->cooldown->pruneTo($adjustedTargets);
 
         $issuedAt = $this->currentTimestamp();
-        $leaderToken = $this->clusterStore->leaderToken();
 
         foreach ($managerIds as $managerId) {
             $this->clusterStore->publishRecommendation(
@@ -737,8 +746,22 @@ class AutoscaleManager
         $recentDecisions = $this->clusterStore->recentDecisions(
             AutoscaleConfiguration::decisionHistorySeconds()
         );
-        $summary = $this->summaryBuilder->build($activeManagers, $workloads, $recentDecisions);
-        $this->clusterStore->publishSummary($summary);
+        // Isolated from the scaling it reports on. The summary is a reporting
+        // artifact; the recommendations above are the work. Letting a failure
+        // in the former abort the cycle means the leader never applies its own
+        // recommendation, so a reporting problem becomes a scaling outage.
+        try {
+            $summary = $this->summaryBuilder->build($activeManagers, $workloads, $recentDecisions);
+            $this->clusterStore->publishSummary($summary);
+        } catch (\Throwable $e) {
+            Log::channel(AutoscaleConfiguration::logChannel())->error(
+                'Cluster summary could not be published; scaling continues',
+                ['error' => $e->getMessage()]
+            );
+
+            return;
+        }
+
         event(new ClusterSummaryPublished(
             clusterId: Coerce::toString($summary['cluster_id'] ?? null),
             leaderId: Coerce::toString($summary['leader_id'] ?? null),

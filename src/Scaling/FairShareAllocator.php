@@ -117,18 +117,40 @@ class FairShareAllocator
             return [];
         }
 
-        $totalDemand = array_sum($demands);
+        // Capped, not raw. A workload asking for a hundred workers behind a
+        // workers.max of five contests nothing when the cluster holds ten — but
+        // its raw demand exceeds the capacity, so the contested path opened,
+        // banked it entitlement it could never use, and grew its balance
+        // without bound at five a cycle forever.
+        $usableDemand = 0;
 
-        if ($totalDemand <= $clusterCapacity) {
+        foreach ($demands as $key => $demand) {
+            $usableDemand += max(0, min($demand, $configs[$key]['max'] ?? 0));
+        }
+
+        if ($usableDemand <= $clusterCapacity) {
             // Nothing is contested, so nobody is holding a contested slot.
             $this->incumbents = [];
 
-            return $demands;
+            // Capped on the way out too. The leader already clamps demand to
+            // workers.max before it gets here, but this is a public entry point
+            // on an open class and handing back more than a workload is allowed
+            // to run would be a strange thing for a fair-share allocator to do.
+            $capped = [];
+
+            foreach ($demands as $key => $demand) {
+                $capped[$key] = max(0, min($demand, $configs[$key]['max'] ?? $demand));
+            }
+
+            return $capped;
         }
 
         $this->pendingAwards = [];
 
-        $this->seedLedgerFromObservation($demands, $configs, $clusterCapacity, $currentWorkers);
+        $this->seedLedgerFromObservation(
+            $this->entitlementsFor($demands, $configs, $clusterCapacity),
+            $currentWorkers,
+        );
 
         $allocation = $this->allocateWithFairShare($demands, $configs, $clusterCapacity);
 
@@ -191,6 +213,59 @@ class FairShareAllocator
     }
 
     /**
+     * What each workload is entitled to on the path that is about to run.
+     *
+     * The two paths measure entitlement differently, and the ledger has to be
+     * opened in the same currency it will later be banked in. When the worker
+     * floors do not all fit, capacity is shared in proportion to those FLOORS
+     * and demand never enters it — so seeding from demand there hands a
+     * zero-floor workload a balance it has no claim to, and it takes the
+     * leftover away from a configured floor. Measured on a capacity of one
+     * against two queues pinned at min = max = 1 and one tenant at min = 0: the
+     * tenant took the only worker on sixteen of the first twenty cycles, and a
+     * critical queue that had asked for a floor was left at zero.
+     *
+     * @param  array<string, int>  $demands
+     * @param  array<string, array{min: int, max: int}>  $configs
+     * @return array<string, float>
+     */
+    private function entitlementsFor(array $demands, array $configs, int $clusterCapacity): array
+    {
+        $floors = [];
+
+        foreach ($demands as $key => $demand) {
+            $floors[$key] = $configs[$key]['min'];
+        }
+
+        if (array_sum($floors) > $clusterCapacity) {
+            return $this->floorEntitlements($floors, $clusterCapacity);
+        }
+
+        return $this->proportionalEntitlements($demands, $configs, $clusterCapacity);
+    }
+
+    /**
+     * Shares of a capacity too small to hold every floor, in proportion to
+     * those floors.
+     *
+     * @param  array<string, int>  $floors
+     * @return array<string, float>
+     */
+    private function floorEntitlements(array $floors, int $clusterCapacity): array
+    {
+        $total = array_sum($floors);
+
+        if ($total <= 0) {
+            return array_map(static fn (): float => 0.0, $floors);
+        }
+
+        return array_map(
+            static fn (int $floor): float => $floor * $clusterCapacity / $total,
+            $floors,
+        );
+    }
+
+    /**
      * Each workload's proportional share of a capacity that cannot satisfy
      * everyone, measured against what it could actually use.
      *
@@ -212,14 +287,33 @@ class FairShareAllocator
             return array_map(static fn (): float => 0.0, $ceilings);
         }
 
+        // Never above the workload's own ceiling. Dividing by the ceiling total
+        // hands out MORE than a ceiling whenever that total is below capacity,
+        // and the difference is banked every cycle as entitlement owed —
+        // a balance that grows for capacity the workload is forbidden to use.
         return array_map(
-            static fn (int $ceiling): float => $ceiling * $clusterCapacity / $total,
+            static fn (int $ceiling): float => min(
+                (float) $ceiling,
+                $ceiling * $clusterCapacity / $total,
+            ),
             $ceilings,
         );
     }
 
     /**
      * Fit a set of minimums into a capacity too small to hold them.
+     *
+     * Only the floors are shared here, and a workload that configured none has
+     * no share: `workers.min` is a claim on the cluster, and when the claims
+     * together exceed what exists, capacity goes to those who made one. Serving
+     * a floorless workload ahead of a floor that is itself being scaled down
+     * would break the promise for the queue that actually asked for it.
+     *
+     * The consequence is worth stating plainly, because it is sharp: on a
+     * cluster over-committed on floors, a queue with `workers.min` of zero gets
+     * nothing at all, for as long as that lasts, however much backlog it is
+     * holding. The rotation below shares the loss among the workloads that DO
+     * have a claim; it does not manufacture a claim for one that has none.
      *
      * Proportional, then largest-remainder for the rounding, so the result is
      * deterministic and sums exactly to the capacity rather than to whatever
@@ -471,21 +565,14 @@ class FairShareAllocator
      * changing every 5, 8, 11 and 20 cycles, no workload is left permanently
      * unserved in any of them; with a stable leader nothing changes at all.
      *
-     * @param  array<string, int>  $demands
-     * @param  array<string, array{min: int, max: int}>  $configs
+     * @param  array<string, float>  $entitlements
      * @param  array<string, int>  $currentWorkers
      */
-    private function seedLedgerFromObservation(
-        array $demands,
-        array $configs,
-        int $clusterCapacity,
-        array $currentWorkers,
-    ): void {
+    private function seedLedgerFromObservation(array $entitlements, array $currentWorkers): void
+    {
         if ($currentWorkers === []) {
             return;
         }
-
-        $entitlements = $this->proportionalEntitlements($demands, $configs, $clusterCapacity);
 
         foreach ($entitlements as $key => $entitlement) {
             // Only an unopened ledger. A balance already being kept is the
@@ -496,17 +583,10 @@ class FairShareAllocator
 
             $held = $currentWorkers[$key] ?? 0;
 
-            // Clamp both sides. A demand above workers.max reaches this only
-            // through a consumer policy — applyClusterScopedPolicies() floors
-            // at zero and does not re-clamp to the ceiling — and an observed
-            // count can be negative if a heartbeat is corrupt. Either lets a
-            // balance grow linearly and without limit, and a ledger that has
-            // drifted far enough stops serving anyone who joins later: measured,
-            // a new workload lost the contested slot on all 200,000 cycles.
-            $ceiling = max(0, min($demands[$key] ?? 0, $configs[$key]['max'] ?? 0));
-            $owed = min($entitlement, (float) $ceiling) - max(0, $held);
-
-            $this->credits[$key] = $owed * self::CREDIT_HYSTERESIS;
+            // The observed count is clamped because a corrupt heartbeat can
+            // report a negative one, and a balance opened from nonsense biases
+            // every award that follows it.
+            $this->credits[$key] = ($entitlement - max(0, $held)) * self::CREDIT_HYSTERESIS;
 
             if (max(0, $held) > (int) floor($entitlement)) {
                 $this->incumbents[$key] = true;

@@ -587,3 +587,58 @@ test('the leader opens the fairness ledger from what the cluster is running', fu
     expect($ledger)->toHaveKey('queue:redis:alpha')
         ->and($ledger['queue:redis:alpha'])->toBeLessThan(min(array_diff_key($ledger, ['queue:redis:alpha' => true])));
 });
+
+test('a leader that stalled past its lease publishes with its own token, not the new leader\'s', function (): void {
+    // The token was read at PUBLISH time, after the whole evaluation. An
+    // evaluation takes as long as it takes, and a manager that stalls past its
+    // lease — a long pause, a slow metrics read, a virtual machine frozen and
+    // resumed — comes back into a cluster somebody else now leads. Reading the
+    // token then handed it the NEW leader's token, which satisfies the fencing
+    // check in the store and let a stale leader overwrite the real one's
+    // recommendations under its own id. The fence is supposed to reject it.
+    config()->set('queue.default', 'redis');
+    config()->set('queue-autoscale.queues', ['exports' => ['workers' => ['min' => 1, 'max' => 20]]]);
+
+    $tracker = Mockery::mock(SpawnLatencyTrackerContract::class);
+    $tracker->shouldReceive('currentLatency')->andReturn(0.0);
+    app()->instance(SpawnLatencyTrackerContract::class, $tracker);
+
+    $pickupStore = Mockery::mock(PickupTimeStoreContract::class);
+    $pickupStore->shouldReceive('recentSamples')->andReturn([]);
+    app()->instance(PickupTimeStoreContract::class, $pickupStore);
+
+    Event::fake();
+
+    // A store whose lease moves to somebody else after the first read, which
+    // is what a stalled leader comes back to.
+    $store = new class extends FakeClusterStore
+    {
+        public int $tokenReads = 0;
+
+        public function leaderToken(): ?string
+        {
+            $this->tokenReads++;
+
+            return $this->tokenReads === 1 ? 'token-ours' : 'token-somebody-elses';
+        }
+    };
+
+    $store->withManager(cooldownManagerState('mgr-1'))->withLeader('mgr-1');
+    app()->instance(ClusterStoreContract::class, $store);
+    app()->forgetInstance(AutoscaleManager::class);
+
+    $manager = app(AutoscaleManager::class);
+
+    cooldownDiscovery(['redis:exports' => cooldownRawMetrics('redis', 'exports', pending: 50)]);
+
+    // Captured beside the leadership check, as the cycle does.
+    $ownToken = $store->leaderToken();
+
+    (new ReflectionMethod($manager, 'evaluateAndPublishClusterRecommendations'))
+        ->invoke($manager, $ownToken);
+
+    $published = $store->publishedRecommendations()['mgr-1'] ?? null;
+
+    expect($published)->not->toBeNull()
+        ->and($published->leaderToken)->toBe('token-ours');
+});

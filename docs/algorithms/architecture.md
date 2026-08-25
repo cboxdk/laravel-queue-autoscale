@@ -390,6 +390,12 @@ So:
   costs a cycle. The manager warns when it sees three leadership changes inside one anti-flapping
   window, and `queue:autoscale:doctor` warns when the lease has no headroom over the evaluation
   cycle, which is the usual cause.
+- When the configured floors together exceed capacity, only the floors are shared. A queue
+  with `workers.min` of zero has made no claim on the cluster and receives nothing for as long
+  as that lasts, however much backlog it holds — serving it ahead of a floor that is itself
+  being scaled down would break the promise to the queue that asked for one. The rotation
+  shares the loss among the workloads that have a claim; it does not invent one for a workload
+  that has none.
 - The **hand-over rate is per cluster, not per workload.** The margin a holder carries grows
   with the number of workloads contesting, so a fleet of two hundred queues hands slots over at
   roughly the same rate as a fleet of six rather than two hundred times as often — measured on a

@@ -52,9 +52,9 @@ Entitlement a workload was owed and did not receive is now banked and carried
 forward, so the leftover goes to whoever is furthest behind. Proportionality
 holds over time instead of per cycle, which is what the rounding was
 approximating: a queue entitled to nine percent of the workers now receives
-nine percent of them rather than none. Every workload's time at zero is
-bounded, and a workload already holding a leftover keeps it until a challenger
-has banked meaningfully more — without that margin the guarantee cost 2820
+nine percent of them rather than none. Every contending workload's time at zero
+is bounded, and a workload already holding a leftover keeps it until a
+challenger has banked meaningfully more — without that margin the guarantee cost 2820
 worker moves per 720 cycles, with it, 156.
 
 **Fixed: a cluster leader no longer accumulates per-queue state forever.**
@@ -120,6 +120,28 @@ before: the same inputs no longer produce the same output on consecutive
 `allocate()` calls, because the ledger between them has moved. That is the
 point — it is what stops the same workload losing every round — but anyone
 calling the allocator directly rather than through the manager should know it.
+
+**Fixed: a stalled leader could overwrite the real leader's recommendations.**
+The fencing token was read when the recommendations were published, at the end
+of the cycle, rather than beside the check that said this manager held the
+lease. An evaluation takes as long as it takes, and a manager that stalls past
+its lease — a long pause, a slow metrics read, a virtual machine frozen and
+resumed — comes back into a cluster somebody else now leads. Reading the token
+then handed it the NEW leader's token, which satisfies the fence and let the
+stale manager publish its own out-of-date assignments under its own id. The
+token is now captured where leadership is confirmed, so the fence rejects the
+stale publish instead, which is what a fence is for.
+
+**Fixed: one nonsense heartbeat could stop the leader scaling itself.**
+`is_numeric()` accepts INF and NAN, and JSON carries them in without complaint:
+`{"cpu_percent": 1e999}` decodes to INF. That value travelled into the cluster
+summary and reached `json_encode(..., JSON_THROW_ON_ERROR)`, which refuses it —
+so one host writing a nonsense heartbeat threw inside the leader's cycle after
+recommendations had been published but before the leader applied its own,
+leaving the leader unscaled every cycle until that host aged out of the
+registry. Non-finite values are rejected at the heartbeat boundary now, and the
+summary is published inside its own guard: it reports on the scaling, and a
+reporting failure must not become a scaling outage.
 
 **Fixed: a manager whose every cycle fails no longer looks healthy.**
 A cycle that throws is caught so one bad workload cannot take the daemon down,

@@ -36,6 +36,31 @@ readonly class ClusterManagerState
     /**
      * @return array<string, mixed>
      */
+    /**
+     * A float from a heartbeat, or zero if it is not a usable one.
+     *
+     * is_numeric() accepts INF and NAN, and JSON is happy to carry them in:
+     * `{"cpu_percent": 1e999}` decodes to INF without error. That value then
+     * travels through the cluster summary to json_encode(JSON_THROW_ON_ERROR),
+     * which refuses it — so one host writing a nonsense heartbeat threw inside
+     * the leader's cycle AFTER it had published recommendations but BEFORE it
+     * applied its own, leaving the leader unscaled every cycle until that host
+     * aged out.
+     */
+    private static function finiteFloat(mixed $value): float
+    {
+        if (! is_numeric($value)) {
+            return 0.0;
+        }
+
+        $float = (float) $value;
+
+        return is_finite($float) ? $float : 0.0;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
     public function toArray(): array
     {
         return [
@@ -100,14 +125,14 @@ readonly class ClusterManagerState
             maxWorkers: is_numeric($payload['max_workers'] ?? null) ? (int) $payload['max_workers'] : 0,
             availableWorkerCapacity: is_numeric($payload['available_worker_capacity'] ?? null) ? (int) $payload['available_worker_capacity'] : 0,
             capacityLimiter: is_string($payload['capacity_limiter'] ?? null) ? $payload['capacity_limiter'] : 'unknown',
-            cpuPercent: is_numeric($payload['cpu_percent'] ?? null) ? (float) $payload['cpu_percent'] : 0.0,
-            cpuCores: is_numeric($payload['cpu_cores'] ?? null) ? (float) $payload['cpu_cores'] : 0.0,
-            cpuUsableCores: is_numeric($payload['cpu_usable_cores'] ?? null) ? (float) $payload['cpu_usable_cores'] : 0.0,
-            cpuReservedCores: is_numeric($payload['cpu_reserved_cores'] ?? null) ? (float) $payload['cpu_reserved_cores'] : 0.0,
-            memoryPercent: is_numeric($payload['memory_percent'] ?? null) ? (float) $payload['memory_percent'] : 0.0,
-            memoryTotalMb: is_numeric($payload['memory_total_mb'] ?? null) ? (float) $payload['memory_total_mb'] : 0.0,
-            memoryUsedMb: is_numeric($payload['memory_used_mb'] ?? null) ? (float) $payload['memory_used_mb'] : 0.0,
-            memoryFreeMb: is_numeric($payload['memory_free_mb'] ?? null) ? (float) $payload['memory_free_mb'] : 0.0,
+            cpuPercent: self::finiteFloat($payload['cpu_percent'] ?? null),
+            cpuCores: self::finiteFloat($payload['cpu_cores'] ?? null),
+            cpuUsableCores: self::finiteFloat($payload['cpu_usable_cores'] ?? null),
+            cpuReservedCores: self::finiteFloat($payload['cpu_reserved_cores'] ?? null),
+            memoryPercent: self::finiteFloat($payload['memory_percent'] ?? null),
+            memoryTotalMb: self::finiteFloat($payload['memory_total_mb'] ?? null),
+            memoryUsedMb: self::finiteFloat($payload['memory_used_mb'] ?? null),
+            memoryFreeMb: self::finiteFloat($payload['memory_free_mb'] ?? null),
             queueCount: is_numeric($payload['queue_count'] ?? null) ? (int) $payload['queue_count'] : 0,
             groupCount: is_numeric($payload['group_count'] ?? null) ? (int) $payload['group_count'] : 0,
             packageVersion: is_string($payload['package_version'] ?? null) ? $payload['package_version'] : 'unknown',
