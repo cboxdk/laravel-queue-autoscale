@@ -39,9 +39,16 @@ class ArrivalRateEstimator
      * forecaster downstream then never runs at all. Defaults to the process
      * clock, so nothing changes outside a harness that supplies its own.
      *
-     * @var callable(): float
+     * Nullable, and read through a helper rather than called directly. This
+     * class had no constructor before the clock existed, so a consumer subclass
+     * that declares its own cannot be calling parent::__construct() — that was
+     * a fatal error in the version they wrote it against. Depending on the
+     * constructor having run would therefore break every such subclass on
+     * upgrade, with "value of type null is not callable" from inside estimate().
+     *
+     * @var (callable(): float)|null
      */
-    private $clock;
+    private $clock = null;
 
     private ?ForecasterContract $forecaster = null;
 
@@ -54,7 +61,15 @@ class ArrivalRateEstimator
      */
     public function __construct(?callable $clock = null)
     {
-        $this->clock = $clock ?? static fn (): float => microtime(true);
+        $this->clock = $clock;
+    }
+
+    /**
+     * Now, from the injected clock or the process clock.
+     */
+    private function now(): float
+    {
+        return ($this->clock ?? static fn (): float => microtime(true))();
     }
 
     /**
@@ -89,7 +104,7 @@ class ArrivalRateEstimator
         int $currentBacklog,
         float $processingRate,
     ): array {
-        $now = ($this->clock)();
+        $now = $this->now();
 
         // Get previous snapshots
         $snapshots = $this->history[$queueKey] ?? [];

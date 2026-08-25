@@ -93,6 +93,25 @@ permanently unserved in any of them; with a stable leader nothing changes.
 
 A balance already being kept is never overwritten by a snapshot.
 
+`FairShareAllocator` is therefore stateful across calls, which it was not
+before: the same inputs no longer produce the same output on consecutive
+`allocate()` calls, because the ledger between them has moved. That is the
+point — it is what stops the same workload losing every round — but anyone
+calling the allocator directly rather than through the manager should know it.
+
+**Fixed: a manager whose every cycle fails no longer looks healthy.**
+A cycle that throws is caught so one bad workload cannot take the daemon down,
+and the failure went to the configured log channel alone. Console reporting is
+gated on `-v`, which is right for narration and wrong for a failure — so a
+manager that could not reach its cache, or whose metrics package could not read
+its database, printed its start-up banner and then nothing at all while doing
+nothing at all. That is also the likeliest moment for it to happen, because it
+is what a fresh misconfiguration looks like. The failure is now written to the
+console at any verbosity, naming the exception, and throttled to once a minute
+so a daemon failing on a five-second interval does not bury everything else.
+The throttle is kept in the process rather than through the cache-backed alert
+limiter, because an unreachable cache is one of the things it has to report.
+
 **Added: the cluster says when its leadership is unstable.**
 Worker placement, the anti-flapping window and the fair-share ledger are all
 leader working memory, discarded when the lease moves because each describes a
@@ -146,8 +165,12 @@ implicit floor, name the queues, or restore it wholesale with
 
 ### Fixed
 
-- **The manager id changes on upgrade.** It now carries an application scope,
-  which is what stops two apps on one host from reaping each other's workers.
+- **The manager id changes on upgrade.** It has carried an application scope
+  since v4.1.0 — that is what stops two apps on one host reaping each other's
+  workers — but the scope was derived from a hash of `base_path()`, which
+  differs between two checkouts of the same application and between a symlinked
+  release directory and its target. It is now derived from `app.name` and
+  `app.env`, length-prefixed so two different pairs cannot collide.
   The consequence for an existing deployment: workers orphaned by the
   pre-upgrade manager are no longer recognised and will exit on their own
   `--max-time` rather than being reaped once, and during a rolling upgrade a

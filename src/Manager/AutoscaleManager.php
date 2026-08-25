@@ -108,6 +108,13 @@ class AutoscaleManager
      */
     private const UNSTABLE_LEADERSHIP_CHANGES = 3;
 
+    /**
+     * How often a repeatedly failing cycle is announced on the console. The
+     * first failure is always shown; a daemon that fails every few seconds must
+     * not fill the terminal with the same line.
+     */
+    private const CYCLE_FAILURE_REPORT_INTERVAL_SECONDS = 60.0;
+
     private bool $wasLeader = false;
 
     /**
@@ -123,6 +130,12 @@ class AutoscaleManager
      * @var list<float>
      */
     private array $leaderChanges = [];
+
+    /**
+     * When a failing cycle was last announced on the console, as a Unix
+     * timestamp with fractional seconds.
+     */
+    private ?float $cycleFailureReportedAt = null;
 
     public function __construct(
         private readonly ScalingEngine $engine,
@@ -364,6 +377,8 @@ class AutoscaleManager
                         'trace' => $e->getTraceAsString(),
                     ]
                 );
+
+                $this->reportCycleFailureToConsole($e);
             }
 
             $executionTime = microtime(true) - $startTime;
@@ -1184,6 +1199,38 @@ class AutoscaleManager
      * This is the disease; the guards degrading are the symptom. Saying so is
      * cheaper and more useful than making each guard survive independently.
      */
+    /**
+     * Say on the console that a cycle failed, not only in the log file.
+     *
+     * A cycle that throws is caught so one bad workload cannot take the daemon
+     * down, and the failure went to the configured log channel alone. That
+     * makes the worst case invisible: a manager whose EVERY cycle fails —
+     * an unreachable cache, a database the metrics package cannot read — prints
+     * its start-up banner and then nothing, looks entirely healthy, and does
+     * nothing at all. It is also the likeliest moment for it to happen, because
+     * that is what a fresh misconfiguration looks like.
+     *
+     * Throttled in-process rather than through the alert limiter, which is
+     * backed by the cache: a cache failure is one of the things this has to be
+     * able to report, and a reporter that depends on the failing component
+     * reports nothing.
+     */
+    private function reportCycleFailureToConsole(\Throwable $e): void
+    {
+        $now = microtime(true);
+
+        if ($this->cycleFailureReportedAt !== null
+            && ($now - $this->cycleFailureReportedAt) < self::CYCLE_FAILURE_REPORT_INTERVAL_SECONDS) {
+            return;
+        }
+
+        $this->cycleFailureReportedAt = $now;
+
+        // Not verbose(): that is gated on -v, and this is exactly the message
+        // an operator needs when they did not think to ask for detail.
+        $this->reporter->error('⚠️  Evaluation cycle failed: '.$e->getMessage().' ('.$e::class.')');
+    }
+
     private function noteLeadershipChange(): void
     {
         $window = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
