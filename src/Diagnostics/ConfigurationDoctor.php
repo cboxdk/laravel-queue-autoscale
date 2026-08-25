@@ -40,6 +40,7 @@ class ConfigurationDoctor
                 $this->globsClaimingMixedQueues($discoveredQueues),
                 $this->illegalQueueNamesForTheirDriver($discoveredQueues),
                 $this->capsWithoutClusterMode(),
+                $this->leaderLeaseTooShortToSurviveASlowCycle(),
                 $this->discoveryWithoutACeiling($discoveredQueues),
                 $this->fifoQueuesAllowingParallelism($discoveredQueues),
                 $this->configurationLeftOverFromV3(),
@@ -51,6 +52,46 @@ class ConfigurationDoctor
         }
 
         return $findings;
+    }
+
+    /**
+     * A leader lease with no room for a slow evaluation cycle.
+     *
+     * The leader renews its lease as part of the cycle, so the lease has to
+     * outlast the cycle by a comfortable margin or an ordinary hiccup — a slow
+     * metrics read, a Redis latency spike, a host under load — drops it and
+     * hands leadership to somebody else. That is not a harmless transfer:
+     * taking the lease discards worker placement, the anti-flapping window and
+     * the fair-share rotation's position, because each describes a cluster the
+     * new leader has not observed. Leadership that keeps moving means none of
+     * them ever completes, and the workload that has been starved longest
+     * keeps losing its claim to be served next.
+     *
+     * @return list<Finding>
+     */
+    private function leaderLeaseTooShortToSurviveASlowCycle(): array
+    {
+        if (! AutoscaleConfiguration::clusterEnabled()) {
+            return [];
+        }
+
+        $lease = AutoscaleConfiguration::clusterLeaderLeaseSeconds();
+        $interval = AutoscaleConfiguration::evaluationIntervalSeconds();
+
+        // Three intervals: one to run the cycle, one to be slow in, one spare.
+        // Below that a single bad cycle is enough to lose the lease.
+        if ($lease >= $interval * 3) {
+            return [];
+        }
+
+        return [Finding::warning(
+            'The leader lease leaves no room for a slow evaluation cycle',
+            "cluster.leader_lease_seconds is {$lease}s against an evaluation interval of {$interval}s.",
+            'Raise the lease to at least three times the interval. The leader renews as part of its '
+            .'cycle, so with less headroom one slow metrics read or Redis latency spike hands '
+            .'leadership to another host — and every handover restarts worker placement, '
+            .'anti-flapping damping and fair-share rotation from nothing.',
+        )];
     }
 
     /**

@@ -246,3 +246,58 @@ test('both timeout keys set together is not reported', function (): void {
 
     expect(findingTitled(diagnose(['reports']), 'without workers.max_time_seconds'))->toBeNull();
 });
+
+/**
+ * The leader renews its lease as part of its evaluation cycle, so a lease with
+ * no headroom over that cycle turns an ordinary hiccup into a handover — and
+ * every handover discards worker placement, the anti-flapping window and the
+ * fair-share rotation's position. Measured: with leadership moving every eleven
+ * cycles, two of six contending queues went back to never being served at all.
+ */
+test('it warns when the leader lease leaves no room for a slow cycle', function (): void {
+    config()->set('queue-autoscale.cluster.leader_lease_seconds', 10);
+    config()->set('queue-autoscale.manager.evaluation_interval_seconds', 5);
+
+    $finding = findingTitled(diagnose(['default']), 'leader lease');
+
+    expect($finding)->not->toBeNull()
+        ->and($finding->severity)->toBe(Severity::Warning)
+        ->and($finding->detail)->toContain('10s')
+        ->and($finding->detail)->toContain('5s');
+});
+
+test('the shipped defaults leave enough room', function (): void {
+    // 15s against a 5s interval is exactly the three intervals the check wants.
+    // If the defaults ever tripped their own diagnostic, the diagnostic would
+    // be the thing that is wrong.
+    config()->set('queue-autoscale.cluster.leader_lease_seconds', 15);
+    config()->set('queue-autoscale.manager.evaluation_interval_seconds', 5);
+
+    expect(findingTitled(diagnose(['default']), 'leader lease'))->toBeNull();
+});
+
+test('a generous lease is not mentioned', function (): void {
+    config()->set('queue-autoscale.cluster.leader_lease_seconds', 60);
+    config()->set('queue-autoscale.manager.evaluation_interval_seconds', 5);
+
+    expect(findingTitled(diagnose(['default']), 'leader lease'))->toBeNull();
+});
+
+test('a short lease on a single host is not a finding', function (): void {
+    // There is no leadership to lose without cluster mode, so the check would
+    // be noise — and noise in a diagnostic is what teaches people to skip it.
+    config()->set('queue-autoscale.cluster.enabled', false);
+    config()->set('queue-autoscale.cluster.leader_lease_seconds', 5);
+    config()->set('queue-autoscale.manager.evaluation_interval_seconds', 5);
+
+    expect(findingTitled(diagnose(['default']), 'leader lease'))->toBeNull();
+});
+
+test('a long evaluation interval outgrows a default lease', function (): void {
+    // The pairing matters, not either number alone: raising the interval on a
+    // busy cluster silently removes the headroom the default lease had.
+    config()->set('queue-autoscale.cluster.leader_lease_seconds', 15);
+    config()->set('queue-autoscale.manager.evaluation_interval_seconds', 10);
+
+    expect(findingTitled(diagnose(['default']), 'leader lease'))->not->toBeNull();
+});

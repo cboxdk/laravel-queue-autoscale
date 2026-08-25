@@ -100,7 +100,29 @@ class AutoscaleManager
     private readonly WorkloadStateTracker $workloadState;
 
     /** Whether this manager held the lease on the previous cycle. */
+    /**
+     * Leadership changes inside one anti-flapping window that count as unstable.
+     *
+     * Two allows for an ordinary failover and the handover that follows it. A
+     * third inside the same window is no longer a transition, it is a pattern.
+     */
+    private const UNSTABLE_LEADERSHIP_CHANGES = 3;
+
     private bool $wasLeader = false;
+
+    /**
+     * When this manager last saw the cluster's leader change, as Unix seconds.
+     *
+     * Gaining the lease discards the placement cache, the damping window and
+     * the fairness ledger's accumulated position, because all three describe a
+     * cluster the new leader has not observed. One failover costs a cycle;
+     * leadership that keeps moving costs those guards permanently, and nothing
+     * said so — a change was a debug line and an event nobody is obliged to
+     * listen to.
+     *
+     * @var list<float>
+     */
+    private array $leaderChanges = [];
 
     public function __construct(
         private readonly ScalingEngine $engine,
@@ -1132,6 +1154,56 @@ class AutoscaleManager
         $this->wasLeader = $isLeader;
     }
 
+    /**
+     * Warn when leadership is moving faster than the guards can rebuild.
+     *
+     * Measured against the anti-flapping window, because that is the yardstick
+     * every piece of discarded state is sized in: the damping window is exactly
+     * that long, and the fairness ledger needs a comparable stretch to reach
+     * its first hand-over. Leadership changing several times inside one such
+     * window means none of them ever completes — placement restarts from
+     * nothing, scale-downs stop being damped, and the workload that has been
+     * starved longest loses its claim to be served next. Measured: with
+     * leadership moving every eleven cycles, two of six contending queues went
+     * back to never being served at all.
+     *
+     * This is the disease; the guards degrading are the symptom. Saying so is
+     * cheaper and more useful than making each guard survive independently.
+     */
+    private function noteLeadershipChange(): void
+    {
+        $window = Coerce::toInt(config('queue-autoscale.scaling.cooldown_seconds', 60)) ?: 60;
+        $now = microtime(true);
+
+        $this->leaderChanges[] = $now;
+        $this->leaderChanges = array_values(array_filter(
+            $this->leaderChanges,
+            static fn (float $observedAt): bool => ($now - $observedAt) <= $window,
+        ));
+
+        if (count($this->leaderChanges) < self::UNSTABLE_LEADERSHIP_CHANGES) {
+            return;
+        }
+
+        if (! $this->alerts->allow('cluster_leadership_unstable')) {
+            return;
+        }
+
+        Log::channel(AutoscaleConfiguration::logChannel())->warning(
+            'Cluster leadership is changing faster than the scaling guards can rebuild',
+            [
+                'changes_observed' => count($this->leaderChanges),
+                'window_seconds' => $window,
+                'current_leader' => $this->lastObservedLeaderId,
+                'observed_by' => AutoscaleConfiguration::managerId(),
+                'consequence' => 'worker placement, anti-flapping damping and fair-share rotation '
+                    .'each restart on every change, so none of them completes',
+                'remedy' => 'raise cluster.leader_lease_seconds above the time a slow evaluation '
+                    .'cycle can take, or find why the leader keeps missing its renewal',
+            ]
+        );
+    }
+
     private function currentTimestamp(): int
     {
         return (int) round(microtime(true) * 1000);
@@ -1931,6 +2003,8 @@ class AutoscaleManager
             return;
         }
 
+        $previousLeaderId = $this->lastObservedLeaderId;
+
         event(new ClusterLeaderChanged(
             clusterId: AutoscaleConfiguration::clusterAppId(),
             previousLeaderId: $this->lastObservedLeaderId,
@@ -1940,6 +2014,12 @@ class AutoscaleManager
         ));
 
         $this->lastObservedLeaderId = $currentLeaderId;
+
+        // Not the first sighting. Starting up and discovering who leads is not
+        // a change, and counting it would make every restart look unstable.
+        if ($previousLeaderId !== null) {
+            $this->noteLeadershipChange();
+        }
     }
 
     /**

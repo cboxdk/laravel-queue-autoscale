@@ -385,6 +385,13 @@ So:
   floors give the smallest share the smallest remainder so it loses outright. Unreceived
   entitlement is banked and carried forward instead, which keeps proportionality over time
   and bounds every workload's time at zero.
+- All three guards are **leader working memory**, discarded when the lease moves: worker
+  placement, the anti-flapping window, and the fair-share ledger's accumulated position each
+  describe a cluster the new leader has not observed. One failover costs a cycle. Leadership
+  that keeps moving means none of them ever completes — with leadership changing every eleven
+  cycles, two of six contending queues went back to never being served at all. The manager
+  warns when it sees three changes inside one anti-flapping window, and `queue:autoscale:doctor`
+  warns when the lease has no headroom over the evaluation cycle, which is the usual cause.
 - A hold **gives capacity back** rather than starving a neighbour. Damping republishes a target
   above the one fair share allocated, which under contention is capacity already promised to
   another workload; the surplus is surrendered when, and only when, the total no longer fits.

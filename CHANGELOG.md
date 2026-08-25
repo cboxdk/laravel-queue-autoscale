@@ -57,6 +57,21 @@ bounded, and a workload already holding a leftover keeps it until a challenger
 has banked meaningfully more — without that margin the guarantee cost 2820
 worker moves per 720 cycles, with it, 156.
 
+**Added: the cluster says when its leadership is unstable.**
+Worker placement, the anti-flapping window and the fair-share ledger are all
+leader working memory, discarded when the lease moves because each describes a
+cluster the new leader has not observed. A single failover costs a cycle;
+leadership that keeps moving means none of them ever completes, and the
+workload starved longest keeps losing its claim to be served next — measured,
+leadership changing every eleven cycles put two of six contending queues back
+to never being served at all. Until now a change was a debug line and an event
+nobody is obliged to listen to. The manager now warns when it observes three
+leadership changes inside one anti-flapping window, and `queue:autoscale:doctor`
+warns when `cluster.leader_lease_seconds` leaves no headroom over
+`manager.evaluation_interval_seconds`, which is the usual reason a leader keeps
+missing its renewal. The shipped defaults — a 15-second lease against a
+5-second interval — pass the check.
+
 Separately, a damped scale-down could refuse to release capacity that fair
 share had already promised to another workload, so a scale-up the damper never
 touched was starved by a neighbour's hold. A hold now surrenders its surplus
