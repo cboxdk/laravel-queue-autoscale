@@ -5,6 +5,26 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v4.2.0 — the scaling guards stop fighting the fleet - 2026-08-25
+
+Three guards sit between the engine's demand figure and the workers that get spawned: the anti-flapping cooldown, the failure fuse, and cluster fair share. Each was correct alone. Composed, each could produce the outcome it exists to prevent.
+
+- **The cooldown manufactured the SLA breach it exists to prevent.** On demand whose period is a small multiple of its window, every change is a reversal, so every rise was deferred until the backlog breached — and the breach then released a target the delay had inflated. Damping is one-sided now.
+- **The fuse was damped.** A withdrawal from a queue whose jobs are failing was held as an ordinary reversal, leaving a full-size fleet against a dead dependency for the rest of the window.
+- **Fair share starved the same queues permanently.** Across randomised configurations, better than a quarter had a workload never served at all.
+
+Plus a stalled leader that could overwrite the real one, a single nonsense heartbeat that could stop the leader scaling itself, a manager that looked healthy while every cycle failed, and per-queue state on the leader that was never swept.
+
+### What you will feel on upgrade
+
+**Damping is one-sided.** A scale-up is never held, so the fleet rises sooner where a rise reversed a recent fall. The scale-down window is unchanged, but three situations now pass it: a fuse-forced withdrawal, a hold surrendering surplus when the cluster is at capacity, and a decision a scaling policy flipped.
+
+**A worker floor applies only to a queue you named.** Unnamed queues scale to zero when idle — and now wake on the first evaluation cycle rather than halfway through their SLA, which is what makes that safe. To restore the old behaviour: `'queues' => ['*' => ['workers' => ['min' => 1]]]`.
+
+Backward-compatible with v4.1.0: no public signature removed or narrowed, contracts and the testing fakes byte-identical, added parameters trailing and optional, no config key removed or defaulted differently.
+
+**[The full account, with the measurements behind every change, is in CHANGELOG.md](https://github.com/cboxdk/laravel-queue-autoscale/blob/main/CHANGELOG.md).**
+
 ## v4.2.0 - 2026-08-25
 
 **Behaviour change: the anti-flapping cooldown is one-sided.**
@@ -277,7 +297,7 @@ implicit floor, name the queues, or restore it wholesale with
   the cap cannot put invalid UTF-8 into the log channel. The extension is
   present in every mainstream PHP distribution and Laravel itself requires it;
   the package simply had not declared what it uses.
-
+  
 - **A queue matching no entry in `queues` gets `workers.min = 0`**, whatever
   `sla_defaults` says. It still receives every other default — SLA target,
   `workers.max`, forecast, spawn compensation, fuse — and scales from zero on
@@ -287,6 +307,7 @@ implicit floor, name the queues, or restore it wholesale with
   One consequence: the engine clamps to measured CPU/memory before any floor
   applies, so on a host already at capacity a discovered queue with a backlog
   now gets zero workers where it previously got one.
+  
 
 ### Fixed
 
@@ -301,20 +322,23 @@ implicit floor, name the queues, or restore it wholesale with
   `--max-time` rather than being reaped once, and during a rolling upgrade a
   host briefly appears twice in the cluster registry until the stale entry is
   pruned. Both are transient and neither loses work.
-
+  
 - **A follower clamps the leader's recommendation to its own `workers.max`.**
   Redundant while the leader is correct, and the difference between a blast
   radius of `workers.max` and whatever integer arrived over the wire when it is
   not — a bug, a version mismatch mid-rolling-deploy, or anything with write
   access to the coordination key. Covers the pinned path too, where a queue's
   max is its pinned count.
+  
 - **The anti-flapping cooldown no longer lowers its own memory.** A held target
   was written back clamped, so one transient dip in reported workers ratcheted
   the hold down for the rest of the window and never recovered. Only what is
   published is clamped now.
+  
 - **Worker output truncates on a character boundary.** The 64 KB cap on an
   unterminated line cut bytes, so a multibyte character straddling it put
   invalid UTF-8 into the log channel.
+  
 
 ## v4.1.0 - 2026-08-24
 
@@ -338,13 +362,15 @@ accept the overlap knowingly. Single-host installations are unaffected.
   mode works against a `\RedisCluster` connection. The single-node `\Redis`
   path is unchanged. Covered by a cluster CI job that reruns the coordination
   specs against a real three-master cluster.
+  
 - Cluster-scoped scaling policies. A policy implementing the new opt-in `ClusterScopedPolicy` marker interface is additionally consulted by the cluster leader against a `ScalingDecision` carrying the workload's cluster-wide counts (`scope = ScalingScope::Cluster`), before the target is distributed across hosts. This is where a global budget belongs: a cap applied only per host multiplies the intended ceiling by the host count. `ScalingDecision` gained a `scope` field (default `Host`, so every existing decision reads exactly as before) and a `withTargetWorkers()` helper that preserves all other fields. Policies that do not opt in are never consulted by the leader, so existing behavior is unchanged.
-
+  
 - `CapacityCalculationResult::cpuBreakdown()` and `memoryBreakdown()`, returning the
   nested `cpu_details` / `memory_details` numbers as typed readonly objects
   (`CpuBreakdown`, `MemoryBreakdown`). `$details` is unchanged and still documented —
   its keys are public API — so this is additive; the package now uses the accessors
   internally rather than indexing into nested `mixed`.
+  
 
 ### Changed
 
@@ -361,7 +387,7 @@ accept the overlap knowingly. Single-host installations are unaffected.
   whenever a Redis connection prefix was configured (Laravel's default), and
   v3.3.2 makes worker heartbeats Redis Cluster-safe, closing the last gap in
   end-to-end cluster support alongside this release's own coordination fixes.
-
+  
 - **Coordination key format.** Cluster coordination keys move from
   `queue-autoscale:cluster:<appid>:*` to `queue-autoscale:cluster:{<appid>}:*`
   so every key shares one slot. During a rolling deploy the old and new
@@ -369,17 +395,19 @@ accept the overlap knowingly. Single-host installations are unaffected.
   each scaling its half of the fleet up to `workers.max`. It resolves itself
   once every manager is on the new version, and each recommendation is
   `setex`'d so nothing is stranded — but expect the window before you deploy.
+  
 - **Spawn-latency key format.** Spawn-latency keys move from `autoscale:spawn:*`
   to `{autoscale-spawn}:*` so the atomic EMA update stays in one slot. Existing
   latency history becomes unreachable on upgrade, so each tracker returns
   `fallbackSeconds` until it has collected `minSamples` again — short-lived and
   self-healing, not lost data.
-
+  
 - **The leader's per-workload bag is a typed object.** `$workloadMeta` carried nine
   string keys through all three phases of a cluster cycle; it is now
   `Cluster\EvaluatedWorkload`, which also owns the `isBreaching()`, `isScalable()`,
   `breachKey()` and `type()` derivations that were computed inline at each use.
   `AutoscaleManager` no longer contains a single `array<string, mixed>`.
+  
 - **`AutoscaleManager` decomposed into collaborators.** It was 3090 lines across
   67 methods with 20 mutable state fields, and six of the seven fixes in this
   release added to it. Nine classes now own what used to be inlined there:
@@ -392,6 +420,7 @@ accept the overlap knowingly. Single-host installations are unaffected.
   1810 lines, 41 methods and 12 state fields. Behavior, log lines,
   configuration and the public surface are unchanged; every collaborator is a
   constructor default, so nothing a consumer wires up has to change.
+  
 - **Cluster placement and anti-flapping damping moved out of `AutoscaleManager`**
   into `Cluster\WorkerDistributor` and `Cluster\ClusterCooldown`. Both were
   self-contained leader working memory living as four mutable arrays on a 3090-line
@@ -401,6 +430,7 @@ accept the overlap knowingly. Single-host installations are unaffected.
   its inputs and the caller decides what to announce. Behavior, log lines and
   configuration are unchanged; the classes are constructor defaults, so nothing a
   consumer wires up has to change.
+  
 
 ### Fixed
 
@@ -410,20 +440,23 @@ accept the overlap knowingly. Single-host installations are unaffected.
   trace on the way out. The operator got "Removed dead worker, pid N" and
   nothing explaining it. Symfony keeps the output buffered after exit, and the
   cycle already drains before it reaps, so the final output is now read.
+  
 - **The partial-line buffer is capped.** Holding an unterminated line with no
   limit reproduced, inside the manager, the same unbounded retention the stderr
   drain was written to remove — a worker emitting a large blob with no trailing
   newline grew it for the worker's whole lifetime. Flushed truncated past 64 KB.
+  
 - **Group scaling reports what it achieved.** The correction applied to the
   per-queue paths — report the workers that actually started or were actually
   terminated, not the number requested — was never applied to the group paths,
   so a group whose every spawn failed still logged and emitted "scaled 0 → 5".
+  
 - **The cluster leader's own evaluation is isolated per workload.** Failure
   isolation reached the apply path and the single-host loop but not the leader's
   demand collection, which has the widest blast radius of the three: one bad
   config entry or throwing policy left *every* host in the cluster without a
   recommendation for the cycle, each holding against a stale one.
-
+  
 - **The orphan reaper could terminate another application's workers.** The
   manager id is the reaper's ownership token, but it was derived from host
   identity alone — hostname, machine-id, container env, resolved IP. Two
@@ -435,6 +468,7 @@ accept the overlap knowingly. Single-host installations are unaffected.
   claimed is finally true. **Manager ids change on upgrade**: workers orphaned
   by a pre-upgrade manager are no longer recognised and will exit on their own
   `--max-time` instead of being reaped once.
+  
 - **Cluster hysteresis could disable rebalancing entirely.** The threshold was
   one worker's utilization on the *smallest* host, but the gate weighs a
   single-worker move, so the threshold has to live on a single worker's scale.
@@ -444,6 +478,7 @@ accept the overlap knowingly. Single-host installations are unaffected.
   improvement of any size could ever clear it. The cached placement was then
   replayed forever and an idle host stayed idle. Measured on the largest host
   now; behaviour on a homogeneous fleet is unchanged.
+  
 - **The cluster cooldown could answer a scale-down with a scale-up.** The held
   value was the last target *published*, which the fleet may never have reached
   — a host ceiling, `max_total_workers`, or a failed spawn all leave the real
@@ -451,16 +486,17 @@ accept the overlap knowingly. Single-host installations are unaffected.
   number and hosts converged up to it. The hold is now clamped to what is
   actually running. Single-host mode never had this hazard because it holds by
   declining to act; the cluster path publishes a number hosts move toward.
-
+  
 - A manager that dies abruptly (for example SIGKILLed by the kernel OOM killer) no longer causes its replacement to double-provision. On startup the manager now scans procfs for workers stamped with this package's environment markers and its own manager id, SIGTERMs them, and logs a summary before the first spawn. Previously those orphans were invisible to the replacement (the worker pool is process-local), so it spawned a full new set on top of them and each doubled generation made the next OOM kill more likely. The reap is scoped to the same manager id (so deliberately co-hosted managers never touch each other's workers), skips on hosts without procfs, and can be disabled with `queue-autoscale.manager.reap_orphans_on_start`.
-
+  
 - Worker stderr is now drained every cycle and forwarded to the manager's log channel tagged with the worker PID, so worker log lines (job exceptions, memory warnings, and for containerized apps typically the whole application log channel) reach the container's log stream instead of accumulating unread inside the manager. Both stream buffers are also cleared after each read, and draining no longer depends on a renderer being attached, so a long-lived worker's output history no longer lives on in the manager's memory.
-
+  
 - One invalid discovered queue can no longer abort the entire evaluation cycle. Unsafe workload names (for example an empty queue name recorded by the metrics layer) are now filtered from the cluster leader's evaluation and from applied cluster recommendations, matching the single-host loop, and each workload's reconciliation is isolated so an exception for one queue is logged and the remaining queues still scale. Previously a single phantom queue wedged scale-up and worker respawn for every queue on the manager until the bad metric expired.
-
+  
 - With two or more managers, the leader no longer reshuffles workers between hosts on nearly every cycle. The distribution cache's balance check discarded the cached placement whenever moving any single worker would improve the utilization spread by more than 0.000001, but the spread's inputs (each host's live-CPU/memory-derived maxWorkers) jitter every heartbeat, so an idle cluster still tore down and re-booted workers continuously. The check now requires an improvement worth at least one worker's utilization on the smallest host before rebalancing, and workloads are distributed in a stable sorted order so the check is comparable across cycles. Placement may shift once on upgrade as the new ordering takes effect, then holds steady; a genuinely skewed placement (one worker's worth or more) still rebalances as before.
-
+  
 - The anti-flapping cooldown now applies in cluster mode. The single-host paths have always damped scaling direction reversals through `scaling.cooldown_seconds`, but the cluster leader recomputed and republished every workload's target each cycle with no equivalent guard, so a demand signal that oscillates cycle-to-cycle was executed as real spawns on one evaluation and kills on the next, cluster-wide, on the evaluation cadence. The leader now damps direction reversals before distribution using the same semantics as the single-host guard (only reversals are held, the last direction goes stale after the window, and a scale-up during an SLA breach always passes), holding the previously published target for the workload. The damping state is leader working memory and resets on leadership change, so a failover costs one undamped cycle.
+  
 
 ### Removed
 
@@ -503,8 +539,8 @@ on spawn:
 ```
 Refusing to spawn a worker for 'redis:email,sms': a comma makes queue:work
 treat it as a list of queues
-```
 
+```
 For a group the comma is now the separator and each member is validated on its
 own. An injected option inside a member is still caught.
 
@@ -717,10 +753,12 @@ The fuse watches the recent job failure rate per queue and interrupts that loop:
 **Docs:** [Failure Fuse](docs/basic-usage/failure-fuse.md) covers the state machine, tuning, detection latency and troubleshooting; [Alert on a Fuse Trip](docs/cookbook/alert-on-fuse-trip.md) is a paste-and-go listener recipe.
 
 ### Added
+
 - The manager logs `Autoscaling held back by failure fuse` at warning level for as long as a queue is held, rate-limited by `alerting.cooldown_seconds`. Scaling actions are only logged when they happen, and a held queue scales once — down to `workers.min` on the trip — then holds, so the log previously fell silent for the rest of the outage.
 - `queue:autoscale:debug` now reports failure-fuse state, the observed failure rate against the configured thresholds, and warns when the fuse is inert because outcome tracking is disabled or the `array` cache driver is in use. This answers "why is this queue stuck at `workers.min`?" without reading manager logs.
 
 ### Changed
+
 - **Package classes are no longer `final`.** Sealing blocks consumers from extending, decorating or subclassing what the package ships. The arch test now asserts immutability instead, and a new rule keeps the classes open.
 - **PHPStan runs at level max with no baseline.** Three of the baseline's four entries were suppressing "unreachable code" findings in the SIGTERM-wait-SIGKILL escalation, which is live code that analysis could not model; `WorkerProcess::isRunning()`/`isDead()` are now marked `@phpstan-impure`. The remaining errors were genuine typing holes, fixed at the cause.
 - Dropped `spatie/laravel-package-tools`, a runtime dependency referenced nowhere in `src/`.
@@ -729,6 +767,7 @@ The fuse watches the recent job failure rate per queue and interrupts that loop:
 - Declared `ext-pcntl` and `ext-posix`, which the manager calls unguarded and which are commonly absent from the official PHP Docker images.
 
 ### Fixed
+
 - **The manager no longer blocks for a full second every evaluation cycle.** CPU usage was sampled by sleeping between two counter reads (measured 1004.91 ms); it is now derived by diffing against the previous tick's snapshot. On the default 5-second interval a fifth of the manager's wall clock was spent asleep and every decision was computed from metrics a second stale. The test suite drops from ~70s to ~10s as a side effect.
 - **Shutdown no longer orphans workers.** Workers were terminated serially, each blocking up to `shutdown_timeout_seconds`, so a supervisor's stop deadline killed the manager before it reached the end of the pool. Termination now runs under one shared deadline.
 - **`SIGQUIT` and `SIGHUP` reach graceful shutdown.** They were unhandled, so PHP terminated the manager outright and its workers were never signalled.
@@ -747,9 +786,11 @@ The fuse watches the recent job failure rate per queue and interrupts that loop:
 ## v3.11.1 - 2026-07-15
 
 ### Fixed
+
 - Corrected a dead link in the requirements page that pointed at `deployment-guides/docker.md`; it now links to the existing `deployment/docker.md` guide.
 
 ### Changed
+
 - Documentation normalized for the docs site.
 - Bumped the `cboxdk/laravel-telemetry` dev requirement.
 
@@ -921,6 +962,7 @@ The autoscale manager exits gracefully for a supervised restart when Laravel's n
           ],
       ],
   ],
+  
   
   
   
@@ -1239,6 +1281,7 @@ composer require php-tui/php-tui --dev
 
 
 
+
 ```
 ### Usage
 
@@ -1251,6 +1294,7 @@ php artisan queue:autoscale:debug
 
 # Dispatch test jobs
 php artisan queue:autoscale:test --jobs=10 --queue=default
+
 
 
 
@@ -1290,6 +1334,7 @@ First stable release of Queue Autoscale for Laravel with intelligent, predictive
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
+
 
 
 
