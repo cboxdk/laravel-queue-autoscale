@@ -211,6 +211,32 @@ at the demand's own period. The alternative was publishing a total the hosts
 could not place, which did not prevent the move — it only stopped the manager
 predicting it.
 
+**Fixed: a queue at zero workers now wakes on the first cycle, not halfway
+through its SLA.**
+Both of the engine's calculations are rate calculations, and both answer zero
+for a small backlog on an idle queue: Little's Law sees no arrival rate, and the
+backlog drain deliberately waits until the oldest job has spent
+`scaling.breach_threshold` of its SLA before acting. That patience is right when
+workers are already running and wrong when none are — nothing is absorbing the
+backlog, and the only thing happening is the clock running down. Measured: one
+job arriving at a queue sitting at zero waited 15 seconds against a 30-second
+SLA, 60 against 120, and longer still at 300 — always half the target, whatever
+the evaluation interval; dropping the interval to one second still cost
+fourteen. Three jobs got a worker on the next cycle. The difference was the
+threshold, not the work.
+
+A queue holding work with nothing draining it now asks for one worker straight
+away, so the wait is the evaluation interval and nothing more. It is stated as a
+need rather than a floor, so everything downstream still applies: a host with no
+spare capacity, a queue capped at `workers.max` of zero, and a queue whose
+failure fuse has tripped each still resolve to no workers, and an idle queue with
+no backlog still gets nothing. That last one is what keeps this from quietly
+restoring the floor withdrawn below — it is a response to work, not a standing
+promise.
+
+This matters more BECAUSE of that withdrawal: scaling to zero is only safe if
+coming back is quick.
+
 **Behaviour change: a worker floor now applies only to a queue you named.**
 Queues are discovered from metrics rather than registered, so an application
 minting a queue name per tenant was getting one permanently-running
