@@ -14,8 +14,8 @@ class FairShareAllocator
      * of cycles: measured at 719 worker moves an hour on six queues sharing
      * four slots, which trades a starved queue for a fleet that spends its life
      * being rebuilt. A margin of eight workers-worth of entitlement brings that
-     * to around 59 moves an hour, at the cost of leaving a queue at zero for
-     * longer before the swap.
+     * to around 150 an hour, at the cost of leaving a queue at zero for longer
+     * before the swap.
      */
     private const CREDIT_HYSTERESIS = 12.0;
 
@@ -266,8 +266,25 @@ class FairShareAllocator
     }
 
     /**
-     * Each workload's proportional share of a capacity that cannot satisfy
-     * everyone, measured against what it could actually use.
+     * Each workload's share of a capacity that cannot satisfy everyone,
+     * measured the way that capacity is actually handed out.
+     *
+     * The allocation guarantees every floor first and shares only what is left
+     * over, so the entitlement has to be built the same way: the floor, plus a
+     * proportional slice of the spare measured against real headroom. Anything
+     * else opens the ledger in a currency the allocation never pays in, and the
+     * difference is banked every cycle as a debt nothing can settle — a
+     * workload whose floor exceeds its plain proportional share is paid that
+     * floor forever while its balance sinks, and the matching credit accrues to
+     * everyone else forever.
+     *
+     * Measured on a plain ceiling-proportional basis: capacity 10 against one
+     * queue pinned at min = max = 4 and one elastic tenant, balances drifted
+     * 3.6 a cycle without limit — 180,000 apart after 50,000 cycles. A balance
+     * that size decides every later contest on history that no longer means
+     * anything: a tenant joining a cluster that had been saturated for a day
+     * sat at zero workers for 41 hours, and the wait grew with the cluster's
+     * age rather than with anything about the tenant.
      *
      * @param  array<string, int>  $demands
      * @param  array<string, array{min: int, max: int}>  $configs
@@ -276,28 +293,35 @@ class FairShareAllocator
     private function proportionalEntitlements(array $demands, array $configs, int $clusterCapacity): array
     {
         $ceilings = [];
+        $floors = [];
 
         foreach ($demands as $key => $demand) {
-            $ceilings[$key] = max(0, min($demand, $configs[$key]['max']));
+            $ceiling = max(0, min($demand, $configs[$key]['max']));
+            $ceilings[$key] = $ceiling;
+            $floors[$key] = max(0, min($configs[$key]['min'], $ceiling));
         }
 
-        $total = array_sum($ceilings);
+        $spare = $clusterCapacity - array_sum($floors);
+        $headroom = 0.0;
 
-        if ($total <= 0) {
-            return array_map(static fn (): float => 0.0, $ceilings);
+        foreach ($ceilings as $key => $ceiling) {
+            $headroom += $ceiling - $floors[$key];
         }
 
-        // Never above the workload's own ceiling. Dividing by the ceiling total
-        // hands out MORE than a ceiling whenever that total is below capacity,
-        // and the difference is banked every cycle as entitlement owed —
-        // a balance that grows for capacity the workload is forbidden to use.
-        return array_map(
-            static fn (int $ceiling): float => min(
+        if ($spare <= 0 || $headroom <= 0.0) {
+            return array_map(static fn (int $floor): float => (float) $floor, $floors);
+        }
+
+        $entitlements = [];
+
+        foreach ($ceilings as $key => $ceiling) {
+            $entitlements[$key] = min(
                 (float) $ceiling,
-                $ceiling * $clusterCapacity / $total,
-            ),
-            $ceilings,
-        );
+                $floors[$key] + $spare * ($ceiling - $floors[$key]) / $headroom,
+            );
+        }
+
+        return $entitlements;
     }
 
     /**
@@ -309,10 +333,11 @@ class FairShareAllocator
      * a floorless workload ahead of a floor that is itself being scaled down
      * would break the promise for the queue that actually asked for it.
      *
-     * The consequence is worth stating plainly, because it is sharp: on a
-     * cluster over-committed on floors, a queue with `workers.min` of zero gets
-     * nothing at all, for as long as that lasts, however much backlog it is
-     * holding. The rotation below shares the loss among the workloads that DO
+     * The consequence is worth stating plainly, because it is sharp: once the
+     * floors reach capacity — at it as well as over it, since a floor total
+     * equal to capacity leaves nothing to share either — a queue with
+     * `workers.min` of zero gets nothing at all, for as long as that lasts,
+     * however much backlog it is holding. The rotation below shares the loss among the workloads that DO
      * have a claim; it does not manufacture a claim for one that has none.
      *
      * Proportional, then largest-remainder for the rounding, so the result is

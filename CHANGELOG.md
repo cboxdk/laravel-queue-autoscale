@@ -91,6 +91,16 @@ cannot, exactly once, after which normal accounting resumes. Measured across
 leadership changing every 5, 8, 11 and 20 cycles, no workload is left
 permanently unserved in any of them; with a stable leader nothing changes.
 
+Entitlement is measured in the currency the allocation actually pays in: the
+floor first, then a proportional slice of what is left, matching how capacity is
+handed out. Measured as a plain proportional share instead, a workload whose
+floor exceeds that share is paid its floor every cycle while its balance says it
+was owed less, and the difference banks forever as a debt nothing can settle —
+balances drifted 3.6 a cycle without limit, 180,000 apart after 50,000 cycles,
+and a tenant joining a cluster saturated for a day then waited 41 hours for its
+first worker because the incumbents' history outweighed anything it could bank.
+It waits an ordinary hysteresis window now, whatever the cluster's uptime.
+
 A balance already being kept is never overwritten by a snapshot, and the
 observed count and the entitlement are both clamped before use — a corrupt
 heartbeat or a scaling policy that raises a target above `workers.max` would

@@ -724,3 +724,88 @@ test('a workload with no floor gets nothing while the floors do not fit', functi
 
     expect($floorlessEverServed)->toBeFalse();
 });
+
+/**
+ * The ledger has to be kept in the currency the allocation actually pays in.
+ *
+ * Capacity is handed out by guaranteeing every floor and sharing what is left,
+ * but entitlement was measured as a plain ceiling-proportional share. A
+ * workload whose floor exceeds that share is therefore paid its floor every
+ * cycle while its balance says it was owed less — and the matching credit
+ * accrues to everyone else, every cycle, for a debt the allocation can never
+ * settle because the capacity is permanently committed to the floor.
+ *
+ * Measured on the old basis: balances drifted 3.6 a cycle without limit,
+ * 180,000 apart after 50,000 cycles. A balance that size decides every later
+ * contest on history that no longer means anything — a tenant joining a cluster
+ * that had been saturated for a day waited 41 hours for its first worker, and
+ * the wait grew with the cluster's uptime rather than with anything about the
+ * tenant.
+ */
+test('a floor above its proportional share does not drift the ledger', function (): void {
+    $allocator = new FairShareAllocator;
+
+    $demands = ['queue:redis:pinned' => 4, 'queue:redis:elastic' => 100];
+    $configs = [
+        'queue:redis:pinned' => ['min' => 4, 'max' => 4],
+        'queue:redis:elastic' => ['min' => 0, 'max' => 100],
+    ];
+
+    $credits = new ReflectionProperty($allocator, 'credits');
+    $current = array_fill_keys(array_keys($demands), 0);
+
+    for ($cycle = 0; $cycle < 200; $cycle++) {
+        $current = $allocator->allocate($demands, $configs, 10, $current);
+    }
+
+    $settled = $credits->getValue($allocator);
+
+    for ($cycle = 0; $cycle < 5000; $cycle++) {
+        $current = $allocator->allocate($demands, $configs, 10, $current);
+    }
+
+    // Settled, not merely small: five thousand further cycles move it nowhere.
+    expect($credits->getValue($allocator))->toBe($settled);
+});
+
+test('a workload joining a long-saturated cluster waits its ordinary turn', function (): void {
+    // The consequence of the drift, and the reason it mattered: a balance built
+    // over a day of saturation is three orders of magnitude beyond anything a
+    // newcomer can bank, so the newcomer loses every contest until the incumbent
+    // balances unwind — a wait that grew with the cluster's age.
+    $allocator = new FairShareAllocator;
+
+    $demands = ['queue:redis:pinned' => 8];
+    $configs = ['queue:redis:pinned' => ['min' => 8, 'max' => 8]];
+
+    for ($tenant = 0; $tenant < 8; $tenant++) {
+        $demands["queue:redis:tenant-{$tenant}"] = 10;
+        $configs["queue:redis:tenant-{$tenant}"] = ['min' => 0, 'max' => 10];
+    }
+
+    $current = array_fill_keys(array_keys($demands), 0);
+
+    // Four hours of saturation at a five-second interval.
+    for ($cycle = 0; $cycle < 2880; $cycle++) {
+        $current = $allocator->allocate($demands, $configs, 12, $current);
+    }
+
+    $demands['queue:redis:newcomer'] = 10;
+    $configs['queue:redis:newcomer'] = ['min' => 0, 'max' => 10];
+    $current['queue:redis:newcomer'] = 0;
+
+    $waited = 0;
+
+    while ($waited < 5000) {
+        $current = $allocator->allocate($demands, $configs, 12, $current);
+
+        if ($current['queue:redis:newcomer'] > 0) {
+            break;
+        }
+
+        $waited++;
+    }
+
+    // One hysteresis window, not a function of how long the cluster has run.
+    expect($waited)->toBeLessThan(200);
+});
