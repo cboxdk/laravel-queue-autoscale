@@ -5,6 +5,12 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **`AllocationFloorPolicy`: a scaling policy can now assert a fair-share floor, not just adjust demand.** A `ClusterScopedPolicy` can rewrite a workload's target, but that target is only its *demand* input to `FairShareAllocator`, which under contention shares capacity in proportion to demand and pays floors from exactly one source — the static `workers.min`. So a policy could *ask* for workers but not *claim* them: a workload with `workers.min` 0 and small demand rounds to zero against a large competitor, even while a policy is actively trying to hold it up. A policy implementing the new `AllocationFloorPolicy` returns `allocationFloor($connection, $name, $isGroup)`, which the manager merges as `max()` with `workers.min` when building the fair-share bounds, so the claim is paid before proportional sharing. Unlike a static `workers.min` the claim can be conditional on application state and released the moment that clears; it is still bounded by the workload's ceiling (its demand and `workers.max`), so a floor the workload cannot use is never paid. Policies that do not implement the interface are unaffected.
+
 ## v4.2.0 - 2026-08-25
 
 **Behaviour change: the anti-flapping cooldown is one-sided.**

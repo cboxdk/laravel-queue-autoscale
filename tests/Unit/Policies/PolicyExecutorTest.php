@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Cbox\LaravelQueueAutoscale\Contracts\AllocationFloorPolicy;
 use Cbox\LaravelQueueAutoscale\Contracts\ClusterScopedPolicy;
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
 use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
@@ -297,6 +298,122 @@ test('the cluster-scoped chain consults only policies with the marker interface'
         ->and($result->scope)->toBe(ScalingScope::Cluster)
         ->and($plain::$consulted)->toBeFalse()
         ->and($executor->hasClusterScopedPolicies())->toBeTrue();
+});
+
+test('allocationFloorFor returns null when no allocation-floor policies are configured', function () {
+    $executor = new PolicyExecutor;
+
+    expect($executor->hasAllocationFloorPolicies())->toBeFalse()
+        ->and($executor->allocationFloorFor('redis', 'reports', false))->toBeNull();
+});
+
+test('allocationFloorFor returns the highest floor any policy claims', function () {
+    $low = new class implements AllocationFloorPolicy
+    {
+        public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
+        {
+            return null;
+        }
+
+        public function afterScaling(ScalingDecision $decision): void {}
+
+        public function allocationFloor(string $connection, string $name, bool $isGroup): ?int
+        {
+            return 2;
+        }
+    };
+
+    $high = new class implements AllocationFloorPolicy
+    {
+        public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
+        {
+            return null;
+        }
+
+        public function afterScaling(ScalingDecision $decision): void {}
+
+        public function allocationFloor(string $connection, string $name, bool $isGroup): ?int
+        {
+            return 7;
+        }
+    };
+
+    config()->set('queue-autoscale.policies', [get_class($low), get_class($high)]);
+    $this->app->bind(get_class($low), fn () => $low);
+    $this->app->bind(get_class($high), fn () => $high);
+
+    $executor = new PolicyExecutor;
+
+    expect($executor->hasAllocationFloorPolicies())->toBeTrue()
+        ->and($executor->allocationFloorFor('redis', 'reports', false))->toBe(7);
+});
+
+test('allocationFloorFor returns null when every policy abstains', function () {
+    $abstains = new class implements AllocationFloorPolicy
+    {
+        public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
+        {
+            return null;
+        }
+
+        public function afterScaling(ScalingDecision $decision): void {}
+
+        public function allocationFloor(string $connection, string $name, bool $isGroup): ?int
+        {
+            return null;
+        }
+    };
+
+    config()->set('queue-autoscale.policies', [get_class($abstains)]);
+    $this->app->bind(get_class($abstains), fn () => $abstains);
+
+    $executor = new PolicyExecutor;
+
+    expect($executor->hasAllocationFloorPolicies())->toBeTrue()
+        ->and($executor->allocationFloorFor('redis', 'reports', false))->toBeNull();
+});
+
+test('allocationFloorFor contains a throwing policy and still returns another claim', function () {
+    $failing = new class implements AllocationFloorPolicy
+    {
+        public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
+        {
+            return null;
+        }
+
+        public function afterScaling(ScalingDecision $decision): void {}
+
+        public function allocationFloor(string $connection, string $name, bool $isGroup): ?int
+        {
+            throw new RuntimeException('floor failed');
+        }
+    };
+
+    $claims = new class implements AllocationFloorPolicy
+    {
+        public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
+        {
+            return null;
+        }
+
+        public function afterScaling(ScalingDecision $decision): void {}
+
+        public function allocationFloor(string $connection, string $name, bool $isGroup): ?int
+        {
+            return 4;
+        }
+    };
+
+    config()->set('queue-autoscale.policies', [get_class($failing), get_class($claims)]);
+    $this->app->bind(get_class($failing), fn () => $failing);
+    $this->app->bind(get_class($claims), fn () => $claims);
+
+    Log::shouldReceive('channel')->with('test-channel')->andReturnSelf();
+    Log::shouldReceive('error')->once()->with('Policy allocationFloor failed', Mockery::type('array'));
+
+    $executor = new PolicyExecutor;
+
+    expect($executor->allocationFloorFor('redis', 'reports', false))->toBe(4);
 });
 
 test('afterScalingClusterScoped notifies only cluster-scoped policies', function () {
