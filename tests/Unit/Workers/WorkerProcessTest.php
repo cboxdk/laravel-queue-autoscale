@@ -8,6 +8,9 @@ use Symfony\Component\Process\Process;
 
 beforeEach(function () {
     $this->mockProcess = Mockery::mock(Process::class);
+    // The constructor captures the PID at spawn, so every construction reads
+    // getPid() once; individual tests override this default as needed.
+    $this->mockProcess->shouldReceive('getPid')->andReturn(12345)->byDefault();
     $this->spawnedAt = Carbon::now()->subMinutes(5);
 });
 
@@ -53,6 +56,22 @@ test('pid returns null when process has no pid', function () {
     );
 
     expect($worker->pid())->toBeNull();
+});
+
+test('pid is retained after the process exits', function () {
+    // Symfony returns the PID at spawn, then null once it sees the child exit.
+    // pid() must keep answering with the spawn PID so an exited worker's final
+    // output can still be drained and its buffer cleared.
+    $this->mockProcess->shouldReceive('getPid')->andReturn(4242, null);
+
+    $worker = new WorkerProcess(
+        process: $this->mockProcess,
+        connection: 'redis',
+        queue: 'default',
+        spawnedAt: $this->spawnedAt,
+    );
+
+    expect($worker->pid())->toBe(4242);
 });
 
 test('isRunning delegates to process', function () {

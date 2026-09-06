@@ -5,6 +5,12 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **A worker that exits between evaluation cycles now has its final output drained.** `WorkerOutputBuffer` skips a worker whose PID is unknown, and `WorkerProcess::pid()` delegated straight to Symfony's `Process::getPid()`, which returns `null` once the process is no longer running. So a worker that died between cycles (an OOM, a fatal) was skipped and its last stderr — the stack trace explaining the exit — was dropped, leaving only "Removed dead worker". The same `null` PID also skipped clearing that worker's partial-line buffer. `WorkerProcess` now captures the PID at spawn (while the process is running) and keeps answering with it after exit; every place that signals a worker already guards on `isRunning()`, so retaining the PID never risks killing a recycled process. The previous unit test passed only because it mocked `pid()` to a non-null value after exit — it is replaced with one that drives a real short-lived process across the exit boundary.
+
 ## v4.2.0 - 2026-08-25
 
 **Behaviour change: the anti-flapping cooldown is one-sided.**
