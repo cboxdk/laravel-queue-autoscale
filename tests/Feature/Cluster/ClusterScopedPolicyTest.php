@@ -217,6 +217,23 @@ test('an allocation-floor policy is consulted for each workload while the leader
         ->and(RecordingAllocationFloorPolicy::$seen)->toContain('queue:redis:exports');
 });
 
+test('an allocation-floor policy that abstains leaves the workload min unchanged', function (): void {
+    // floorForName is null, so the policy is consulted but claims no floor,
+    // exercising the abstain path where the configured workers.min is kept.
+    RecordingAllocationFloorPolicy::reset();
+
+    rebuildPolicyChain([RecordingAllocationFloorPolicy::class]);
+    scopedPolicyDiscovery(['redis:exports' => scopedPolicyRawMetrics('redis', 'exports')]);
+
+    $store = runLeaderEvaluation();
+
+    $recommendation = $store->publishedRecommendations()['mgr-1'] ?? null;
+
+    expect($recommendation)->not->toBeNull()
+        ->and(RecordingAllocationFloorPolicy::$seen)->toContain('queue:redis:exports')
+        ->and($recommendation->workloads['queue:redis:exports'] ?? null)->toBeGreaterThanOrEqual(6);
+});
+
 test('a cluster-scope policy caps a group workload the same way', function (): void {
     config()->set('queue-autoscale.queues', []);
     config()->set('queue-autoscale.groups.notifications', [
