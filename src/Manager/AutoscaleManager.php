@@ -525,7 +525,10 @@ class AutoscaleManager
                 $targetWorkers = $this->applyClusterScopedPolicies($metrics->connection, $metrics->queue, $currentWorkers, $targetWorkers, $config);
 
                 $demands[$workloadKey] = $targetWorkers;
-                $workerConfigs[$workloadKey] = ['min' => $config->workers->min, 'max' => $config->workers->max];
+                $workerConfigs[$workloadKey] = [
+                    'min' => $this->resolveAllocationMin($config, $metrics->connection, $metrics->queue, false),
+                    'max' => $config->workers->max,
+                ];
                 $workloadMeta[$workloadKey] = new EvaluatedWorkload(
                     isGroup: false,
                     connection: $metrics->connection,
@@ -551,7 +554,10 @@ class AutoscaleManager
                 $targetWorkers = $this->applyClusterScopedPolicies($group->connection, $group->name, $currentWorkers, $targetWorkers, $config);
 
                 $demands[$workloadKey] = $targetWorkers;
-                $workerConfigs[$workloadKey] = ['min' => $config->workers->min, 'max' => $config->workers->max];
+                $workerConfigs[$workloadKey] = [
+                    'min' => $this->resolveAllocationMin($config, $group->connection, $group->name, true),
+                    'max' => $config->workers->max,
+                ];
                 $workloadMeta[$workloadKey] = new EvaluatedWorkload(
                     isGroup: true,
                     connection: $group->connection,
@@ -1036,6 +1042,37 @@ class AutoscaleManager
         $this->policies->afterScalingClusterScoped($decision);
 
         return max(0, $decision->targetWorkers);
+    }
+
+    /**
+     * The worker floor to hand the fair-share allocator for this workload.
+     *
+     * A ClusterScopedPolicy can only raise a workload's demand, which the
+     * allocator then shares proportionally, so under contention a workload with
+     * workers.min 0 can still be starved. An AllocationFloorPolicy may instead
+     * assert a floor, merged here as max() with workers.min, which the allocator
+     * pays before proportional sharing. The floor is bounded by the workload's
+     * ceiling downstream, so a floor it cannot use is released.
+     */
+    private function resolveAllocationMin(
+        QueueConfiguration $config,
+        string $connection,
+        string $name,
+        bool $isGroup,
+    ): int {
+        $min = $config->workers->min;
+
+        if (! $this->policies->hasAllocationFloorPolicies()) {
+            return $min;
+        }
+
+        $floor = $this->policies->allocationFloorFor($connection, $name, $isGroup);
+
+        if ($floor === null) {
+            return $min;
+        }
+
+        return max($min, max(0, $floor));
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Cbox\LaravelQueueAutoscale\Policies;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Contracts\AllocationFloorPolicy;
 use Cbox\LaravelQueueAutoscale\Contracts\ClusterScopedPolicy;
 use Cbox\LaravelQueueAutoscale\Contracts\ScalingPolicy;
 use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
@@ -18,12 +19,19 @@ readonly class PolicyExecutor
     /** @var array<int, ClusterScopedPolicy> */
     private array $clusterScopedPolicies;
 
+    /** @var array<int, AllocationFloorPolicy> */
+    private array $allocationFloorPolicies;
+
     public function __construct()
     {
         $this->policies = $this->loadPolicies();
         $this->clusterScopedPolicies = array_values(array_filter(
             $this->policies,
             static fn (ScalingPolicy $policy): bool => $policy instanceof ClusterScopedPolicy,
+        ));
+        $this->allocationFloorPolicies = array_values(array_filter(
+            $this->policies,
+            static fn (ScalingPolicy $policy): bool => $policy instanceof AllocationFloorPolicy,
         ));
     }
 
@@ -66,6 +74,48 @@ readonly class PolicyExecutor
     public function hasClusterScopedPolicies(): bool
     {
         return $this->clusterScopedPolicies !== [];
+    }
+
+    public function hasAllocationFloorPolicies(): bool
+    {
+        return $this->allocationFloorPolicies !== [];
+    }
+
+    /**
+     * The highest worker floor any allocation-floor policy claims for this
+     * workload, or null if none claim one. Consulted when the fair-share bounds
+     * are built so the claim is paid before proportional sharing.
+     *
+     * A throwing policy is contained and skipped, exactly like the scaling
+     * chains: one bad policy must not blank out a workload's whole allocation.
+     */
+    public function allocationFloorFor(string $connection, string $name, bool $isGroup): ?int
+    {
+        $floor = null;
+
+        foreach ($this->allocationFloorPolicies as $policy) {
+            try {
+                $claim = $policy->allocationFloor($connection, $name, $isGroup);
+            } catch (\Throwable $e) {
+                Log::channel(AutoscaleConfiguration::logChannel())->error(
+                    'Policy allocationFloor failed',
+                    [
+                        'policy' => get_class($policy),
+                        'error' => $e->getMessage(),
+                    ]
+                );
+
+                continue;
+            }
+
+            if ($claim === null) {
+                continue;
+            }
+
+            $floor = max($floor ?? 0, $claim);
+        }
+
+        return $floor;
     }
 
     /**

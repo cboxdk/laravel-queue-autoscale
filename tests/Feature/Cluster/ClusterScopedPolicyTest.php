@@ -10,6 +10,7 @@ use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Manager\AutoscaleManager;
 use Cbox\LaravelQueueAutoscale\Policies\PolicyExecutor;
 use Cbox\LaravelQueueAutoscale\Testing\FakeClusterStore;
+use Cbox\LaravelQueueAutoscale\Tests\Fixtures\RecordingAllocationFloorPolicy;
 use Cbox\LaravelQueueAutoscale\Tests\Fixtures\RecordingClusterScopedPolicy;
 use Cbox\LaravelQueueAutoscale\Tests\Fixtures\RecordingScalingPolicy;
 use Cbox\LaravelQueueMetrics\Actions\CalculateQueueMetricsAction;
@@ -145,6 +146,7 @@ function runLeaderEvaluation(): FakeClusterStore
 beforeEach(function (): void {
     RecordingScalingPolicy::reset();
     RecordingClusterScopedPolicy::reset();
+    RecordingAllocationFloorPolicy::reset();
 
     config()->set('queue-autoscale.cluster.enabled', true);
     config()->set('queue-autoscale.groups', []);
@@ -197,6 +199,39 @@ test('a cluster-scope policy caps the cluster-wide target once, before distribut
         ->and($recommendation->workloads['queue:redis:exports'] ?? null)->toBe(3)
         ->and(RecordingClusterScopedPolicy::$seen)->toContain('before:cluster:exports:6')
         ->and(RecordingClusterScopedPolicy::$seen)->toContain('after:cluster:exports:3');
+});
+
+test('an allocation-floor policy is consulted for each workload while the leader builds fair-share bounds', function (): void {
+    RecordingAllocationFloorPolicy::reset(floorForName: 'exports', floor: 4);
+
+    rebuildPolicyChain([RecordingAllocationFloorPolicy::class]);
+    scopedPolicyDiscovery(['redis:exports' => scopedPolicyRawMetrics('redis', 'exports')]);
+
+    $store = runLeaderEvaluation();
+
+    $recommendation = $store->publishedRecommendations()['mgr-1'] ?? null;
+
+    // Consulted with the workload's identity, so its floor is merged (max with
+    // workers.min) into the min handed to the fair-share allocator.
+    expect($recommendation)->not->toBeNull()
+        ->and(RecordingAllocationFloorPolicy::$seen)->toContain('queue:redis:exports');
+});
+
+test('an allocation-floor policy that abstains leaves the workload min unchanged', function (): void {
+    // floorForName is null, so the policy is consulted but claims no floor,
+    // exercising the abstain path where the configured workers.min is kept.
+    RecordingAllocationFloorPolicy::reset();
+
+    rebuildPolicyChain([RecordingAllocationFloorPolicy::class]);
+    scopedPolicyDiscovery(['redis:exports' => scopedPolicyRawMetrics('redis', 'exports')]);
+
+    $store = runLeaderEvaluation();
+
+    $recommendation = $store->publishedRecommendations()['mgr-1'] ?? null;
+
+    expect($recommendation)->not->toBeNull()
+        ->and(RecordingAllocationFloorPolicy::$seen)->toContain('queue:redis:exports')
+        ->and($recommendation->workloads['queue:redis:exports'] ?? null)->toBeGreaterThanOrEqual(6);
 });
 
 test('a cluster-scope policy caps a group workload the same way', function (): void {

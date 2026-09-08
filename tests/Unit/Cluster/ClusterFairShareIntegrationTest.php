@@ -47,6 +47,35 @@ function invokeFairShareDistributeClusterTarget(array $managers, string $workloa
     return (new WorkerDistributor)->distribute($managers, $workloadKey, $targetWorkers, $assignedTotals);
 }
 
+it('honours an allocation floor (a raised min) so a small-demand workload is not starved under contention', function () {
+    $allocator = new FairShareAllocator;
+
+    // One workload dominates demand; capacity is scarce, so proportional
+    // sharing alone would round the small workload to zero.
+    $demands = [
+        'queue:redis:bulk' => 500,
+        'queue:redis:reports' => 5,
+    ];
+    $capacity = 10;
+
+    $withoutFloor = $allocator->allocate($demands, [
+        'queue:redis:bulk' => ['min' => 0, 'max' => 500],
+        'queue:redis:reports' => ['min' => 0, 'max' => 50],
+    ], $capacity);
+
+    expect($withoutFloor['queue:redis:reports'])->toBe(0);
+
+    // A floor of 5 — what an AllocationFloorPolicy contributes into min — is
+    // paid before proportional sharing, bounded by the workload's own demand.
+    $withFloor = $allocator->allocate($demands, [
+        'queue:redis:bulk' => ['min' => 0, 'max' => 500],
+        'queue:redis:reports' => ['min' => 5, 'max' => 50],
+    ], $capacity);
+
+    expect($withFloor['queue:redis:reports'])->toBe(5)
+        ->and(array_sum($withFloor))->toBe($capacity);
+});
+
 it('distributes fair-share targets across hosts without starvation', function () {
     // Simulate: 4 queues each demanding 12 workers, cluster capacity 10 (2 hosts x 5)
     $allocator = new FairShareAllocator;
