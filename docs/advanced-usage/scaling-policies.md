@@ -138,6 +138,64 @@ Mechanics:
 - Single-host mode is unaffected: no cluster decisions exist there, and a cluster-scoped policy
   simply sees the same host-scoped decisions as any other policy.
 
+## Claiming a floor: asking versus claiming
+
+A `ClusterScopedPolicy` rewrites a workload's **target**, and that target is only its *demand*
+input to the allocator described above. Under contention demand is shared proportionally, so a
+policy can ask for workers but cannot claim them: a workload with `workers.min` 0 and demand 5,
+competing against a workload demanding 500, receives 5/505ths of capacity — which rounds to zero,
+however hard a policy pushes its target up. Raising `workers.min` is the only static answer, and
+it holds the floor unconditionally, including while the queue idles out its metrics-retention tail.
+
+A policy that needs a **conditional** floor — held only while the application says it is needed —
+implements the opt-in `AllocationFloorPolicy`:
+
+```php
+use Cbox\LaravelQueueAutoscale\Contracts\AllocationFloorPolicy;
+use Cbox\LaravelQueueAutoscale\Scaling\ScalingDecision;
+
+class ActiveSyncFloorPolicy implements AllocationFloorPolicy
+{
+    public function allocationFloor(string $connection, string $name, bool $isGroup): ?int
+    {
+        // Hold two workers for the sync queue only while a run is in flight;
+        // null claims nothing, so the configured workers.min stands.
+        if ($name === 'sync' && SyncRun::query()->active()->exists()) {
+            return 2;
+        }
+
+        return null;
+    }
+
+    public function beforeScaling(ScalingDecision $decision): ?ScalingDecision
+    {
+        return null;
+    }
+
+    public function afterScaling(ScalingDecision $decision): void {}
+}
+```
+
+Mechanics:
+
+- **This is a cluster-mode contract.** The floor is consulted only on the leader, while it builds
+  the fair-share bounds — the one place proportional sharing can starve a workload. With
+  `cluster.enabled` false there is no allocator and no contention, and `allocationFloor()` is
+  never called. To hold a single-host workload up, raise the target from `beforeScaling()`:
+  nothing competes it away there.
+- The claim is merged as `max()` with the configured `workers.min`, so a floor only ever raises a
+  workload's minimum and never lowers one. Returning `null` claims nothing.
+- Every registered policy implementing the interface is consulted and the **highest** claim wins.
+  A policy that throws is logged and skipped, like the rest of the chain.
+- The floor is still bounded by the workload's ceiling — its own demand and `workers.max` — so a
+  floor the workload cannot use is never paid, and the failure fuse still releases it by driving
+  demand below the floor. A floor larger than demand therefore buys nothing; it rescues a workload
+  whose demand is real but small, not one with no work to do.
+- Floors that together exceed capacity are scaled down proportionally, exactly as configured
+  `workers.min` floors are. A claim is a claim on a fair share, not a reservation.
+- Policies that do not implement the interface are never consulted for a floor, so existing
+  behaviour is unchanged unless a policy explicitly opts in.
+
 ## Registration and resolution
 
 Policies are configured as a list of **class strings** in `config/queue-autoscale.php`:

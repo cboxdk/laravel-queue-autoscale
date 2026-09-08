@@ -26,6 +26,13 @@ namespace Cbox\LaravelQueueAutoscale\Contracts;
  *
  * Policies that do not implement this interface are never consulted for a
  * floor, so existing behavior is unchanged unless a policy explicitly opts in.
+ *
+ * This is a cluster-mode contract. The floor is consulted only on the leader,
+ * while it builds the fair-share bounds — the one place proportional sharing
+ * can starve a workload. With cluster.enabled false there is no allocator and
+ * no contention, so allocationFloor() is never called; hold a single-host
+ * workload up by raising the target from beforeScaling() instead, where
+ * nothing competes it away.
  */
 interface AllocationFloorPolicy extends ScalingPolicy
 {

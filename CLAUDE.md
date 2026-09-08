@@ -90,7 +90,7 @@ a cost, not a free deferral.
 
 Every capability is an interface under `Contracts\` bound in the service provider and
 resolved from the container. Depend on the interface, never the concrete class — that is
-what makes the shipped fakes and host overrides possible. There are twelve contracts;
+what makes the shipped fakes and host overrides possible. There are thirteen contracts;
 `ScalingStrategyContract`, `ClusterStoreContract`, `ScalingPolicy` and
 `SpawnLatencyTrackerContract` are the ones consumers most often implement.
 
