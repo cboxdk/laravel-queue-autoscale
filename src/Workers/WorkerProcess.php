@@ -14,6 +14,17 @@ class WorkerProcess
     private ?Carbon $terminationDeadline = null;
 
     /**
+     * The OS PID, captured at spawn while the process is running.
+     *
+     * Symfony's Process::getPid() returns null once the child exits, but an
+     * exited worker's PID is still needed to drain its final output and clear
+     * its per-PID buffer. Every place that signals a worker guards on
+     * isRunning() first, so retaining the PID after exit never risks killing a
+     * process the OS has since recycled.
+     */
+    private ?int $pid;
+
+    /**
      * @param  string  $queue  For per-queue workers this is the queue name; for group workers it is the
      *                         comma-separated queue list exactly as passed to `queue:work --queue=`.
      * @param  string|null  $group  Name of the group this worker belongs to, or null for per-queue workers.
@@ -24,11 +35,19 @@ class WorkerProcess
         public readonly string $queue,
         public readonly Carbon $spawnedAt,
         public readonly ?string $group = null,
-    ) {}
+    ) {
+        $this->pid = $process->getPid();
+    }
 
     public function pid(): ?int
     {
-        return $this->process->getPid();
+        $livePid = $this->process->getPid();
+
+        if ($livePid !== null) {
+            $this->pid = $livePid;
+        }
+
+        return $this->pid;
     }
 
     /**
