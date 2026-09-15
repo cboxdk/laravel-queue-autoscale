@@ -23,12 +23,6 @@ class MigrateConfigCommand extends Command
         $source = $this->option('source') ?: config_path('queue-autoscale.php');
         $destination = $this->option('destination') ?: config_path('queue-autoscale.v2.php');
 
-        if (! is_string($source) || ! is_string($destination)) {
-            $this->error('Invalid --source or --destination option.');
-
-            return self::FAILURE;
-        }
-
         if (! File::exists($source)) {
             $this->error("Source file not found: {$source}");
 

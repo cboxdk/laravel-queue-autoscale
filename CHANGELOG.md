@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `cboxdk/laravel-queue-metrics` is now required at `^3.4` (was `^3.3`) for the `delayed_due_now` queue-depth field.
+- Two unreachable guards are gone. `MigrateConfigCommand` validated that `--source` and `--destination` were strings, which they always are — both are value options, so `option()` returns `string|null` and the `?:` fallback is a string. `InteractsWithAutoscaling::tripFuseFor()` resolved the fuse's window store out of the container to ask whether a spec had already faked it; it now remembers what it installed instead. Both read as dead code to static analysis at level max, and both were: no test could reach either branch. `tripFuseFor()` still reuses a store the spec installed rather than replacing it, and there are now tests for that.
 
 ## v4.3.0 - 2026-09-08
 

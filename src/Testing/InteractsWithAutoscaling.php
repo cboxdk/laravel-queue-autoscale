@@ -26,6 +26,16 @@ use PHPUnit\Framework\Assert;
 trait InteractsWithAutoscaling
 {
     /**
+     * The in-memory window store this test installed, if it installed one.
+     *
+     * Held here rather than read back out of the container: the binding is
+     * swapped at runtime by fakeFailureWindows(), which static analysis cannot
+     * see, so resolving the contract to ask what it is now reports the default
+     * concrete store and makes the check look dead.
+     */
+    private ?InMemoryFailureWindowStore $installedFailureWindowStore = null;
+
+    /**
      * Replace the fuse's window store with an in-memory one.
      *
      * Returns it, so a spec can seed failures and drive the fuse through its
@@ -36,7 +46,7 @@ trait InteractsWithAutoscaling
         $store = new InMemoryFailureWindowStore;
         app()->instance(FailureWindowStoreContract::class, $store);
 
-        return $store;
+        return $this->installedFailureWindowStore = $store;
     }
 
     /**
@@ -123,11 +133,7 @@ trait InteractsWithAutoscaling
      */
     protected function tripFuseFor(string $queue, string $connection = 'redis'): InMemoryFailureWindowStore
     {
-        $store = app()->make(FailureWindowStoreContract::class);
-
-        if (! $store instanceof InMemoryFailureWindowStore) {
-            $store = $this->fakeFailureWindows();
-        }
+        $store = $this->installedFailureWindowStore ?? $this->fakeFailureWindows();
 
         $config = QueueConfiguration::fromConfig($connection, $queue);
         $samples = max($config->fuse->minSamples, 1);
