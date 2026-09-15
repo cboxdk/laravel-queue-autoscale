@@ -140,3 +140,68 @@ test('clamps target to workers.min', function (): void {
 
     expect($target)->toBeGreaterThanOrEqual($config->workers->min);
 });
+
+function hybridZeroFloorConfig(): QueueConfiguration
+{
+    config([
+        'queue-autoscale.sla_defaults' => BalancedProfile::class,
+        'queue-autoscale.queues' => ['default' => ['workers' => ['min' => 0, 'max' => 10]]],
+    ]);
+
+    return QueueConfiguration::fromConfig('redis', 'default');
+}
+
+function hybridStrategyForBackportSpecs(): HybridStrategy
+{
+    return new HybridStrategy(
+        littles: new LittlesLawCalculator,
+        backlog: new BacklogDrainCalculator,
+        arrivalEstimator: new ArrivalRateEstimator,
+        spawnTracker: hybridFakeSpawnTracker(0.5),
+        pickupStore: hybridFakePickupStore([]),
+        percentileCalc: new SortBasedPercentileCalculator,
+    );
+}
+
+test('requests a worker for reserved jobs orphaned at zero workers', function (): void {
+    $metrics = createMetrics([
+        'pending' => 0,
+        'reserved' => 1,
+        'active_workers' => 0,
+    ]);
+
+    $target = hybridStrategyForBackportSpecs()->calculateTargetWorkers($metrics, hybridZeroFloorConfig());
+
+    expect($target)->toBe(1);
+});
+
+test('does not force a worker when reserved jobs are already draining', function (): void {
+    $metrics = createMetrics([
+        'pending' => 0,
+        'reserved' => 5,
+        'active_workers' => 2,
+        'utilization_rate' => 10.0,
+    ]);
+
+    $target = hybridStrategyForBackportSpecs()->calculateTargetWorkers($metrics, hybridZeroFloorConfig());
+
+    expect($target)->toBe(0);
+});
+
+/**
+ * A queue holding only pending work already asks for a worker on this line, and
+ * this patch must not disturb that. Pinned because the equivalent 4.x guard also
+ * covers pending work, and a backport that widened to match would be changing
+ * wake behaviour rather than fixing a stall.
+ */
+test('leaves a queue holding only pending work exactly as it was', function (): void {
+    $metrics = createMetrics([
+        'pending' => 1,
+        'reserved' => 0,
+        'active_workers' => 0,
+    ]);
+
+    $target = hybridStrategyForBackportSpecs()->calculateTargetWorkers($metrics, hybridZeroFloorConfig());
+
+    expect($target)->toBe(1);
+});

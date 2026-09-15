@@ -187,6 +187,27 @@ final class HybridStrategy implements ScalingStrategyContract
         // 3. COMBINE: Take maximum (most conservative)
         $targetWorkers = max($steadyStateWorkers, $backlogDrainWorkers);
 
+        // A queue whose only remaining work is reserved cannot recover alone.
+        //
+        // When a worker dies holding jobs it reserved but never finished, and
+        // the ready set is empty, the queue reports pending 0. Both
+        // calculations above are rate calculations over pending work, so both
+        // answer zero, and the queue scales to nothing. On the Redis driver
+        // expired reservations are migrated back to the ready set only inside
+        // a worker's pop(), which never runs once there are no workers — so
+        // pending stays zero forever and nothing ever asks for a worker again.
+        // The jobs are unrecoverable: they never threw, so they are not in
+        // failed_jobs, and any batch or workflow waiting on them never
+        // completes.
+        //
+        // Reserved only, deliberately. The equivalent guard on the 4.x line
+        // also covers pending work, but a queue holding pending work already
+        // asks for a worker here — widening this to match would be changing
+        // wake behaviour on a maintenance line, not fixing a stall.
+        if ($metrics->reserved > 0 && $activeWorkers === 0) {
+            $targetWorkers = max($targetWorkers, 1.0);
+        }
+
         // 4. UTILIZATION ADJUSTMENT: Use worker utilization as a real-time signal
         // Utilization rate from metrics tells us how busy current workers actually are,
         // providing ground truth that complements the algorithmic calculations.

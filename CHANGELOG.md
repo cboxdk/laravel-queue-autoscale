@@ -5,6 +5,22 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v3.11.2 - 2026-09-15
+
+Maintenance release for the 3.x line. Backport of the reserved-jobs half of v4.3.1.
+
+### Fixed
+
+- **Jobs a dead worker left reserved no longer strand a queue at zero workers.** When a worker died holding jobs it had reserved and the ready set was empty, the queue reported `pending = 0`. Both the rate and backlog calculations answer zero for that, so the queue scaled to nothing — and on the Redis driver expired reservations are migrated back to the ready set only inside a worker's `pop()`, which never runs with no workers. Pending stayed zero forever and nothing asked for a worker again. The jobs were unrecoverable: they never threw, so they never reached `failed_jobs`, and any batch or workflow waiting on them never completed. The strategy now asks for one worker when a queue has reserved jobs and no workers running.
+
+  Scoped to the reserved case only. The 4.x guard also covers pending work; a queue holding pending work already asks for a worker on this line, so widening to match would be changing wake behaviour rather than fixing a stall. `workers.max`, the capacity clamp and the failure fuse all still apply afterwards.
+
+- `ClusterStore::recentDecisions()` builds its rows with string keys instead of returning `json_decode()` output as-is, which no longer matched its declared return type under current larastan. No behavioural change — every payload this class writes is a JSON object.
+
+### Upgrading
+
+No configuration or API changes. Applications that can move to `^4.3` should prefer that: it carries this fix plus the equivalent one for delayed jobs that have come due, which needs a metrics-package field not available on this line.
+
 ## v3.11.0 - 2026-07-06
 
 ### OpenTelemetry integration via cboxdk/laravel-telemetry
