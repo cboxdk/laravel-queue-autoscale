@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A worker that dies during the spawn handshake no longer joins the pool without a PID.** `WorkerProcess` derived the PID itself from Symfony's `Process::getPid()`, which answers `null` once the child has been reaped — so a worker that exited between the spawner's liveness check and the constructor was pooled with no PID at all. The output buffer skips workers without one and so does the terminator, which means it could be neither drained nor signalled: it would linger until `--max-time` with its stderr unread. `WorkerSpawner` now passes the PID it already read at `start()`. The window is small — anything dying in the first 50 ms is caught by the existing fail-fast check, logged with its output, and never pooled — but nothing recovered a worker that fell through it.
 - `WorkerOutputBufferTest` no longer fails at random. It spawned a child that echoed and exited immediately, then asserted the `WorkerProcess` had captured a PID — but `WorkerProcess` captures it at construction from Symfony's `getPid()`, which returns `null` once the child is gone, so the assertion came down to whether `sh` finished before PHP reached the next line. The child now blocks on stdin until the `WorkerProcess` exists. Test-only; no library behaviour changed.
 
 ### Changed

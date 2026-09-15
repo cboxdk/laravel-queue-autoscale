@@ -197,3 +197,43 @@ it('truncates on a character boundary, not a byte boundary', function (): void {
 
     expect(mb_check_encoding($lines[101][0], 'UTF-8'))->toBeTrue();
 });
+
+/**
+ * WorkerSpawner reads the PID right after start() and checks liveness 50ms
+ * later; anything dying inside that window is logged and never pooled. A worker
+ * dying between that check and the constructor used to join the pool with no
+ * PID, because Symfony answers null for a reaped child — and a pooled worker
+ * with no PID is invisible to the output buffer and untouchable by the
+ * terminator, so it lingers until --max-time with its stderr unread.
+ */
+it('keeps the pid it was given even when the child is already reaped', function (): void {
+    $process = new Process(['sh', '-c', 'read -r _; echo "last words"; exit 1']);
+    $process->setInput($input = new InputStream);
+    $process->start();
+
+    // Read while the child is still blocked, which is what the spawner does.
+    $spawnPid = $process->getPid();
+    expect($spawnPid)->not->toBeNull();
+
+    $input->close();
+    $process->wait();
+    expect($process->getPid())->toBeNull();
+
+    $worker = new WorkerProcess($process, 'redis', 'default', now(), pid: $spawnPid);
+
+    expect($worker->pid())->toBe($spawnPid)
+        ->and($this->buffer->collectOutput([$worker]))->toBe([$spawnPid => ['last words']]);
+});
+
+it('falls back to reading the pid off a live process when none is given', function (): void {
+    $process = new Process(['sh', '-c', 'read -r _; exit 0']);
+    $process->setInput($input = new InputStream);
+    $process->start();
+
+    $worker = new WorkerProcess($process, 'redis', 'default', now());
+
+    expect($worker->pid())->toBe($process->getPid());
+
+    $input->close();
+    $process->wait();
+});
