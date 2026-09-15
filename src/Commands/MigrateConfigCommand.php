@@ -7,6 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Commands;
 use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
 use Cbox\LaravelQueueAutoscale\Pickup\SortBasedPercentileCalculator;
 use Cbox\LaravelQueueAutoscale\Scaling\Strategies\HybridStrategy;
+use Cbox\LaravelQueueAutoscale\Support\Coerce;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 
@@ -20,8 +21,13 @@ class MigrateConfigCommand extends Command
 
     public function handle(): int
     {
-        $source = $this->option('source') ?: config_path('queue-autoscale.php');
-        $destination = $this->option('destination') ?: config_path('queue-autoscale.v2.php');
+        // Coerced rather than guarded: Command::option() is declared mixed, and
+        // how much of that a static analyser narrows away varies by larastan
+        // version — a guard that reads as dead on one is load-bearing on the
+        // next. Coerce answers the same question without a branch, and the ?:
+        // keeps --source= with an empty value falling back to the default.
+        $source = Coerce::toString($this->option('source')) ?: config_path('queue-autoscale.php');
+        $destination = Coerce::toString($this->option('destination')) ?: config_path('queue-autoscale.v2.php');
 
         if (! File::exists($source)) {
             $this->error("Source file not found: {$source}");
