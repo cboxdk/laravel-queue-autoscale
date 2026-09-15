@@ -119,6 +119,7 @@ function createMetrics(array $overrides = []): QueueMetricsData
         'depth' => 0,
         'pending' => 0,
         'scheduled' => 0,
+        'delayed_due_now' => 0,
         'reserved' => 0,
         'oldest_job_age' => 0,
         'age_status' => 'normal',

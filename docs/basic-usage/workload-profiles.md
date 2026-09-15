@@ -265,6 +265,25 @@ clamp; an unnamed queue has no floor to override it with. On a host already at
 capacity, a discovered queue with a backlog therefore gets zero workers where it
 previously got one. Name the queue if you want it served regardless.
 
+### Work that arrives while the queue is at zero
+
+A queue at zero is woken by anything outstanding on it, not only by newly
+dispatched jobs. That includes two cases that are invisible in a plain pending
+count:
+
+- **Jobs a dead worker left reserved.** A worker that is SIGKILLed mid-job — by
+  the shutdown deadline, an OOM killer, or the host going away — leaves its job
+  reserved. Nothing releases it back to the ready set until a worker polls the
+  queue again.
+- **Delayed jobs that have come due.** `Bus::dispatch(...)->delay(...)` and
+  anything else scheduled ahead are held in a separate set and moved across only
+  when a worker polls.
+
+The autoscaler counts both as outstanding work, so the queue gets a worker and
+that worker performs the migration on its first poll. A delayed job that is
+*not* yet due is not outstanding work and does not hold a worker — a queue whose
+only content is a job scheduled for tomorrow correctly stays at zero until then.
+
 ### When to use
 
 Scale-to-zero is appropriate for queues with **sporadic or unpredictable traffic** where it is acceptable that jobs are not processed immediately. Examples:

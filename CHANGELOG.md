@@ -5,6 +5,16 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **A delayed job that comes due on a queue sitting at zero workers now gets one.** Laravel moves a due delayed job into the ready set inside a worker's `pop()`, so with no worker running nothing performs that migration: the job reads as neither pending nor reserved, the idle-queue safety valve saw no outstanding work, and the queue stayed at zero. The job never ran, never failed, and never appeared in `failed_jobs` — anything waiting on it waited forever. The valve now also counts delayed jobs that have come due, using the `delayed_due_now` count added in `cboxdk/laravel-queue-metrics` v3.4.0. It deliberately does not use the full delayed count, which includes work due hours from now and would hold an idle worker on every queue that schedules ahead. The existing `activeWorkers === 0` guard still gates the valve, and `workers.max`, the capacity clamp and the failure fuse all still apply afterwards. Affects the Redis driver; on the database driver a due job is already counted as pending, so it was never stranded.
+
+### Changed
+
+- `cboxdk/laravel-queue-metrics` is now required at `^3.4` (was `^3.3`) for the `delayed_due_now` queue-depth field.
+
 ## v4.3.0 - 2026-09-08
 
 ### Added

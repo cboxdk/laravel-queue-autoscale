@@ -30,6 +30,7 @@ class QueueMetricsFactory
             'depth' => 0,
             'pending' => 0,
             'scheduled' => 0,
+            'delayedDueNow' => 0,
             'reserved' => 0,
             'oldestJobAge' => 0,
             'ageStatus' => 'healthy',
@@ -73,6 +74,7 @@ class QueueMetricsFactory
                 utilizationRate: self::float($data['utilizationRate']),
             ),
             calculatedAt: $data['calculatedAt'] instanceof Carbon ? $data['calculatedAt'] : Carbon::now(),
+            delayedDueNow: self::int($data['delayedDueNow']),
         );
     }
 

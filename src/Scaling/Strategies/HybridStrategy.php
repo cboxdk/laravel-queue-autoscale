@@ -212,14 +212,18 @@ class HybridStrategy implements ScalingStrategyContract
         // spare, a queue capped at zero, and a queue whose jobs are failing
         // each still resolve to no workers.
         //
-        // "Holding work" also covers jobs a since-dead worker left reserved.
-        // On the Redis driver expired reservations are migrated back to the
+        // "Holding work" also covers jobs a since-dead worker left reserved,
+        // and delayed jobs that have come due. Both are migrated back to the
         // ready set only inside a worker's pop(), so at zero workers nothing
         // recovers them: the queue reports pending 0, requests no worker, and
-        // stalls forever. Counting reserved here keeps one worker to migrate
-        // and drain them. The activeWorkers === 0 guard means this never forces
-        // an extra worker onto a queue that is already draining its reservations.
-        $outstandingWork = $backlogSize + $metrics->reserved;
+        // stalls forever. Counting them here keeps one worker to migrate and
+        // drain them. The activeWorkers === 0 guard means this never forces an
+        // extra worker onto a queue that is already draining them.
+        //
+        // delayedDueNow, not scheduled: the full delayed count includes work
+        // due in six hours, and holding a worker for that would be a permanent
+        // idle process on every queue that schedules anything ahead.
+        $outstandingWork = $backlogSize + $metrics->reserved + $metrics->delayedDueNow;
 
         if ($outstandingWork > 0 && $metrics->activeWorkers === 0) {
             $targetWorkers = max($targetWorkers, 1.0);
@@ -253,6 +257,7 @@ class HybridStrategy implements ScalingStrategyContract
             'avg_job_time_source' => $jobTimeSource,
             'arrival_rate_source' => $this->arrivalRateSource,
             'backlog' => $backlogSize,
+            'delayed_due_now' => $metrics->delayedDueNow,
             'failure_rate' => $failureRate,
             'utilization_rate' => $utilizationRate,
             'utilization_adjustment' => $utilizationAdjustment,
