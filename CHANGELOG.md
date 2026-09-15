@@ -5,21 +5,21 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v4.3.1 - 2026-09-15
 
 ### Fixed
 
-- **A delayed job that comes due on a queue sitting at zero workers now gets one.** Laravel moves a due delayed job into the ready set inside a worker's `pop()`, so with no worker running nothing performs that migration: the job reads as neither pending nor reserved, the idle-queue safety valve saw no outstanding work, and the queue stayed at zero. The job never ran, never failed, and never appeared in `failed_jobs` — anything waiting on it waited forever. The valve now also counts delayed jobs that have come due, using the `delayed_due_now` count added in `cboxdk/laravel-queue-metrics` v3.4.0. It deliberately does not use the full delayed count, which includes work due hours from now and would hold an idle worker on every queue that schedules ahead. The existing `activeWorkers === 0` guard still gates the valve, and `workers.max`, the capacity clamp and the failure fuse all still apply afterwards. Affects the Redis driver; on the database driver a due job is already counted as pending, so it was never stranded.
-
-### Fixed
-
+- **Jobs a dead worker left reserved no longer strand a queue at zero workers.** The idle-queue safety valve sized outstanding work from ready jobs only. When a worker died holding jobs it had reserved and the ready set was empty, the queue reported `pending = 0`, the valve requested no worker, and the queue scaled to zero — while on the Redis driver expired reservations are migrated back to the ready set only inside a worker's `pop()`, which never runs with no workers. The jobs were then unrecoverable: they never threw, never reached `failed_jobs`, and any batch or workflow waiting on them never completed. The valve now counts reserved jobs too. Thanks to @Orrison for the diagnosis and the fix.
+- **A delayed job that comes due on a queue sitting at zero workers now gets one.** The same stall, one job state over: Laravel moves a due delayed job into the ready set inside a worker's `pop()`, so with no worker running nothing performs that migration and the job reads as neither pending nor reserved. The valve now also counts delayed jobs that have come due, using the `delayed_due_now` count added in `cboxdk/laravel-queue-metrics` v3.4.0. It deliberately does not use the full delayed count, which includes work due hours from now and would hold an idle worker on every queue that schedules ahead. Affects the Redis driver; on the database driver a due job is already counted as pending, so it was never stranded.
 - **A worker that dies during the spawn handshake no longer joins the pool without a PID.** `WorkerProcess` derived the PID itself from Symfony's `Process::getPid()`, which answers `null` once the child has been reaped — so a worker that exited between the spawner's liveness check and the constructor was pooled with no PID at all. The output buffer skips workers without one and so does the terminator, which means it could be neither drained nor signalled: it would linger until `--max-time` with its stderr unread. `WorkerSpawner` now passes the PID it already read at `start()`. The window is small — anything dying in the first 50 ms is caught by the existing fail-fast check, logged with its output, and never pooled — but nothing recovered a worker that fell through it.
-- `WorkerOutputBufferTest` no longer fails at random. It spawned a child that echoed and exited immediately, then asserted the `WorkerProcess` had captured a PID — but `WorkerProcess` captures it at construction from Symfony's `getPid()`, which returns `null` once the child is gone, so the assertion came down to whether `sh` finished before PHP reached the next line. The child now blocks on stdin until the `WorkerProcess` exists. Test-only; no library behaviour changed.
+
+For both valve fixes the existing `activeWorkers === 0` guard still gates it, and `workers.max`, the capacity clamp and the failure fuse all still apply afterwards, so a host with no spare capacity, a queue capped at zero, or a queue whose jobs are failing still resolves to no workers.
 
 ### Changed
 
 - `cboxdk/laravel-queue-metrics` is now required at `^3.4` (was `^3.3`) for the `delayed_due_now` queue-depth field.
 - `InteractsWithAutoscaling::tripFuseFor()` no longer resolves the fuse's window store out of the container to ask whether a spec had already faked it; it remembers what it installed instead. Static analysis resolves that binding to the default concrete store and cannot see `fakeFailureWindows()` swapping it, so the check read as permanently dead. Behaviour is unchanged — a store the spec installed is still reused rather than replaced — and that now has its own tests. `MigrateConfigCommand` reads its `--source` and `--destination` options through `Coerce::toString()` instead of validating them after the fact, which answers the same question without a branch whose reachability depends on the larastan version.
+- `WorkerOutputBufferTest` no longer fails at random: it raced its own fixture, asserting a PID had been captured from a child that could already be gone. Test-only; no library behaviour changed.
 
 ## v4.3.0 - 2026-09-08
 
