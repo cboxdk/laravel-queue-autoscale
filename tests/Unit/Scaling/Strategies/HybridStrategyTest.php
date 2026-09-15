@@ -140,3 +140,65 @@ test('clamps target to workers.min', function (): void {
 
     expect($target)->toBeGreaterThanOrEqual($config->workers->min);
 });
+
+function hybridZeroFloorConfig(): QueueConfiguration
+{
+    config([
+        'queue-autoscale.sla_defaults' => BalancedProfile::class,
+        'queue-autoscale.queues' => ['default' => ['workers' => ['min' => 0, 'max' => 10]]],
+    ]);
+
+    return QueueConfiguration::fromConfig('redis', 'default');
+}
+
+test('requests a worker for reserved jobs orphaned at zero workers', function (): void {
+    $strategy = new HybridStrategy(
+        littles: new LittlesLawCalculator,
+        backlog: new BacklogDrainCalculator,
+        arrivalEstimator: new ArrivalRateEstimator,
+        spawnTracker: hybridFakeSpawnTracker(0.5),
+        pickupStore: hybridFakePickupStore([]),
+        percentileCalc: new SortBasedPercentileCalculator,
+    );
+
+    $config = hybridZeroFloorConfig();
+    $metrics = createMetrics([
+        'pending' => 0,
+        'reserved' => 1,
+        'active_workers' => 0,
+        'throughput_per_minute' => 0.0,
+        'avg_duration' => 0.0,
+        'failure_rate' => 0.0,
+        'utilization_rate' => 0.0,
+    ]);
+
+    $target = $strategy->calculateTargetWorkers($metrics, $config);
+
+    expect($target)->toBeGreaterThanOrEqual(1);
+});
+
+test('does not force a worker when reserved jobs are already draining', function (): void {
+    $strategy = new HybridStrategy(
+        littles: new LittlesLawCalculator,
+        backlog: new BacklogDrainCalculator,
+        arrivalEstimator: new ArrivalRateEstimator,
+        spawnTracker: hybridFakeSpawnTracker(0.5),
+        pickupStore: hybridFakePickupStore([]),
+        percentileCalc: new SortBasedPercentileCalculator,
+    );
+
+    $config = hybridZeroFloorConfig();
+    $metrics = createMetrics([
+        'pending' => 0,
+        'reserved' => 5,
+        'active_workers' => 2,
+        'throughput_per_minute' => 0.0,
+        'avg_duration' => 0.0,
+        'failure_rate' => 0.0,
+        'utilization_rate' => 10.0,
+    ]);
+
+    $target = $strategy->calculateTargetWorkers($metrics, $config);
+
+    expect($target)->toBe(0);
+});

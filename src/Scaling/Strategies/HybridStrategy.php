@@ -211,7 +211,17 @@ class HybridStrategy implements ScalingStrategyContract
         // the failure fuse all still apply afterwards, so a host with nothing
         // spare, a queue capped at zero, and a queue whose jobs are failing
         // each still resolve to no workers.
-        if ($backlogSize > 0 && $metrics->activeWorkers === 0) {
+        //
+        // "Holding work" also covers jobs a since-dead worker left reserved.
+        // On the Redis driver expired reservations are migrated back to the
+        // ready set only inside a worker's pop(), so at zero workers nothing
+        // recovers them: the queue reports pending 0, requests no worker, and
+        // stalls forever. Counting reserved here keeps one worker to migrate
+        // and drain them. The activeWorkers === 0 guard means this never forces
+        // an extra worker onto a queue that is already draining its reservations.
+        $outstandingWork = $backlogSize + $metrics->reserved;
+
+        if ($outstandingWork > 0 && $metrics->activeWorkers === 0) {
             $targetWorkers = max($targetWorkers, 1.0);
         }
 
