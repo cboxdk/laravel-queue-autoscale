@@ -202,3 +202,59 @@ test('does not force a worker when reserved jobs are already draining', function
 
     expect($target)->toBe(0);
 });
+
+test('requests a worker for a delayed job that has come due at zero workers', function (): void {
+    $strategy = new HybridStrategy(
+        littles: new LittlesLawCalculator,
+        backlog: new BacklogDrainCalculator,
+        arrivalEstimator: new ArrivalRateEstimator,
+        spawnTracker: hybridFakeSpawnTracker(0.5),
+        pickupStore: hybridFakePickupStore([]),
+        percentileCalc: new SortBasedPercentileCalculator,
+    );
+
+    $config = hybridZeroFloorConfig();
+    $metrics = createMetrics([
+        'pending' => 0,
+        'reserved' => 0,
+        'scheduled' => 1,
+        'delayed_due_now' => 1,
+        'active_workers' => 0,
+        'throughput_per_minute' => 0.0,
+        'avg_duration' => 0.0,
+        'failure_rate' => 0.0,
+        'utilization_rate' => 0.0,
+    ]);
+
+    $target = $strategy->calculateTargetWorkers($metrics, $config);
+
+    expect($target)->toBe(1);
+});
+
+test('holds at zero for delayed jobs that are not due yet', function (): void {
+    $strategy = new HybridStrategy(
+        littles: new LittlesLawCalculator,
+        backlog: new BacklogDrainCalculator,
+        arrivalEstimator: new ArrivalRateEstimator,
+        spawnTracker: hybridFakeSpawnTracker(0.5),
+        pickupStore: hybridFakePickupStore([]),
+        percentileCalc: new SortBasedPercentileCalculator,
+    );
+
+    $config = hybridZeroFloorConfig();
+    $metrics = createMetrics([
+        'pending' => 0,
+        'reserved' => 0,
+        'scheduled' => 25,
+        'delayed_due_now' => 0,
+        'active_workers' => 0,
+        'throughput_per_minute' => 0.0,
+        'avg_duration' => 0.0,
+        'failure_rate' => 0.0,
+        'utilization_rate' => 0.0,
+    ]);
+
+    $target = $strategy->calculateTargetWorkers($metrics, $config);
+
+    expect($target)->toBe(0);
+});

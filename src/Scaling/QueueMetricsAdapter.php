@@ -48,6 +48,7 @@ class QueueMetricsAdapter
                 'total' => $total,
                 'pending' => $depth->pendingJobs,
                 'scheduled' => $depth->delayedJobs,
+                'delayed_due_now' => $depth->delayedDueNowJobs,
                 'reserved' => $depth->reservedJobs,
                 'oldest_job_age_seconds' => $oldestJobAgeSeconds,
                 'oldest_job_age_status' => $queueMetrics->ageStatus,
@@ -99,6 +100,7 @@ class QueueMetricsAdapter
         $pending = is_array($depthData) ? Coerce::toInt($depthData['pending'] ?? 0) : 0;
         $scheduled = is_array($depthData) ? Coerce::toInt($depthData['scheduled'] ?? 0) : 0;
         $reserved = is_array($depthData) ? Coerce::toInt($depthData['reserved'] ?? 0) : 0;
+        $delayedDueNow = is_array($depthData) ? Coerce::toInt($depthData['delayed_due_now'] ?? 0) : 0;
         $oldestJobAge = is_array($depthData) ? Coerce::toInt($depthData['oldest_job_age_seconds'] ?? 0) : 0;
 
         // Extract nested performance data
@@ -124,6 +126,7 @@ class QueueMetricsAdapter
             'depth' => $depth,
             'pending' => $pending,
             'scheduled' => $scheduled,
+            'delayed_due_now' => $delayedDueNow,
             'reserved' => $reserved,
             'oldest_job_age' => $oldestJobAge,
             'age_status' => Coerce::toString($depthData['oldest_job_age_status'] ?? null, 'normal'),
@@ -141,7 +144,8 @@ class QueueMetricsAdapter
     /**
      * Aggregate a group's member queues into one synthetic workload.
      *
-     * - depth fields: SUM across members
+     * - depth fields: SUM across members (delayedDueNow included — one group
+     *   pool polls every member queue, so due work on any of them needs it)
      * - oldestJobAge: MAX (the group's SLA is breached by its worst queue)
      * - throughput: SUM
      * - avgDuration: throughput-weighted mean, falling back to a plain mean
@@ -155,6 +159,7 @@ class QueueMetricsAdapter
     {
         $pending = 0;
         $scheduled = 0;
+        $delayedDueNow = 0;
         $reserved = 0;
         $oldestJobAge = 0;
         $throughput = 0.0;
@@ -177,6 +182,7 @@ class QueueMetricsAdapter
 
             $pending += $m->pending;
             $scheduled += $m->scheduled;
+            $delayedDueNow += $m->delayedDueNow;
             $reserved += $m->reserved;
             $oldestJobAge = max($oldestJobAge, $m->oldestJobAge);
             $throughput += $m->throughputPerMinute;
@@ -216,6 +222,7 @@ class QueueMetricsAdapter
             'depth' => $depth,
             'pending' => $pending,
             'scheduled' => $scheduled,
+            'delayed_due_now' => $delayedDueNow,
             'reserved' => $reserved,
             'oldest_job_age' => $oldestJobAge,
             'age_status' => $ageStatus,

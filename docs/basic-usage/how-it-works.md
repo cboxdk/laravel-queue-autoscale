@@ -314,7 +314,7 @@ Profiles with `workers.min = 0` (`BurstyProfile`, `BackgroundProfile`) can scale
 Scale-from-zero timeline:
 ├─ Job dispatched to empty queue
 ├─ Wait for next evaluation cycle (up to evaluation_interval: 5s)
-├─ Autoscaler detects pending job
+├─ Autoscaler detects outstanding work
 ├─ Spawn worker process (1-2s startup)
 ├─ Worker enters poll loop
 ├─ Worker picks up job (up to sleep_seconds: 3s)

@@ -33,7 +33,7 @@ These are installed automatically via Composer:
 
 | Package | Version | Purpose |
 |---|---|---|
-| `cboxdk/laravel-queue-metrics` | ^3.0 | Queue discovery and metrics collection |
+| `cboxdk/laravel-queue-metrics` | ^3.4 | Queue discovery and metrics collection |
 | `cboxdk/system-metrics` | ^3.0 (via queue-metrics) | CPU and memory monitoring for resource-aware scaling |
 | `symfony/process` | ^7.0 \| ^8.0 | Worker process spawning and management |
 | `spatie/laravel-package-tools` | ^1.16 | Service provider conventions |

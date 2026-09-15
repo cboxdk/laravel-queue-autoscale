@@ -1,7 +1,7 @@
 {
     "bomFormat": "CycloneDX",
     "specVersion": "1.5",
-    "serialNumber": "urn:uuid:3614319c-22bd-5258-a2e2-7b90c3fc6e6b",
+    "serialNumber": "urn:uuid:c8f7ad5a-ce68-5be7-993a-beca8547e594",
     "version": 1,
     "metadata": {
         "tools": [
@@ -184,9 +184,9 @@
         },
         {
             "type": "library",
-            "bom-ref": "pkg:composer/cboxdk/laravel-queue-metrics@v3.3.3",
+            "bom-ref": "pkg:composer/cboxdk/laravel-queue-metrics@v3.4.0",
             "name": "cboxdk/laravel-queue-metrics",
-            "version": "v3.3.3",
+            "version": "v3.4.0",
             "description": "Production-ready Laravel queue monitoring with metrics, analytics, and insights",
             "licenses": [
                 {
@@ -195,7 +195,7 @@
                     }
                 }
             ],
-            "purl": "pkg:composer/cboxdk/laravel-queue-metrics@v3.3.3",
+            "purl": "pkg:composer/cboxdk/laravel-queue-metrics@v3.4.0",
             "externalReferences": [
                 {
                     "type": "vcs",
@@ -203,7 +203,7 @@
                 },
                 {
                     "type": "distribution",
-                    "url": "https://api.github.com/repos/cboxdk/laravel-queue-metrics/zipball/13292f72f9f72ab4e0a89a47b900bc96830798bf"
+                    "url": "https://api.github.com/repos/cboxdk/laravel-queue-metrics/zipball/3bb0a646776a1e2c1c67e52625c9b901c8163638"
                 }
             ],
             "properties": [

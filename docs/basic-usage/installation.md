@@ -19,7 +19,7 @@ From the package's `composer.json`:
 | `ext-posix` | required — worker liveness checks and termination |
 | `ext-mbstring` | required — character-boundary truncation of worker output |
 | `illuminate/contracts` | `^12.0 \|\| ^13.0` |
-| `cboxdk/laravel-queue-metrics` | `^3.0` |
+| `cboxdk/laravel-queue-metrics` | `^3.4` |
 | `symfony/process` | `^7.0 \|\| ^8.0` |
 | `spatie/laravel-package-tools` | `^1.16` |
 
