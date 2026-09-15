@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Cbox\LaravelQueueAutoscale\Cluster\ClusterManagerState;
 use Cbox\LaravelQueueAutoscale\Configuration\Profiles\ConnectionLimitedProfile;
 use Cbox\LaravelQueueAutoscale\Contracts\ClusterStoreContract;
+use Cbox\LaravelQueueAutoscale\Testing\InMemoryFailureWindowStore;
 use Cbox\LaravelQueueAutoscale\Testing\InteractsWithAutoscaling;
 use Cbox\LaravelQueueAutoscale\Testing\QueueMetricsFactory;
 
@@ -70,6 +71,26 @@ test('the fuse can be tripped without waiting for real failures', function (): v
     $this->tripFuseFor('payments');
 
     expect($this->workersDemandedFor($behind))->toBe(0);
+});
+
+test('tripping the fuse keeps the window store a spec already installed', function (): void {
+    config()->set('queue-autoscale.queues', [
+        'payments' => ['profile' => ConnectionLimitedProfile::class, 'workers' => ['min' => 0, 'max' => 8]],
+    ]);
+
+    $installed = $this->fakeFailureWindows();
+
+    // A spec that seeds its own window and then trips the fuse must still be
+    // holding the store it seeded, not a replacement that dropped that state.
+    expect($this->tripFuseFor('payments'))->toBe($installed);
+});
+
+test('tripping the fuse installs a window store when a spec has not', function (): void {
+    config()->set('queue-autoscale.queues', [
+        'payments' => ['profile' => ConnectionLimitedProfile::class, 'workers' => ['min' => 0, 'max' => 8]],
+    ]);
+
+    expect($this->tripFuseFor('payments'))->toBeInstanceOf(InMemoryFailureWindowStore::class);
 });
 
 test('cluster state can be assembled without redis', function (): void {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Workers\WorkerOutputBuffer;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerProcess;
+use Symfony\Component\Process\InputStream;
 use Symfony\Component\Process\Process;
 
 /**
@@ -89,15 +90,22 @@ it('still drains a worker that has already exited', function (): void {
     // A real Process, not a mock: Symfony's getPid() returns null once the child
     // exits, so a mocked pid() could never actually exercise this path. The PID is
     // captured at spawn, so the buffer can still read the dying worker's output.
-    $process = new Process(['sh', '-c', 'echo "last words"; echo "PHP Fatal error: Allowed memory size exhausted" >&2; exit 1']);
+    //
+    // The child blocks on stdin until the WorkerProcess exists. Without that it
+    // races the constructor — sh can finish three echoes before PHP reaches the
+    // next line, and a child that is already gone reports no PID to capture, so
+    // the test failed on whether the machine happened to be busy.
+    $process = new Process(['sh', '-c', 'read -r _; echo "last words"; echo "PHP Fatal error: Allowed memory size exhausted" >&2; exit 1']);
+    $process->setInput($input = new InputStream);
     $process->start();
     $worker = new WorkerProcess($process, 'redis', 'default', now());
 
-    $process->wait();
-    expect($process->isRunning())->toBeFalse();
-
     $pid = $worker->pid();
     expect($pid)->not->toBeNull();
+
+    $input->close();
+    $process->wait();
+    expect($process->isRunning())->toBeFalse();
 
     expect($this->buffer->collectOutput([$worker]))->toBe([$pid => ['last words']])
         ->and($this->buffer->collectErrorOutput([$worker]))
