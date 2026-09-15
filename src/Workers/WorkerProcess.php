@@ -28,6 +28,11 @@ class WorkerProcess
      * @param  string  $queue  For per-queue workers this is the queue name; for group workers it is the
      *                         comma-separated queue list exactly as passed to `queue:work --queue=`.
      * @param  string|null  $group  Name of the group this worker belongs to, or null for per-queue workers.
+     * @param  int|null  $pid  The PID read at spawn, when the caller already has it. Symfony's
+     *                         getPid() answers null for a child that has been reaped, so deriving
+     *                         it here instead loses the PID of a worker that died between the
+     *                         spawner's liveness check and this constructor — and a pooled worker
+     *                         with no PID can never be drained, signalled or reaped.
      */
     public function __construct(
         public readonly Process $process,
@@ -35,8 +40,9 @@ class WorkerProcess
         public readonly string $queue,
         public readonly Carbon $spawnedAt,
         public readonly ?string $group = null,
+        ?int $pid = null,
     ) {
-        $this->pid = $process->getPid();
+        $this->pid = $pid ?? $process->getPid();
     }
 
     public function pid(): ?int

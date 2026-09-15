@@ -145,12 +145,20 @@ readonly class WorkerSpawner
                     continue;
                 }
 
+                // The PID read right after start(), not re-derived here: the
+                // liveness check above is the last moment this process is known
+                // to be alive, and getPid() answers null once the child is
+                // reaped. A worker that dies in between would otherwise join
+                // the pool with no PID, which makes it undrainable by the
+                // output buffer and unsignallable by the terminator — it would
+                // linger until --max-time with nothing able to touch it.
                 $worker = new WorkerProcess(
                     process: $process,
                     connection: $connection,
                     queue: $queue,
                     spawnedAt: now(),
                     group: $group,
+                    pid: $pid,
                 );
 
                 $workers->push($worker);
