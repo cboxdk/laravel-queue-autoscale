@@ -258,9 +258,23 @@ LUA;
                 continue;
             }
 
-            if (is_array($decoded)) {
-                $decisions[] = $decoded;
+            if (! is_array($decoded)) {
+                continue;
             }
+
+            // Rebuilt rather than appended as decoded: json_decode() answers
+            // array<mixed, mixed>, and the declared shape here is the one
+            // consumers index into by name. Every payload this class writes is
+            // a JSON object, so keeping only string keys drops nothing real.
+            $decision = [];
+
+            foreach ($decoded as $key => $value) {
+                if (is_string($key)) {
+                    $decision[$key] = $value;
+                }
+            }
+
+            $decisions[] = $decision;
         }
 
         return $decisions;
