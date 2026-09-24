@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Carbon\CarbonImmutable;
 use Cbox\LaravelQueueAutoscale\Configuration\SpawnCompensationConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\WorkerConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\SpawnLatencyTrackerContract;
 use Cbox\LaravelQueueAutoscale\Scaling\WorkloadStateTracker;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerProcess;
@@ -19,7 +20,17 @@ beforeEach(fn () => Date::use(CarbonImmutable::class));
 afterEach(fn () => Date::useDefault());
 
 test('spawns workers', function (): void {
-    $workers = (new WorkerSpawner(app(SpawnLatencyTrackerContract::class)))
+    // A long-lived stand-in for queue:work, so the spawn does not depend on the
+    // test host being able to boot a real worker.
+    $spawner = new readonly class(app(SpawnLatencyTrackerContract::class)) extends WorkerSpawner
+    {
+        public function buildCommand(string $connection, string $queue, WorkerConfiguration $workerConfig): array
+        {
+            return ['sleep', '5'];
+        }
+    };
+
+    $workers = $spawner
         ->spawn('redis', 'default', 1, new SpawnCompensationConfiguration(
             enabled: false,
             fallbackSeconds: 2.0,
