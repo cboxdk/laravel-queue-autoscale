@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Cluster;
 
-use Illuminate\Support\Carbon;
+use Carbon\CarbonInterface;
 
 /**
  * Damps scaling direction reversals on the cluster-wide target, mirroring the
@@ -48,7 +48,7 @@ use Illuminate\Support\Carbon;
  */
 class ClusterCooldown
 {
-    /** @var array<string, Carbon> */
+    /** @var array<string, CarbonInterface> */
     private array $lastScaleTime = [];
 
     /** @var array<string, string> */
