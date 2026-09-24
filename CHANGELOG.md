@@ -5,6 +5,16 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v4.3.3 - 2026-09-24
+
+### Fixed
+
+- **`queue:autoscale` no longer crashes when the host app uses immutable dates.** Apps that call `Date::use(CarbonImmutable::class)` get a `CarbonImmutable` from `now()`, but the manager passed `now()` into timestamps typed as mutable `Illuminate\Support\Carbon`. The first worker spawn threw `TypeError: WorkerProcess::__construct(): Argument #4 ($spawnedAt) must be of type Illuminate\Support\Carbon, Carbon\CarbonImmutable given`, so no worker ever started. Termination and workload-state cleanup had the same problem. `WorkerProcess` and `WorkloadStateTracker` now take `CarbonInterface`, so both mutable and immutable dates work. (#73)
+
+### Upgrading
+
+No configuration changes. Passing a `Carbon` still works. `WorkerProcess::$spawnedAt` now reads as `CarbonInterface`. A subclass of `WorkerProcess` that overrides `markTerminationRequested()` or `terminationDeadlinePassed()` with `Carbon` parameters has to widen them. Restart every `queue:autoscale` after upgrading.
+
 ## v4.3.2 - 2026-09-24
 
 ### Fixed
@@ -579,6 +589,7 @@ treat it as a list of queues
 
 
 
+
 ```
 For a group the comma is now the separator and each member is validated on its
 own. An injected option inside a member is still caught.
@@ -1009,6 +1020,7 @@ The autoscale manager exits gracefully for a supervised restart when Laravel's n
   
   
   
+  
   ```
 - **`ResourceEstimate` value object** — Carries CPU/memory estimates with per-dimension source metadata (`measured`, `config`, `default`) and sample counts, enabling downstream consumers to inspect provenance.
 - **`EstimateSource` enum** — `Measured`, `Config`, `Default` — tracks where each dimension of a resource estimate originated.
@@ -1325,6 +1337,7 @@ composer require php-tui/php-tui --dev
 
 
 
+
 ```
 ### Usage
 
@@ -1337,6 +1350,7 @@ php artisan queue:autoscale:debug
 
 # Dispatch test jobs
 php artisan queue:autoscale:test --jobs=10 --queue=default
+
 
 
 
@@ -1379,6 +1393,7 @@ First stable release of Queue Autoscale for Laravel with intelligent, predictive
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
+
 
 
 
