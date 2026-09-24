@@ -65,6 +65,28 @@ readonly class AutoscaleConfiguration
         return is_string($host) && $host !== '' ? $host : 'unknown-host';
     }
 
+    /**
+     * The connection a queue or group runs on when its entry names none: the
+     * application's own default queue connection (`queue.default`), which is
+     * what Laravel dispatches to and what `queue:work` with no connection
+     * argument polls.
+     *
+     * Not the literal name 'default', which this used to be. Laravel ships no
+     * connection called that, so an entry without 'connection' spawned
+     * workers that exited on start ("The [default] queue connection has not
+     * been configured"), one after another, every cycle.
+     *
+     * An application with no `queue.default` at all still gets 'default': it
+     * names nothing to run, and the manager refuses a workload on a
+     * connection that is not configured, with a warning that says which.
+     */
+    public static function defaultConnection(): string
+    {
+        $connection = config('queue.default');
+
+        return is_string($connection) && $connection !== '' ? $connection : 'default';
+    }
+
     public static function clusterAppId(): string
     {
         $appName = self::stringConfig('app.name', 'laravel');
@@ -479,8 +501,8 @@ readonly class AutoscaleConfiguration
             }
 
             $connection = is_array($config) && isset($config['connection'])
-                ? self::stringValue($config['connection'], 'default')
-                : 'default';
+                ? self::stringValue($config['connection'], self::defaultConnection())
+                : self::defaultConnection();
 
             $result["{$connection}:{$queueName}"] = [
                 'connection' => $connection,

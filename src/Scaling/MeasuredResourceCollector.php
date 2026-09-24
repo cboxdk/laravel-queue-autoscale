@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Scaling;
 
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\DTOs\MeasuredResourceSample;
 use Cbox\LaravelQueueAutoscale\Support\Coerce;
 use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
@@ -78,7 +79,7 @@ class MeasuredResourceCollector
                 continue;
             }
 
-            $connection = Coerce::toString($jobData['connection'] ?? null, 'default');
+            $connection = Coerce::toString($jobData['connection'] ?? null, AutoscaleConfiguration::defaultConnection());
             $queue = Coerce::toString($jobData['queue'] ?? null, 'default');
             $key = "{$connection}:{$queue}";
 

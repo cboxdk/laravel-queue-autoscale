@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
+use Cbox\LaravelQueueAutoscale\Configuration\Profiles\BalancedProfile;
 
 test('returns configured queues keyed by connection:queue', function (): void {
     config(['queue-autoscale.queues' => [
@@ -83,4 +84,25 @@ it('returns empty array when queue is not configured at all', function (): void 
     $resources = AutoscaleConfiguration::queueResources('nonexistent');
 
     expect($resources)->toBe([]);
+});
+
+test('runs a queue that names no connection on the application\'s default queue connection', function (): void {
+    config()->set('queue.default', 'redis');
+    config(['queue-autoscale.queues' => [
+        'mail' => ['sla' => ['target_seconds' => 30]],
+        'dispatch' => BalancedProfile::class,
+        'reports' => ['connection' => 'database'],
+    ]]);
+
+    expect(AutoscaleConfiguration::configuredQueues())->toBe([
+        'redis:mail' => ['connection' => 'redis', 'queue' => 'mail'],
+        'redis:dispatch' => ['connection' => 'redis', 'queue' => 'dispatch'],
+        'database:reports' => ['connection' => 'database', 'queue' => 'reports'],
+    ]);
+});
+
+test('names no real connection when the application has no default queue connection either', function (): void {
+    config()->set('queue.default', null);
+
+    expect(AutoscaleConfiguration::defaultConnection())->toBe('default');
 });

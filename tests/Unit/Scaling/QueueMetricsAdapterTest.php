@@ -69,3 +69,11 @@ test('a group sums the due delayed count across its member queues', function ():
     expect($aggregated->delayedDueNow)->toBe(3)
         ->and($aggregated->scheduled)->toBe(7);
 });
+
+test('metrics that do not say their connection are read as the application\'s default queue connection', function (): void {
+    config()->set('queue.default', 'redis');
+    $payload = adapterDepthPayload(0);
+    unset($payload['connection']);
+
+    expect(QueueMetricsData::fromArray((new QueueMetricsAdapter)->mapFields($payload))->connection)->toBe('redis');
+});
