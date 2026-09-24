@@ -4,14 +4,14 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Workers;
 
-use Illuminate\Support\Carbon;
+use Carbon\CarbonInterface;
 use Symfony\Component\Process\Process;
 
 class WorkerProcess
 {
-    private ?Carbon $terminationRequestedAt = null;
+    private ?CarbonInterface $terminationRequestedAt = null;
 
-    private ?Carbon $terminationDeadline = null;
+    private ?CarbonInterface $terminationDeadline = null;
 
     /**
      * The OS PID, captured at spawn while the process is running.
@@ -38,7 +38,7 @@ class WorkerProcess
         public readonly Process $process,
         public readonly string $connection,
         public readonly string $queue,
-        public readonly Carbon $spawnedAt,
+        public readonly CarbonInterface $spawnedAt,
         public readonly ?string $group = null,
         ?int $pid = null,
     ) {
@@ -83,13 +83,13 @@ class WorkerProcess
         return $this->terminationRequestedAt !== null;
     }
 
-    public function markTerminationRequested(Carbon $requestedAt, int $timeoutSeconds): void
+    public function markTerminationRequested(CarbonInterface $requestedAt, int $timeoutSeconds): void
     {
         $this->terminationRequestedAt = $requestedAt;
         $this->terminationDeadline = $requestedAt->copy()->addSeconds(max($timeoutSeconds, 0));
     }
 
-    public function terminationDeadlinePassed(Carbon $now): bool
+    public function terminationDeadlinePassed(CarbonInterface $now): bool
     {
         return $this->terminationDeadline !== null && $now->greaterThanOrEqualTo($this->terminationDeadline);
     }

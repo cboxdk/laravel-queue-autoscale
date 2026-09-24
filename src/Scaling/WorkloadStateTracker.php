@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Scaling;
 
-use Illuminate\Support\Carbon;
+use Carbon\CarbonInterface;
 
 /**
  * Per-workload memory for the single-host scaling paths: when each workload
@@ -28,7 +28,7 @@ use Illuminate\Support\Carbon;
  */
 class WorkloadStateTracker
 {
-    /** @var array<string, Carbon> */
+    /** @var array<string, CarbonInterface> */
     private array $lastScaleTime = [];
 
     /** @var array<string, string> */
@@ -46,7 +46,7 @@ class WorkloadStateTracker
      * the memory. A workload can be evaluated on every cycle for hours without
      * ever moving.
      *
-     * @var array<string, Carbon>
+     * @var array<string, CarbonInterface>
      */
     private array $lastSeen = [];
 
@@ -153,7 +153,7 @@ class WorkloadStateTracker
      * decides whether SlaBreached has already been reported, which is how a
      * queue breaching quietly for an hour would announce itself twice.
      */
-    public function forgetQuietSince(Carbon $cutoff): void
+    public function forgetQuietSince(CarbonInterface $cutoff): void
     {
         foreach ($this->lastSeen as $key => $at) {
             if ($at->greaterThanOrEqualTo($cutoff)) {
