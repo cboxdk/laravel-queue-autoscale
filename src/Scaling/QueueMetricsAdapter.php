@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\LaravelQueueAutoscale\Scaling;
 
+use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
 use Cbox\LaravelQueueAutoscale\Support\Coerce;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
@@ -121,7 +122,7 @@ class QueueMetricsAdapter
         $utilizationRate = Coerce::toFloat($workersData['current_busy_percent'] ?? 0.0);
 
         return [
-            'connection' => Coerce::toString($data['connection'] ?? null, 'default'),
+            'connection' => Coerce::toString($data['connection'] ?? null, AutoscaleConfiguration::defaultConnection()),
             'queue' => Coerce::toString($data['queue'] ?? null, 'default'),
             'depth' => $depth,
             'pending' => $pending,

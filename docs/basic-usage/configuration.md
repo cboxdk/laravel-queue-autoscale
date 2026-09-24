@@ -219,7 +219,7 @@ v3 introduces three new capabilities on top of per-queue autoscaling. Each is ex
     'notifications' => [
         'queues'     => ['email', 'sms', 'push'],   // priority order
         'profile'    => BalancedProfile::class,     // optional — defaults to sla_defaults
-        'connection' => 'redis',                    // optional — defaults to 'default'
+        'connection' => 'redis',                    // optional — defaults to your queue.default connection
         'mode'       => 'priority',                 // the only supported mode
         'overrides'  => [                           // optional partial override
             'sla' => ['target_seconds' => 45],

@@ -144,3 +144,14 @@ test('assertNoQueueConflicts passes when no overlap', function (): void {
     expect(fn () => GroupConfiguration::assertNoQueueConflicts(['group-a' => $g1, 'group-b' => $g2]))
         ->not->toThrow(InvalidConfigurationException::class);
 });
+
+test('runs a group that names no connection on the application\'s default queue connection', function (): void {
+    config()->set('queue.default', 'redis');
+
+    $group = GroupConfiguration::fromConfig('notifications', [
+        'queues' => ['email', 'sms'],
+        'profile' => BalancedProfile::class,
+    ]);
+
+    expect($group->connection)->toBe('redis');
+});

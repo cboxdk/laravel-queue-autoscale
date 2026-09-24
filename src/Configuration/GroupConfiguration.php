@@ -128,7 +128,7 @@ readonly class GroupConfiguration
 
         $connection = is_string($config['connection'] ?? null)
             ? (string) $config['connection']
-            : 'default';
+            : AutoscaleConfiguration::defaultConnection();
 
         $mode = is_string($config['mode'] ?? null)
             ? (string) $config['mode']

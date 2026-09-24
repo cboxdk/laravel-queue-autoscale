@@ -152,6 +152,6 @@ readonly class GroupConfiguration
 }
 ```
 
-`fromConfig()` reads `queues`, `connection` (default `'default'`), `mode` (default `'priority'`), `profile` and `overrides`. The `profile` + `overrides` pair is **groups-only**; the per-queue resolver does not understand it.
+`fromConfig()` reads `queues`, `connection` (default: the application's `queue.default`), `mode` (default `'priority'`), `profile` and `overrides`. The `profile` + `overrides` pair is **groups-only**; the per-queue resolver does not understand it.
 
 The constructor throws `InvalidConfigurationException` for an empty queue list, an unsupported mode, a non-scalable profile, or a duplicate queue within the group. `assertNoQueueConflicts()` throws when a queue appears both under `queues` and in a group, or in two groups.
