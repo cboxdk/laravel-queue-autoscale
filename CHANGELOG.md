@@ -5,6 +5,17 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v4.3.2 - 2026-09-24
+
+### Fixed
+
+- **A queue or group that names no connection now runs on the application's default queue connection.** An entry without `'connection'` — including the short form `'dispatch' => BalancedProfile::class` — ran on a connection literally named `'default'`. Laravel ships none, so every such queue started workers that exited on start (*The [default] queue connection has not been configured*), replaced every cycle. It now uses `queue.default`, which is what Laravel dispatches to and what `queue:work` with no argument polls. Metrics that do not say their connection are read the same way. (#72)
+- **A stale cluster leader can no longer make the cluster spawn workers that cannot start.** Every path that turns a workload into workers — applying the leader's recommendation, the leader's own evaluation, and the single-host loop — now refuses a workload on a connection this host has not configured, and logs it once with a hint that the manager that asked for it needs restarting. Seen in production: a manager left running from before a config change was elected leader and kept telling a freshly started one to spawn `queue:default:*` workers, hundreds of which exited on start. (#71)
+
+### Upgrading
+
+No configuration or API changes. A queue that names no connection changes its key from `default:<queue>` to `<queue.default>:<queue>`; anything that was on `default` was not running, so there is no working state to migrate. After upgrading, restart every `queue:autoscale` in the cluster so no manager keeps the old code.
+
 ## v3.11.2 - 2026-09-15
 
 Maintenance release for the 3.x line. Backport of the reserved-jobs half of v4.3.1.
@@ -567,6 +578,7 @@ Refusing to spawn a worker for 'redis:email,sms': a comma makes queue:work
 treat it as a list of queues
 
 
+
 ```
 For a group the comma is now the separator and each member is validated on its
 own. An injected option inside a member is still caught.
@@ -996,6 +1008,7 @@ The autoscale manager exits gracefully for a supervised restart when Laravel's n
   
   
   
+  
   ```
 - **`ResourceEstimate` value object** — Carries CPU/memory estimates with per-dimension source metadata (`measured`, `config`, `default`) and sample counts, enabling downstream consumers to inspect provenance.
 - **`EstimateSource` enum** — `Measured`, `Config`, `Default` — tracks where each dimension of a resource estimate originated.
@@ -1311,6 +1324,7 @@ composer require php-tui/php-tui --dev
 
 
 
+
 ```
 ### Usage
 
@@ -1323,6 +1337,7 @@ php artisan queue:autoscale:debug
 
 # Dispatch test jobs
 php artisan queue:autoscale:test --jobs=10 --queue=default
+
 
 
 
@@ -1364,6 +1379,7 @@ First stable release of Queue Autoscale for Laravel with intelligent, predictive
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
+
 
 
 
