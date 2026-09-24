@@ -18,6 +18,7 @@ use Cbox\LaravelQueueAutoscale\Workers\WorkerProcess;
 use Cbox\LaravelQueueAutoscale\Workers\WorkerSpawner;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
 use Mockery\MockInterface;
 use Symfony\Component\Process\Process;
 
@@ -304,4 +305,67 @@ it('never exceeds the local maximum for a group', function () {
 
     expect($pool->countGroup('redis', 'reports'))->toBeLessThanOrEqual($max)
         ->and($max)->toBeLessThan(5000);
+});
+
+/**
+ * Seen in production, 2026-09-24: a manager left running from before a config
+ * change was the cluster leader, and its config still named a connection
+ * ('default') that no host had any more. It kept publishing
+ * `queue:default:<queue>` workloads, every follower obeyed, and each spawned
+ * worker exited on start — hundreds of them, one after another.
+ */
+it('refuses a recommended workload on a connection this host has not configured', function () {
+    config()->set('queue-autoscale.queues', []);
+    config()->set('queue-autoscale.groups', []);
+    config()->set('queue-autoscale.excluded', []);
+    config()->set('queue.connections.redis', ['driver' => 'redis', 'connection' => 'default', 'queue' => 'default']);
+    config()->set('queue.connections.default', null);
+
+    fakeSpawner();
+    Event::fake([WorkersScaled::class]);
+
+    $recommendation = new ClusterRecommendation(
+        managerId: 'test-mgr',
+        issuedAt: now()->timestamp,
+        workloads: [
+            'queue:default:dispatch' => 2,
+            'queue:redis:dispatch' => 1,
+        ],
+    );
+
+    $manager = app(AutoscaleManager::class);
+    (new ReflectionMethod($manager, 'applyClusterRecommendation'))->invoke($manager, $recommendation);
+
+    Event::assertDispatched(WorkersScaled::class, fn (WorkersScaled $event): bool => $event->connection === 'redis' && $event->queue === 'dispatch');
+    Event::assertNotDispatched(WorkersScaled::class, fn (WorkersScaled $event): bool => $event->connection === 'default');
+});
+
+it('says once, not every cycle, that it refused a workload on an unconfigured connection', function () {
+    config()->set('queue-autoscale.queues', []);
+    config()->set('queue-autoscale.groups', []);
+    config()->set('queue-autoscale.excluded', []);
+    config()->set('queue.connections.default', null);
+
+    fakeSpawner();
+
+    Log::shouldReceive('channel')->andReturnSelf();
+    Log::shouldReceive('warning')
+        ->once()
+        ->with('Refusing to start workers on a queue connection this host has not configured', Mockery::on(
+            fn (array $context): bool => $context['connection'] === 'default' && $context['queue'] === 'dispatch'
+        ));
+    Log::shouldReceive('info', 'debug', 'notice', 'error')->withAnyArgs();
+
+    $recommendation = new ClusterRecommendation(
+        managerId: 'test-mgr',
+        issuedAt: now()->timestamp,
+        workloads: ['queue:default:dispatch' => 2],
+    );
+
+    $manager = app(AutoscaleManager::class);
+    $apply = new ReflectionMethod($manager, 'applyClusterRecommendation');
+
+    $apply->invoke($manager, $recommendation);
+    $apply->invoke($manager, $recommendation);
+    $apply->invoke($manager, $recommendation);
 });
