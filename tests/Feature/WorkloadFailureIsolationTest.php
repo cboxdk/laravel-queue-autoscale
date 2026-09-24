@@ -316,3 +316,56 @@ it('publishes for the remaining workloads when one throws during leader evaluati
         ->and($recommendation->workloads)->toHaveKey('queue:redis:healthy')
         ->and($recommendation->workloads)->not->toHaveKey('queue:redis:poison');
 });
+
+it('does not publish cluster recommendations for a connection this host has not configured', function (): void {
+    config()->set('queue.connections.default', null);
+    Event::fake();
+
+    $store = (new FakeClusterStore)
+        ->withManager(isolationManagerState('mgr-1'))
+        ->withLeader('mgr-1');
+
+    app()->instance(ClusterStoreContract::class, $store);
+    app()->forgetInstance(AutoscaleManager::class);
+
+    stubMetricsRecalculation();
+
+    // The metrics store remembers a queue on a connection the config no longer has.
+    fakeDiscoveredQueues([
+        'default:dispatch' => rawDiscoveredMetrics('default', 'dispatch'),
+        'redis:default' => rawDiscoveredMetrics('redis', 'default'),
+    ]);
+
+    $manager = app(AutoscaleManager::class);
+    (new ReflectionMethod($manager, 'evaluateAndPublishClusterRecommendations'))->invoke($manager);
+
+    $recommendation = $store->publishedRecommendations()['mgr-1'] ?? null;
+
+    expect($recommendation)->not->toBeNull()
+        ->and($recommendation->workloads)->toHaveKey('queue:redis:default')
+        ->and($recommendation->workloads)->not->toHaveKey('queue:default:dispatch');
+});
+
+it('does not start workers on a connection this host has not configured on a single host', function (): void {
+    config()->set('queue.connections.default', null);
+    config()->set('queue-autoscale.queues', [
+        'default' => ['workers' => ['min' => 1, 'max' => 5]],
+        'dispatch' => ['workers' => ['min' => 1, 'max' => 5]],
+    ]);
+
+    spawnerThatFailsFor([]);
+    Event::fake([WorkersScaled::class]);
+
+    stubMetricsRecalculation();
+
+    fakeDiscoveredQueues([
+        'default:dispatch' => rawDiscoveredMetrics('default', 'dispatch'),
+        'redis:default' => rawDiscoveredMetrics('redis', 'default'),
+    ]);
+
+    $manager = app(AutoscaleManager::class);
+    (new ReflectionMethod($manager, 'evaluateAndScale'))->invoke($manager);
+
+    Event::assertDispatched(WorkersScaled::class, fn (WorkersScaled $event): bool => $event->connection === 'redis' && $event->queue === 'default');
+    Event::assertNotDispatched(WorkersScaled::class, fn (WorkersScaled $event): bool => $event->connection === 'default');
+});

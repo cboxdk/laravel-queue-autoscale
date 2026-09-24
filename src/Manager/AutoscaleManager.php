@@ -504,7 +504,8 @@ class AutoscaleManager
             // single-host loop does. Without this, a recommendation for e.g.
             // an empty-named queue is published every cycle and each host's
             // spawn guard throws on it.
-            if (! $this->workloadNameIsSafe($metrics->connection, $metrics->queue)) {
+            if (! $this->workloadNameIsSafe($metrics->connection, $metrics->queue)
+                || ! $this->connectionIsConfigured($metrics->connection, $metrics->queue)) {
                 continue;
             }
 
@@ -844,6 +845,14 @@ class AutoscaleManager
             // trusted to contain only names that are safe to hand to a
             // worker process.
             if (! $this->workloadNameIsSafe($connection, $queue)) {
+                continue;
+            }
+
+            // Nor that it was built from this host's configuration. A leader
+            // still running with an older config (one that named a connection
+            // this host does not have) would otherwise have every follower
+            // spawn workers that exit on start, one after another.
+            if (! $this->connectionIsConfigured($connection, $queue)) {
                 continue;
             }
 
@@ -1448,7 +1457,8 @@ class AutoscaleManager
 
             // Discovered names reach a worker's command line, so a name that
             // would change what the worker does never gets that far.
-            if (! $this->workloadNameIsSafe($metrics->connection, $metrics->queue)) {
+            if (! $this->workloadNameIsSafe($metrics->connection, $metrics->queue)
+                || ! $this->connectionIsConfigured($metrics->connection, $metrics->queue)) {
                 continue;
             }
 
@@ -1512,6 +1522,14 @@ class AutoscaleManager
     private array $rejectedWorkloadNames = [];
 
     /**
+     * Workloads already refused for naming a connection this host has not
+     * configured, keyed "connection\0queue", so each is logged once.
+     *
+     * @var array<string, true>
+     */
+    private array $rejectedUnconfiguredWorkloads = [];
+
+    /**
      * Whether a discovered workload can safely be handed to a worker process.
      *
      * Rejection is announced once per name rather than every cycle: a queue
@@ -1552,6 +1570,41 @@ class AutoscaleManager
      * in that cycle: nothing scaled up and exited workers were never
      * respawned until the offending workload aged out of discovery.
      */
+    /**
+     * Whether a workload's connection exists in this host's queue config.
+     *
+     * A worker started on a connection Laravel does not know exits on start
+     * ("The [x] queue connection has not been configured"), and the manager
+     * would start another in its place every cycle. The name reaches the
+     * manager from the metrics store or from the cluster leader, and either can
+     * carry one this host has never had: a leader started before the config
+     * changed, or a queue the metrics layer once saw on another connection.
+     * Refused, and logged once per workload.
+     */
+    private function connectionIsConfigured(string $connection, string $queue): bool
+    {
+        if (is_array(config("queue.connections.{$connection}"))) {
+            return true;
+        }
+
+        $key = "{$connection}\0{$queue}";
+
+        if (! isset($this->rejectedUnconfiguredWorkloads[$key])) {
+            $this->rejectedUnconfiguredWorkloads[$key] = true;
+
+            Log::channel(AutoscaleConfiguration::logChannel())->warning(
+                'Refusing to start workers on a queue connection this host has not configured',
+                [
+                    'connection' => $connection,
+                    'queue' => $queue,
+                    'hint' => 'If a cluster leader asked for it, that manager is running with a different config; restart it.',
+                ]
+            );
+        }
+
+        return false;
+    }
+
     private function reportWorkloadFailure(string $type, string $connection, string $name, \Throwable $e): void
     {
         Log::channel(AutoscaleConfiguration::logChannel())->error(
