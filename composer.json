@@ -33,7 +33,7 @@
     },
     "require-dev": {
         "aws/aws-sdk-php": "^3.390",
-        "cboxdk/laravel-telemetry": "^1.2.0",
+        "cboxdk/laravel-telemetry": "^2.3.0",
         "larastan/larastan": "^3.0",
         "laravel/pint": "^1.14",
         "nunomaduro/collision": "^8.8",
