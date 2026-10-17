@@ -265,8 +265,11 @@ function stubMetricsRecalculation(): void
     $queueRepository = Mockery::mock(QueueMetricsRepository::class);
     $queueRepository->shouldReceive('listQueues')->andReturn([]);
 
+    $jobRepository = Mockery::mock(JobMetricsRepository::class);
+    $jobRepository->shouldReceive('listJobs')->andReturn([]);
+
     app()->instance(CalculateQueueMetricsAction::class, new CalculateQueueMetricsAction(
-        Mockery::mock(JobMetricsRepository::class),
+        $jobRepository,
         $queueRepository,
     ));
 }
