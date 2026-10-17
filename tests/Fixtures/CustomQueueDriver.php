@@ -7,6 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Tests\Fixtures;
 use Illuminate\Contracts\Queue\Queue as QueueContract;
 use Illuminate\Queue\Connectors\ConnectorInterface;
 use Illuminate\Queue\Queue;
+use LogicException;
 use Mockery;
 
 /**
@@ -23,7 +24,9 @@ class CustomQueueDriver
     {
         $queue = Mockery::mock($queueClass, QueueContract::class)->makePartial();
 
-        assert($queue instanceof QueueContract);
+        if (! $queue instanceof QueueContract) {
+            throw new LogicException("A mock of {$queueClass} must implement the queue contract.");
+        }
 
         app('queue')->extend($driver, fn (): ConnectorInterface => new class($queue) implements ConnectorInterface
         {
