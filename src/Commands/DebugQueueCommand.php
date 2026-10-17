@@ -9,6 +9,7 @@ use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Contracts\FailureWindowStoreContract;
 use Cbox\LaravelQueueAutoscale\Fuse\FuseState;
 use Cbox\LaravelQueueAutoscale\Fuse\NullFailureWindowStore;
+use Cbox\LaravelQueueAutoscale\Support\QueueDriver;
 use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
 use Cbox\Telemetry\TelemetryManager;
 use Illuminate\Console\Command;
@@ -62,8 +63,7 @@ class DebugQueueCommand extends Command
         $this->debugFuse($connection, $queue);
 
         // Check driver type
-        $driver = config("queue.connections.{$connection}.driver");
-        $driverStr = is_string($driver) ? $driver : 'unknown';
+        $driverStr = QueueDriver::of($connection) ?? 'unknown';
         $this->line('');
         $this->info("=== Raw Queue Data (driver: {$driverStr}) ===");
 

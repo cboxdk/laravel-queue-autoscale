@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
 use Cbox\LaravelQueueAutoscale\Scaling\QueueMetricsAdapter;
+use Cbox\LaravelQueueAutoscale\Tests\Fixtures\CustomQueueDriver;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
+use Illuminate\Queue\RedisQueue;
+use Illuminate\Queue\SqsQueue;
 
 /**
  * The adapter is this package's serialization boundary with the metrics
@@ -89,6 +92,24 @@ test('the driver is read from the connection config, not the connection name dis
     'aws is sqs' => ['aws', ['driver' => 'sqs'], 'aws', 'sqs'],
     'an undefined connection keeps what was reported' => ['ghost', [], 'ghost', 'ghost'],
 ]);
+
+test('a connection on a custom driver reaches the engine as the built-in driver it extends', function (): void {
+    CustomQueueDriver::register('tenant-redis', RedisQueue::class, driver: 'tenant-redis');
+
+    $mapped = (new QueueMetricsAdapter)->mapFields(['connection' => 'tenant-redis', 'driver' => 'tenant-redis'] + adapterDepthPayload(0));
+
+    expect(QueueMetricsData::fromArray($mapped)->driver)->toBe('redis');
+});
+
+test('a group on a custom driver takes the built-in driver it extends', function (): void {
+    CustomQueueDriver::register('tenant-sqs', SqsQueue::class, driver: 'tenant-sqs');
+    $group = GroupConfiguration::fromConfig('mail', [
+        'queues' => ['email', 'sms'],
+        'connection' => 'tenant-sqs',
+    ]);
+
+    expect((new QueueMetricsAdapter)->aggregateGroup($group, [])->driver)->toBe('sqs');
+});
 
 test('a group takes the driver of its connection, with or without member metrics', function (): void {
     config()->set('queue.connections.aws', ['driver' => 'sqs']);

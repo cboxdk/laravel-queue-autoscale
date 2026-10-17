@@ -7,6 +7,7 @@ namespace Cbox\LaravelQueueAutoscale\Scaling;
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\GroupConfiguration;
 use Cbox\LaravelQueueAutoscale\Support\Coerce;
+use Cbox\LaravelQueueAutoscale\Support\QueueDriver;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueMetricsData;
 use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
 
@@ -44,7 +45,7 @@ class QueueMetricsAdapter
         return [
             'connection' => $connection,
             'queue' => $queue,
-            'driver' => Coerce::toString(config("queue.connections.{$connection}.driver", 'unknown'), 'unknown'),
+            'driver' => QueueDriver::of($connection) ?? 'unknown',
             'depth' => [
                 'total' => $total,
                 'pending' => $depth->pendingJobs,
@@ -248,12 +249,11 @@ class QueueMetricsAdapter
      * connection called `redis-high` or `aws` arrived here as a driver of
      * that name, and everything keyed on the driver — whether it can report
      * the oldest job's age, the cluster summary — read it wrong. The reported
-     * value is kept only for a connection the config does not define.
+     * value is kept only for a connection the config does not define. A
+     * custom driver is read as the built-in queue it extends (QueueDriver).
      */
     private static function driverOf(string $connection, string $reported): string
     {
-        $configured = config("queue.connections.{$connection}.driver");
-
-        return is_string($configured) && $configured !== '' ? $configured : $reported;
+        return QueueDriver::of($connection) ?? $reported;
     }
 }
