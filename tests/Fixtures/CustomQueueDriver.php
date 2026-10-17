@@ -22,7 +22,12 @@ class CustomQueueDriver
      */
     public static function register(string $connection, string $queueClass, string $driver = 'custom'): void
     {
-        $queue = Mockery::mock($queueClass, QueueContract::class)->makePartial();
+        // Adding the contract to a queue that already implements it makes
+        // Mockery redeclare pop() from the contract, which older Laravel
+        // versions declare without the $index the built-in queues add.
+        $queue = is_subclass_of($queueClass, QueueContract::class)
+            ? Mockery::mock($queueClass)->makePartial()
+            : Mockery::mock($queueClass, QueueContract::class)->makePartial();
 
         if (! $queue instanceof QueueContract) {
             throw new LogicException("A mock of {$queueClass} must implement the queue contract.");
