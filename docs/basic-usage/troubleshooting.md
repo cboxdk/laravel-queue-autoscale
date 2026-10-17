@@ -288,7 +288,7 @@ When a queue has at least `sla.min_samples` pickups in its window, breach is jud
 
 ## A queue on a `sync` connection is not supervised
 
-Queues on `sync`, `null`, `deferred` and `background` connections are skipped by discovery, in the manager and in `queue:autoscale:doctor`. Those drivers run jobs in the dispatching process or discard them, so no `queue:work` process could ever pop from them, but they still fire queue events and so appear in the metrics package. A custom driver registered with `Queue::extend()` is judged by the built-in queue its queue class extends, so a subclass of `BackgroundQueue` is skipped and a subclass of `SqsQueue` is treated as SQS. If a queue you expect to see is missing, check that its connection uses a real queue driver.
+Queues on `sync`, `null`, `deferred` and `background` connections are skipped by discovery, in the manager and in `queue:autoscale:doctor`. Those drivers run jobs in the dispatching process or discard them, so no `queue:work` process could ever pop from them, but they still fire queue events and so appear in the metrics package. A custom driver registered with `Queue::extend()` is judged by the built-in queue its queue class extends, so a subclass of `BackgroundQueue` is skipped and a subclass of `SqsQueue` is treated as SQS. To find that class, the manager and `queue:autoscale:doctor` resolve each connection on a custom driver once per process, and the manager keeps it open. A connection that fails to resolve (a broker that is down, missing credentials) is judged by its driver name and not retried until the process restarts. If a queue you expect to see is missing, check that its connection uses a real queue driver.
 
 ---
 

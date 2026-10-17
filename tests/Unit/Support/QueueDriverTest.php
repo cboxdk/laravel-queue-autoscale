@@ -58,3 +58,20 @@ test('an unconfigured connection has no driver', function (?array $config): void
     'no driver' => [['queue' => 'default']],
     'empty driver' => [['driver' => '']],
 ]);
+
+test('a connection that fails to resolve is not retried on every call', function (): void {
+    $attempts = 0;
+    app('queue')->extend('eager-broker', function () use (&$attempts): never {
+        $attempts++;
+
+        throw new RuntimeException('broker is down');
+    });
+    config()->set('queue.connections.under-test', ['driver' => 'eager-broker']);
+
+    QueueDriver::of('under-test');
+    QueueDriver::of('under-test');
+    QueueDriver::of('under-test');
+
+    expect(QueueDriver::of('under-test'))->toBe('eager-broker')
+        ->and($attempts)->toBe(1);
+});

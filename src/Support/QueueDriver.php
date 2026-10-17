@@ -47,6 +47,18 @@ class QueueDriver
     ];
 
     /**
+     * What each connection on a custom driver was judged as, per queue manager
+     *
+     * A connection is resolved at most once per process, including one that
+     * fails: a connector that connects eagerly (an AMQP broker that is down)
+     * would otherwise be retried, and wait out its timeout, on every manager
+     * tick. Keyed by the manager so a fresh application starts clean.
+     *
+     * @var \WeakMap<QueueManager, array<string, string>>|null
+     */
+    private static ?\WeakMap $judged = null;
+
+    /**
      * The driver name, or null for a connection that is not configured.
      */
     public static function of(string $connection): ?string
@@ -61,9 +73,23 @@ class QueueDriver
             return $configured;
         }
 
+        $manager = app(QueueManager::class);
+        self::$judged ??= new \WeakMap;
+        $judged = self::$judged[$manager] ?? [];
+        $key = "{$connection}\0{$configured}";
+
+        if (! isset($judged[$key])) {
+            $judged[$key] = self::resolve($manager, $connection, $configured);
+            self::$judged[$manager] = $judged;
+        }
+
+        return $judged[$key];
+    }
+
+    private static function resolve(QueueManager $manager, string $connection, string $configured): string
+    {
         try {
-            // The manager keeps each resolved connection, so this is resolved once per process.
-            $queue = app(QueueManager::class)->connection($connection);
+            $queue = $manager->connection($connection);
         } catch (\Throwable) {
             // Missing credentials, an unregistered driver or an unavailable
             // dependency: the configured name is all there is to go on.
