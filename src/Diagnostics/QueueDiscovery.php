@@ -6,6 +6,7 @@ namespace Cbox\LaravelQueueAutoscale\Diagnostics;
 
 use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfigResolver;
+use Cbox\LaravelQueueAutoscale\Support\QueueDriver;
 use Cbox\LaravelQueueMetrics\Facades\QueueMetrics;
 
 /**
@@ -134,9 +135,7 @@ class QueueDiscovery
 
     private function driverOf(string $connection): ?string
     {
-        $driver = config("queue.connections.{$connection}.driver");
-
-        return is_string($driver) ? $driver : null;
+        return QueueDriver::of($connection);
     }
 
     /**

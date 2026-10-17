@@ -8,6 +8,8 @@ use Cbox\LaravelQueueAutoscale\Diagnostics\Finding;
 use Cbox\LaravelQueueAutoscale\Diagnostics\QueueDiscovery;
 use Cbox\LaravelQueueAutoscale\Diagnostics\Severity;
 use Cbox\LaravelQueueAutoscale\Testing\InMemoryPickupTimeStore;
+use Cbox\LaravelQueueAutoscale\Tests\Fixtures\CustomQueueDriver;
+use Illuminate\Queue\SqsQueue;
 
 /**
  * @param  list<string>  $queues
@@ -146,6 +148,16 @@ test('dotted names are not reported when no sqs connection is configured', funct
     ]);
 
     expect(findingTitled(diagnose(['tenant.42']), 'SQS rejects'))->toBeNull();
+});
+
+test('dotted queue names are reported when a custom driver built on SQS exists', function (): void {
+    config()->set('queue.connections', []);
+    CustomQueueDriver::register('tenant-sqs', SqsQueue::class, driver: 'tenant-sqs');
+    config()->set('queue-autoscale.queues', [
+        'tenant.42' => ['workers' => ['max' => 5]],
+    ]);
+
+    expect(findingTitled(diagnose(['tenant.42']), 'SQS rejects'))->not->toBeNull();
 });
 
 test('caps are flagged as per-host while cluster mode is off', function (): void {
@@ -422,6 +434,21 @@ test('without an SQS queue the pickup setup is not reported', function (): void 
     config()->set('queue-autoscale.queues', ['emails' => ['connection' => 'redis']]);
 
     expect(findingTitled(diagnose(['emails', 'default']), 'SQS queues have no SLA signal'))->toBeNull();
+});
+
+test('queues on a custom driver built on SQS have no SLA signal either', function (): void {
+    sqsDoctorSetup(stamp: false, store: 'auto', cluster: false);
+    CustomQueueDriver::register('tenant-sqs', SqsQueue::class, driver: 'tenant-sqs');
+    config()->set('queue-autoscale.queues', ['orders' => ['connection' => 'tenant-sqs']]);
+
+    $doctor = doctorDiscovering([
+        'tenant-sqs:invoices' => ['connection' => 'tenant-sqs', 'queue' => 'invoices'],
+    ]);
+
+    $finding = findingTitled($doctor->diagnose(['invoices']), 'SQS queues have no SLA signal');
+
+    expect($finding)->not->toBeNull()
+        ->and($finding->detail)->toStartWith('orders, invoices: ');
 });
 
 /**

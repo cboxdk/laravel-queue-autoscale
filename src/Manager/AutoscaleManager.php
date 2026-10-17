@@ -49,6 +49,7 @@ use Cbox\LaravelQueueAutoscale\Scaling\SlaSignal;
 use Cbox\LaravelQueueAutoscale\Scaling\WorkloadDiscovery;
 use Cbox\LaravelQueueAutoscale\Scaling\WorkloadStateTracker;
 use Cbox\LaravelQueueAutoscale\Support\Coerce;
+use Cbox\LaravelQueueAutoscale\Support\QueueDriver;
 use Cbox\LaravelQueueAutoscale\Support\RestartSignal;
 use Cbox\LaravelQueueAutoscale\Support\WorkloadName;
 use Cbox\LaravelQueueAutoscale\Workers\OrphanedWorkerReaper;
@@ -2188,7 +2189,7 @@ class AutoscaleManager
         }
 
         return $this->workloadState->wasBreaching($breachKey)
-            && $slaSignal->isInconclusive($metrics->pending, SlaSignal::driverReportsOldestJobAge($metrics->driver));
+            && $slaSignal->isInconclusive($metrics->pending, SlaSignal::driverReportsOldestJobAge(QueueDriver::of($metrics->connection) ?? $metrics->driver));
     }
 
     /**

@@ -3,6 +3,9 @@
 declare(strict_types=1);
 
 use Cbox\LaravelQueueAutoscale\Diagnostics\QueueDiscovery;
+use Cbox\LaravelQueueAutoscale\Tests\Fixtures\CustomQueueDriver;
+use Illuminate\Queue\BackgroundQueue;
+use Illuminate\Queue\SqsQueue;
 
 /**
  * @param  array<string, array<string, mixed>>  $metrics
@@ -102,4 +105,17 @@ test('an entry whose connection is unknown is on no driver', function (): void {
 
     expect($discovery->namesOnDriver('sqs'))->toBe([])
         ->and($discovery->names())->toBe(['jobs']);
+});
+
+test('a connection on a custom driver is judged by the queue it extends', function (): void {
+    CustomQueueDriver::register('tenant-background', BackgroundQueue::class, driver: 'tenant-background');
+    CustomQueueDriver::register('tenant-sqs', SqsQueue::class, driver: 'tenant-sqs');
+
+    $discovery = discoveryReading([
+        'tenant-background:sync' => ['queue' => 'sync', 'connection' => 'tenant-background'],
+        'tenant-sqs:invoices' => ['queue' => 'invoices', 'connection' => 'tenant-sqs'],
+    ]);
+
+    expect($discovery->names())->toBe(['invoices'])
+        ->and($discovery->namesOnDriver('sqs'))->toBe(['invoices']);
 });

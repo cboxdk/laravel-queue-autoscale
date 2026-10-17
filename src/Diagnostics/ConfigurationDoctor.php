@@ -9,6 +9,7 @@ use Cbox\LaravelQueueAutoscale\Configuration\InvalidConfigurationException;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfigResolver;
 use Cbox\LaravelQueueAutoscale\Configuration\QueueConfiguration;
 use Cbox\LaravelQueueAutoscale\Pickup\NullPickupTimeStore;
+use Cbox\LaravelQueueAutoscale\Support\QueueDriver;
 
 /**
  * Checks a configuration against the ways it can be valid and still wrong.
@@ -570,8 +571,8 @@ class ConfigurationDoctor
             return false;
         }
 
-        foreach ($connections as $connection) {
-            if (is_array($connection) && ($connection['driver'] ?? null) === 'sqs') {
+        foreach (array_keys($connections) as $connection) {
+            if (is_string($connection) && QueueDriver::of($connection) === 'sqs') {
                 return true;
             }
         }
@@ -600,9 +601,7 @@ class ConfigurationDoctor
 
     private function connectionDriver(string $connection): ?string
     {
-        $driver = config("queue.connections.{$connection}.driver");
-
-        return is_string($driver) ? $driver : null;
+        return QueueDriver::of($connection);
     }
 
     private function defaultConnection(): string

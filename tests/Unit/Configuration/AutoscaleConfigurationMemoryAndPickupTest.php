@@ -6,6 +6,13 @@ use Cbox\LaravelQueueAutoscale\Configuration\AutoscaleConfiguration;
 use Cbox\LaravelQueueAutoscale\Pickup\NullPickupTimeStore;
 use Cbox\LaravelQueueAutoscale\Pickup\RedisPickupTimeStore;
 use Cbox\LaravelQueueAutoscale\Testing\InMemoryPickupTimeStore;
+use Cbox\LaravelQueueAutoscale\Tests\Fixtures\CustomQueueDriver;
+use Illuminate\Queue\BackgroundQueue;
+use Illuminate\Queue\DeferredQueue;
+use Illuminate\Queue\NullQueue;
+use Illuminate\Queue\RedisQueue;
+use Illuminate\Queue\SqsQueue;
+use Illuminate\Queue\SyncQueue;
 
 test('the shipped config carries the v4.4 defaults', function (): void {
     expect(config('queue-autoscale.limits.memory_limit_mb'))->toBeNull()
@@ -96,6 +103,19 @@ test('a connection can be worked unless its driver runs or discards jobs in-proc
 test('an unconfigured connection is not judged unworkable', function (): void {
     expect(AutoscaleConfiguration::connectionCanBeWorked('does-not-exist'))->toBeTrue();
 });
+
+test('a custom driver is workable unless it is built on a queue that runs or discards jobs in-process', function (string $queueClass, bool $expected): void {
+    CustomQueueDriver::register('under-test', $queueClass);
+
+    expect(AutoscaleConfiguration::connectionCanBeWorked('under-test'))->toBe($expected);
+})->with([
+    'sqs' => [SqsQueue::class, true],
+    'redis' => [RedisQueue::class, true],
+    'sync' => [SyncQueue::class, false],
+    'null' => [NullQueue::class, false],
+    'deferred' => [DeferredQueue::class, false],
+    'background' => [BackgroundQueue::class, false],
+]);
 
 test('the pickup-time store class follows the store setting and cluster mode', function (string $store, bool $cluster, string $expected): void {
     config()->set('queue-autoscale.pickup_time.store', $store);

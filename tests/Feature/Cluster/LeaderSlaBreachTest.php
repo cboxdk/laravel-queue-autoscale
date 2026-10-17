@@ -17,12 +17,14 @@ use Cbox\LaravelQueueAutoscale\Scaling\SlaSignalSource;
 use Cbox\LaravelQueueAutoscale\Testing\FakeClusterStore;
 use Cbox\LaravelQueueAutoscale\Testing\InteractsWithAutoscaling;
 use Cbox\LaravelQueueAutoscale\Testing\QueueMetricsFactory;
+use Cbox\LaravelQueueAutoscale\Tests\Fixtures\CustomQueueDriver;
 use Cbox\LaravelQueueMetrics\Actions\CalculateQueueMetricsAction;
 use Cbox\LaravelQueueMetrics\DataTransferObjects\QueueDepthData;
 use Cbox\LaravelQueueMetrics\Repositories\Contracts\JobMetricsRepository;
 use Cbox\LaravelQueueMetrics\Repositories\Contracts\QueueMetricsRepository;
 use Cbox\LaravelQueueMetrics\Services\JobMetricsQueryService;
 use Cbox\LaravelQueueMetrics\Services\QueueMetricsQueryService;
+use Illuminate\Queue\RedisQueue;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Event;
 
@@ -250,6 +252,25 @@ test('the leader still judges a queue without pickup samples on the oldest job a
 
     Event::assertDispatched(SlaBreached::class, fn (SlaBreached $event): bool => $event->oldestJobAge === 31
         && $event->slaSignal?->source === SlaSignalSource::OldestJobAgeFallback);
+});
+
+test('the leader does not hold a breach open on a custom driver built on Redis, which reports the oldest job age', function (): void {
+    CustomQueueDriver::register('tenant-redis', RedisQueue::class, driver: 'tenant-redis');
+
+    $this->pickups->seedRepeated(20, 45.0, 'tenant-redis', 'orders');
+    leaderBreachDiscovery(['tenant-redis:orders' => [
+        ...leaderSqsRawMetrics('orders', pending: 200),
+        'connection' => 'tenant-redis',
+        'driver' => 'tenant-redis',
+    ]]);
+    runLeaderCycle();
+
+    $this->pickups->clear('tenant-redis', 'orders');
+    runLeaderCycle();
+
+    Event::assertDispatchedTimes(SlaBreached::class, 1);
+    Event::assertDispatchedTimes(SlaRecovered::class, 1);
+    expect(leaderSummaryRow($this->store, 'orders')['sla_status'])->toBe('ok');
 });
 
 test('the leader judges a group on the p95 pooled across its members', function (): void {

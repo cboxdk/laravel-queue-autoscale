@@ -5,6 +5,16 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **Custom queue drivers are recognised by the queue they extend.** A connection on a driver registered with `Queue::extend()` was judged by its driver name, which the package never recognised. A subclass of `BackgroundQueue` or `SyncQueue` was treated as workable, so its jobs appeared as a `sync` workload no worker could run. `queue:autoscale:doctor` skipped its SQS checks for a subclass of `SqsQueue`. A subclass of `RedisQueue` or `DatabaseQueue` was treated as unable to report the oldest job's age, so a recovered queue was held as breached. A connection on a driver that is not built in is now resolved once and judged by the built-in queue it extends, falling back to its driver name when it cannot be resolved. Connections on built-in drivers are not resolved and get the same answers as before.
+
+### Added
+
+- `Support\QueueDriver::of()`: the built-in driver a connection behaves as.
+
 ## v4.6.0 - 2026-10-15
 
 ### Fixed

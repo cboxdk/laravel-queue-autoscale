@@ -11,6 +11,7 @@ use Cbox\LaravelQueueAutoscale\Fuse\ConfigurableFailureClassifier;
 use Cbox\LaravelQueueAutoscale\Fuse\NullFailureWindowStore;
 use Cbox\LaravelQueueAutoscale\Pickup\NullPickupTimeStore;
 use Cbox\LaravelQueueAutoscale\Pickup\RedisPickupTimeStore;
+use Cbox\LaravelQueueAutoscale\Support\QueueDriver;
 use Illuminate\Support\Str;
 
 readonly class AutoscaleConfiguration
@@ -514,12 +515,13 @@ readonly class AutoscaleConfiguration
 
     /**
      * Whether `queue:work` can pop jobs from a connection. Drivers that run jobs
-     * in-process (sync, deferred, background) or discard them (null) cannot.
+     * in-process (sync, deferred, background) or discard them (null) cannot,
+     * and neither can a custom driver built on one of them.
      * An unconfigured connection is not judged here.
      */
     public static function connectionCanBeWorked(string $connection): bool
     {
-        $driver = config("queue.connections.{$connection}.driver");
+        $driver = QueueDriver::of($connection);
 
         return ! in_array($driver, ['sync', 'null', 'deferred', 'background'], true);
     }
