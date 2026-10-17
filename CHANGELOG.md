@@ -5,6 +5,29 @@ All notable changes to `laravel-queue-autoscale` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v4.6.1 - Custom queue drivers - 2026-10-17
+
+### Fixed
+
+- **Custom queue drivers are recognised by the queue they extend.** A connection on a driver registered with `Queue::extend()` was judged by its driver name, which the package never recognised:
+  
+  - A subclass of `BackgroundQueue`, `SyncQueue`, `DeferredQueue` or `NullQueue` was treated as workable, so its jobs appeared as a workload no worker could run.
+  - `queue:autoscale:doctor` skipped its SQS checks (dotted queue names, missing SLA signal) for a subclass of `SqsQueue`.
+  - A subclass of `RedisQueue` or `DatabaseQueue` reached the engine, the cluster summary and the console under its own name, so it was treated as unable to report the oldest job's age and a recovered queue was held as breached.
+  
+  A connection on a custom driver is now resolved once per process and judged by the built-in queue it extends. If it cannot be resolved (a broker that is down, missing credentials), or it extends no built-in queue, it is judged by its driver name as before, and a failed resolution is not retried until the process restarts. Connections on built-in drivers are never resolved and behave exactly as before. (#82, by @Orrison)
+  
+- The test suite passes against `cboxdk/laravel-queue-metrics` 3.5.1, whose calculation reads the job list through `JobMetricsRepository::listJobs()`. This is a test-only change. (#83, by @Orrison)
+  
+
+### Added
+
+- `Support\QueueDriver::of()`: the built-in driver a connection behaves as.
+
+### Upgrading
+
+No configuration changes. If you use a custom queue driver, the manager now keeps one resolved instance of each such connection open for its lifetime. Restart every `queue:autoscale` after upgrading.
+
 ## v4.6.0 - 2026-10-15
 
 ### Fixed
@@ -21,13 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `queue:autoscale:doctor` warns `SQS queues have no SLA signal` for every SQS queue whose pickup times are never recorded: `pickup_time.stamp_pushed_at` is false, or the pickup-time store resolves to the null store (the single-host default). Without them `SlaBreached` and `SlaRecovered` never fire on SQS.
+  
   - It lists configured queues on an SQS connection and discovered queues actually seen on one (`QueueDiscovery::namesOnDriver()`).
   - If that discovery read fails, it falls back to the configured queues.
   
 - `SlaSignal::withStallEvidence()`, `SlaSignal::driverReportsOldestJobAge()` and `SlaSignal::$secondsSinceLastPickup`. `fromPickupPercentile()` and `isInconclusive()` take optional trailing arguments.
+  
 - `HybridStrategy::slaSignalFor()`, plus an optional, trailing `SlaSignalResolver` constructor parameter.
+  
 - `QueueStats` takes an optional `slaSignal` and gains `slaReading()` and `isBreachHeld()`.
+  
 - `AutoscaleConfiguration::pickupTimeStoreClass()` and `WorkloadStateTracker::forgetBreaches()`.
+  
 
 ### Documentation
 
@@ -706,6 +734,7 @@ treat it as a list of queues
 
 
 
+
 ```
 For a group the comma is now the separator and each member is validated on its
 own. An injected option inside a member is still caught.
@@ -1141,6 +1170,7 @@ The autoscale manager exits gracefully for a supervised restart when Laravel's n
   
   
   
+  
   ```
 - **`ResourceEstimate` value object** — Carries CPU/memory estimates with per-dimension source metadata (`measured`, `config`, `default`) and sample counts, enabling downstream consumers to inspect provenance.
 - **`EstimateSource` enum** — `Measured`, `Config`, `Default` — tracks where each dimension of a resource estimate originated.
@@ -1462,6 +1492,7 @@ composer require php-tui/php-tui --dev
 
 
 
+
 ```
 ### Usage
 
@@ -1474,6 +1505,7 @@ php artisan queue:autoscale:debug
 
 # Dispatch test jobs
 php artisan queue:autoscale:test --jobs=10 --queue=default
+
 
 
 
@@ -1521,6 +1553,7 @@ First stable release of Queue Autoscale for Laravel with intelligent, predictive
 
 ```bash
 composer require cboxdk/laravel-queue-autoscale
+
 
 
 
